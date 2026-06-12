@@ -7,13 +7,14 @@
     "codekeeper": "dist/advance/cli.js"
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsx src/advance/cli.ts",
+    "build": "node node_modules/typescript/bin/tsc",
+    "dev": "node node_modules/tsx/dist/cli.mjs src/advance/cli.ts",
     "start": "node dist/advance/cli.js start",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src --ext ts",
-    "format": "prettier --check .",
+    "test": "node node_modules/vitest/vitest.mjs run",
+    "test:watch": "node node_modules/vitest/vitest.mjs",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false node node_modules/eslint/bin/eslint.js src --ext ts",
+    "format": "node node_modules/prettier/bin/prettier.cjs --check .",
+    "format:fix": "node node_modules/prettier/bin/prettier.cjs --write .",
     "rebuild-native": "cd node_modules/better-sqlite3 && npm run build-release"
   },
   "keywords": [
@@ -29,6 +30,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "@rollup/rollup-linux-x64-gnu": "^4.60.4",
     "better-sqlite3": "^12.0.0",
     "chokidar": "^4.0.0",
     "dotenv": "^16.4.7",
