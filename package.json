@@ -4,17 +4,19 @@
   "description": "通用、去品牌化、Agent 自驱动的知识智库系统",
   "main": "dist/index.js",
   "bin": {
-    "codekeeper": "dist/cli.js"
+    "codekeeper": "dist/advance/cli.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/advance/cli.ts",
-    "start": "node dist/advance/cli.js",
+    "start": "node dist/advance/cli.js start",
     "daemon": "node dist/advance/cli.js start",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src --ext ts",
-    "format": "prettier --check ."
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src --ext ts",
+    "format": "prettier --check .",
+    "rebuild-native": "cd node_modules/better-sqlite3 && npm run build-release",
+    "postinstall": "npm run rebuild-native"
   },
   "keywords": [
     "code-review",
