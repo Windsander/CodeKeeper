@@ -1,5 +1,5 @@
 /**
- * 被治理项目的基本信息
+ * 已注册项目的运行时元数据（区别于 ProjectConfig 项目配置）
  */
 export interface Project {
   /** 项目唯一标识，使用目录绝对路径的规范化形式 */
@@ -10,7 +10,7 @@ export interface Project {
   name: string;
   /** 注册时间戳 */
   registeredAt: number;
-  /** 最后扫描时间戳 */
+  /** 最后扫描时间戳；null 表示从未扫描 */
   lastScannedAt: number | null;
 }
 
@@ -37,7 +37,7 @@ export interface WatchedEvent {
 export type KnowledgeStatus = 'pending' | 'archived' | 'ignored';
 
 /**
- * 知识条目元数据
+ * 知识条目元数据；实际内容存储在文件系统中，此处只保存路径与内容哈希
  */
 export interface KnowledgeEntry {
   /** 条目唯一标识，使用文件路径 + 版本哈希 */
