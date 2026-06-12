@@ -10,13 +10,11 @@
     "build": "tsc",
     "dev": "tsx src/advance/cli.ts",
     "start": "node dist/advance/cli.js start",
-    "daemon": "node dist/advance/cli.js start",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint src --ext ts",
     "format": "prettier --check .",
-    "rebuild-native": "cd node_modules/better-sqlite3 && npm run build-release",
-    "postinstall": "npm run rebuild-native"
+    "rebuild-native": "cd node_modules/better-sqlite3 && npm run build-release"
   },
   "keywords": [
     "code-review",
