@@ -8,6 +8,7 @@ import YAML from 'yaml';
  */
 export const projectConfigSchema = z.object({
   name: z.string().min(1).optional(),
+  // 注意：name 未设置时由调用方（如 ProjectRegistry）回退到目录名
   include: z.array(z.string()).default(['**/*.md', '**/*.ts', '**/*.json']),
   exclude: z.array(z.string()).default(['node_modules/**', '.git/**', 'dist/**', '.codekeeper/drafts/**']),
   categories: z.array(z.string()).default([]),
@@ -26,6 +27,7 @@ export function loadProjectConfig(projectRoot: string): ProjectConfig {
     const parsed = YAML.parse(raw);
     return projectConfigSchema.parse(parsed);
   } catch (err) {
+    // 仅对配置文件不存在的情况回退到默认配置；其他 IO 错误（如 EACCES）原样抛出
     if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
       return projectConfigSchema.parse({});
     }
