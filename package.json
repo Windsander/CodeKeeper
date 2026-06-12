@@ -1,0 +1,54 @@
+{
+  "name": "codekeeper-advance",
+  "version": "0.1.0",
+  "description": "通用、去品牌化、Agent 自驱动的知识智库系统",
+  "main": "dist/index.js",
+  "bin": {
+    "codekeeper": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/advance/cli.ts",
+    "start": "node dist/advance/cli.js",
+    "daemon": "node dist/advance/cli.js start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext ts",
+    "format": "prettier --check ."
+  },
+  "keywords": [
+    "code-review",
+    "gitlab",
+    "automation",
+    "ai",
+    "claude"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "better-sqlite3": "^12.0.0",
+    "chokidar": "^4.0.0",
+    "dotenv": "^16.4.7",
+    "node-cron": "^3.0.3",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0",
+    "simple-git": "^3.27.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.13.10",
+    "@types/node-cron": "^3.0.11",
+    "@typescript-eslint/eslint-plugin": "^8.26.1",
+    "@typescript-eslint/parser": "^8.26.1",
+    "eslint": "^9.22.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.0"
+  }
+}
