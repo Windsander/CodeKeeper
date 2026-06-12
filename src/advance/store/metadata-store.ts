@@ -25,8 +25,7 @@ export class MetadataStore {
       `INSERT INTO projects (id, root_path, name, registered_at, last_scanned_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name,
-         last_scanned_at = excluded.last_scanned_at`
+         name = excluded.name`
     );
     stmt.run(project.id, project.rootPath, project.name, project.registeredAt, project.lastScannedAt);
   }

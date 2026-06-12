@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -8,15 +8,17 @@ import { ProjectRegistry } from '../../src/advance/project-registry';
 describe('ProjectRegistry', () => {
   let store: MetadataStore;
   let registry: ProjectRegistry;
+  let tmpDir: string;
 
   beforeEach(() => {
-    const dir = mkdtempSync(join(tmpdir(), 'ck-reg-'));
-    store = new MetadataStore(join(dir, 'test.db'));
+    tmpDir = mkdtempSync(join(tmpdir(), 'ck-reg-'));
+    store = new MetadataStore(join(tmpDir, 'test.db'));
     registry = new ProjectRegistry({ store });
   });
 
   afterEach(() => {
     store.close();
+    rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it('注册项目时生成稳定 ID', () => {
@@ -24,7 +26,11 @@ describe('ProjectRegistry', () => {
     const project = registry.register(dir);
     expect(project.rootPath).toBe(dir);
     expect(project.id).toHaveLength(16);
+    expect(project.name).toBe(dir.split(/[\\/]/).pop());
     expect(registry.list()).toHaveLength(1);
+
+    const projectAgain = registry.register(dir);
+    expect(projectAgain.id).toBe(project.id);
   });
 
   it('读取项目自定义名称', () => {

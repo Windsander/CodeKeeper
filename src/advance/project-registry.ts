@@ -4,8 +4,9 @@ import type { MetadataStore } from './store/metadata-store';
 import type { Project } from './types';
 import { loadProjectConfig } from './config/project-config';
 
-function makeProjectId(rootPath: string): string {
-  return createHash('sha256').update(rootPath).digest('hex').slice(0, 16);
+export function makeProjectId(rootPath: string): string {
+  const crossPlatformPath = rootPath.replace(/\\/g, '/');
+  return createHash('sha256').update(crossPlatformPath).digest('hex').slice(0, 16);
 }
 
 export interface ProjectRegistryDeps {
