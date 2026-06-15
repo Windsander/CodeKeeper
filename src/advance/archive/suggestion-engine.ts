@@ -58,5 +58,6 @@ export class SuggestionEngine {
 }
 
 function makeActionId(filePath: string, content: string): string {
+  // 使用 Date.now() 保证每次建议的 ID 唯一，避免同一文件多次建议产生冲突
   return createHash('sha256').update(`${filePath}:${content.slice(0, 200)}:${Date.now()}`).digest('hex').slice(0, 16);
 }

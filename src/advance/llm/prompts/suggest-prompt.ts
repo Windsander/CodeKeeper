@@ -12,6 +12,13 @@ export interface SuggestInput {
  * 根据分类与去重结果生成归档建议
  */
 export function buildSuggestPrompt(input: SuggestInput): string {
+  let contentSnippet: string;
+  if (input.content.length > 1500) {
+    contentSnippet = input.content.slice(0, 1500) + '\n...（内容已截断）';
+  } else {
+    contentSnippet = input.content;
+  }
+
   return `根据以下文档的分类与去重结果，给出归档动作建议。
 
 可选动作：move（移动到更合适路径）、merge（与已有文档合并）、create（新建归档）、ignore（忽略）、flag（标记人工 review）。
@@ -37,7 +44,7 @@ risk 判断：
 去重关系：${input.dedupRelation ?? 'unrelated'}${input.relatedPath ? ` (${input.relatedPath})` : ''}
 
 内容前 1500 字符：
-${input.content.slice(0, 1500)}
+${contentSnippet}
 
 输出格式：
 {
@@ -58,7 +65,8 @@ export function parseSuggestResponse(text: string) {
       ['move', 'merge', 'create', 'ignore', 'flag'].includes(parsed.type) &&
       typeof parsed.reason === 'string' &&
       ['low', 'medium', 'high'].includes(parsed.risk) &&
-      typeof parsed.confidence === 'number'
+      typeof parsed.confidence === 'number' &&
+      !Number.isNaN(parsed.confidence)
     ) {
       return {
         type: parsed.type as 'move' | 'merge' | 'create' | 'ignore' | 'flag',
