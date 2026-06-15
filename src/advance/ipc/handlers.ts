@@ -82,6 +82,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'action.history': async (ctx, params) => {
+    if (params.projectId === 'all') {
+      const projects = ctx.registry.list();
+      return projects.flatMap((p) => ctx.store.listActionHistory(p.id));
+    }
     return ctx.store.listActionHistory(params.projectId);
   },
 
