@@ -41,7 +41,7 @@ export class ArchiveExecutor {
         case 'create':
           return this.executeMove(action);
         case 'ignore':
-          return { success: true, skipped: false, finalPath: action.entryId };
+          return { success: true, skipped: false, finalPath: action.sourcePath };
         case 'merge':
         case 'flag':
         default:
@@ -70,7 +70,7 @@ export class ArchiveExecutor {
     }
 
     mkdirSync(dirname(target), { recursive: true });
-    renameSync(action.entryId, target);
+    renameSync(action.sourcePath, target);
     return { success: true, skipped: false, finalPath: target };
   }
 }

@@ -33,7 +33,7 @@ export class SuggestionEngine {
     if (parsed) {
       return {
         id: makeActionId(filePath, content),
-        entryId: filePath,
+        sourcePath: filePath,
         type: parsed.type,
         reason: parsed.reason,
         targetPath: parsed.targetPath,

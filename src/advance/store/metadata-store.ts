@@ -172,7 +172,7 @@ export class MetadataStore {
     );
     stmt.run(
       action.id,
-      action.entryId,
+      action.sourcePath,
       action.projectId,
       action.type,
       action.reason,
@@ -201,7 +201,7 @@ export class MetadataStore {
     }>;
     return rows.map((r) => ({
       id: r.id,
-      entryId: r.entry_id,
+      sourcePath: r.entry_id,
       projectId: r.project_id,
       type: r.type as ArchiveAction['type'],
       reason: r.reason,

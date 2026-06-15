@@ -83,8 +83,8 @@ export type ArchiveActionType = 'move' | 'merge' | 'create' | 'ignore' | 'flag';
 export interface ArchiveAction {
   /** 动作 ID */
   id: string;
-  /** 目标知识条目 ID */
-  entryId: string;
+  /** 源文件绝对路径 */
+  sourcePath: string;
   /** 动作类型 */
   type: ArchiveActionType;
   /** 建议说明 */

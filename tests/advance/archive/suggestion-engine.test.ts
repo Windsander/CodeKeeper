@@ -23,7 +23,7 @@ describe('SuggestionEngine', () => {
     expect(action.type).toBe('move');
     expect(action.risk).toBe('low');
     expect(action.targetPath).toBe('/docs/specs/a.md');
-    expect(action.entryId).toBe('/a.md');
+    expect(action.sourcePath).toBe('/a.md');
   });
 
   it('解析失败时应回退到 flag', async () => {

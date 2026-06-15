@@ -24,7 +24,7 @@ describe('ArchiveExecutor', () => {
 
     const action: ArchiveAction = {
       id: 'a1',
-      entryId: source,
+      sourcePath: source,
       type: 'move',
       reason: '归档',
       targetPath: target,
@@ -45,7 +45,7 @@ describe('ArchiveExecutor', () => {
     writeFileSync(source, 'x', 'utf-8');
     const action: ArchiveAction = {
       id: 'a2',
-      entryId: source,
+      sourcePath: source,
       type: 'move',
       reason: '需要确认',
       targetPath: join(tmp, 'b.md'),

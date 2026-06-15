@@ -73,7 +73,7 @@ describe('MetadataStore', () => {
 
     const action: ArchiveAction & { projectId: string } = {
       id: 'a1',
-      entryId: 'e1',
+      sourcePath: 'e1',
       projectId: project.id,
       type: 'move',
       reason: '移动到正确目录',
