@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MetadataStore } from '../../../src/advance/store/metadata-store';
+import type { ArchiveAction } from '../../../src/advance/types';
 
 describe('MetadataStore', () => {
   let store: MetadataStore;
