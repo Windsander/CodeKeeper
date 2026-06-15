@@ -11,6 +11,7 @@ import { writeSuggestions } from '../codekeeper/suggestions-writer';
 import type { LlmClient } from '../llm/client';
 import type { MetadataStore } from '../store/metadata-store';
 import type { Project, ProjectStatus, ArchiveAction } from '../types';
+import { logger } from '../../core/logger';
 
 export interface ArchivePipelineOptions {
   store: MetadataStore;
@@ -40,12 +41,15 @@ export class ArchivePipeline {
     const events = this.options.store.listPendingEvents(this.options.maxEvents);
     if (events.length === 0) return;
 
+    const now = Date.now();
+
     const classifier = new DocumentClassifier(this.options.client);
     const dedup = new DedupDetector(this.options.client);
     const suggest = new SuggestionEngine(this.options.client);
     const executor = new ArchiveExecutor({ projectRoot: project.rootPath, autoRiskLevels: this.options.autoRiskLevels });
 
     const existing = this.options.store.listEntriesByProject(project.id);
+    const processedEventIds: number[] = [];
     const executedIds: string[] = [];
     const contextEntries: Array<{ filePath: string; category: string; docType: string; summary: string; tags: string[] }> = [];
 
@@ -76,8 +80,8 @@ export class ArchivePipeline {
             filePath: result.finalPath,
             contentHash: doc.contentHash,
             status: action.type === 'ignore' ? 'ignored' : 'archived',
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            createdAt: now,
+            updatedAt: now,
           });
           contextEntries.push({
             filePath: result.finalPath,
@@ -93,17 +97,35 @@ export class ArchivePipeline {
             filePath: event.filePath,
             contentHash: doc.contentHash,
             status: 'pending',
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            createdAt: now,
+            updatedAt: now,
           });
         }
+        processedEventIds.push(event.eventId);
       } catch (err) {
-        // 单条事件失败不应阻塞后续事件
-        console.warn(`[ArchivePipeline] 处理事件失败: ${event.filePath}`, err);
+        // 单条事件失败不应阻塞后续事件，失败事件保留在 watch_events 中供下次重试
+        const entryId = makeEntryId(project.id, event.filePath);
+        let contentHash = '';
+        try {
+          const doc = parseDocument(event.filePath);
+          contentHash = doc.contentHash;
+        } catch {
+          // doc 解析失败时 contentHash 留空
+        }
+        this.options.store.upsertEntry({
+          id: entryId,
+          projectId: project.id,
+          filePath: event.filePath,
+          contentHash,
+          status: 'pending',
+          createdAt: now,
+          updatedAt: now,
+        });
+        logger.warn({ err, filePath: event.filePath }, '处理事件失败');
       }
     }
 
-    this.options.store.markEventsProcessed(events.map((e) => e.eventId));
+    this.options.store.markEventsProcessed(processedEventIds);
     this.options.store.markActionsProcessed(executedIds);
 
     // 生成 .codekeeper/ 文件
@@ -119,7 +141,7 @@ export class ArchivePipeline {
     const counts = this.options.store.getProjectCounts(project.id);
     const status: ProjectStatus = {
       projectId: project.id,
-      lastScannedAt: Date.now(),
+      lastScannedAt: now,
       pendingCount: counts.pending,
       archivedCount: counts.archived,
       ignoredCount: counts.ignored,
