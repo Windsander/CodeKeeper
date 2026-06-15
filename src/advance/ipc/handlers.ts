@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { getLogDir } from '../../core/platform';
 import type { MetadataStore } from '../store/metadata-store';
 import type { ProjectRegistry } from '../project-registry';
 import type { ArchivePipeline } from '../pipeline/archive-pipeline';
@@ -101,6 +102,16 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       apiKeyConfigured: ctx.getClient() !== null,
       scanCron: '*/5 * * * *',
     };
+  },
+
+  'daemon.logs': async (_ctx, params) => {
+    const logPath = join(getLogDir(), 'codekeeper.log');
+    if (!existsSync(logPath)) {
+      return { lines: [] };
+    }
+    const all = readFileSync(logPath, 'utf-8').split('\n');
+    const count = params.lines ?? 100;
+    return { lines: all.slice(-count) };
   },
 
   'daemon.config.update': async (_ctx, params) => {
