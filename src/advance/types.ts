@@ -55,3 +55,68 @@ export interface KnowledgeEntry {
   /** 更新时间戳 */
   updatedAt: number;
 }
+
+/**
+ * 文档分类结果
+ */
+export interface ClassificationResult {
+  /** 领域分类，如 memory / sync / skill / review */
+  category: string;
+  /** 文档类型，如 design / spec / weekly / note */
+  docType: string;
+  /** 关键词标签 */
+  tags: string[];
+  /** 一句话摘要 */
+  summary: string;
+  /** 置信度 0-1 */
+  confidence: number;
+}
+
+/**
+ * 归档动作类型
+ */
+export type ArchiveActionType = 'move' | 'merge' | 'create' | 'ignore' | 'flag';
+
+/**
+ * 单条归档建议/动作
+ */
+export interface ArchiveAction {
+  /** 动作 ID */
+  id: string;
+  /** 目标知识条目 ID */
+  entryId: string;
+  /** 动作类型 */
+  type: ArchiveActionType;
+  /** 建议说明 */
+  reason: string;
+  /** 目标路径（move/create 时使用） */
+  targetPath?: string;
+  /** 关联的已有条目 ID（merge 时使用） */
+  relatedEntryId?: string;
+  /** 风险等级：low 自动执行，medium/high 写入 suggestions.md */
+  risk: 'low' | 'medium' | 'high';
+  /** 置信度 0-1 */
+  confidence: number;
+  /** 创建时间戳 */
+  createdAt: number;
+}
+
+/**
+ * 项目实时状态（写入 status.json）
+ */
+export interface ProjectStatus {
+  /** 项目 ID */
+  projectId: string;
+  /** 最后扫描时间戳 */
+  lastScannedAt: number;
+  /** 未归档/待处理数量 */
+  pendingCount: number;
+  /** 已归档数量 */
+  archivedCount: number;
+  /** 忽略数量 */
+  ignoredCount: number;
+  /** 健康度 0-1 */
+  healthScore: number;
+  /** 当前建议数量 */
+  suggestionCount: number;
+}

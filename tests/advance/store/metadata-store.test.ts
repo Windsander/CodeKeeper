@@ -57,4 +57,50 @@ describe('MetadataStore', () => {
     store.markEventsProcessed([pending[0].eventId]);
     expect(store.listPendingEvents()).toHaveLength(0);
   });
+
+  it('应支持分类、归档动作与项目统计', () => {
+    const project = { id: 'p3', rootPath: '/tmp/proj-d', name: 'proj-d', registeredAt: 1, lastScannedAt: null };
+    store.registerProject(project);
+
+    store.upsertCategory(project.id, 'memory', '记忆模块相关');
+    expect(store.listCategories(project.id)).toEqual([{ name: 'memory', description: '记忆模块相关' }]);
+
+    const action: ArchiveAction & { projectId: string } = {
+      id: 'a1',
+      entryId: 'e1',
+      projectId: project.id,
+      type: 'move',
+      reason: '移动到正确目录',
+      targetPath: '/target.md',
+      risk: 'low',
+      confidence: 0.9,
+      createdAt: Date.now(),
+    };
+    store.insertAction(action);
+    expect(store.listPendingActions(project.id)).toHaveLength(1);
+
+    store.markActionsExecuted(['a1']);
+    expect(store.listPendingActions(project.id)).toHaveLength(0);
+
+    store.upsertEntry({
+      id: 'e1',
+      projectId: project.id,
+      filePath: '/a.md',
+      contentHash: 'h1',
+      status: 'archived',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.upsertEntry({
+      id: 'e2',
+      projectId: project.id,
+      filePath: '/b.md',
+      contentHash: 'h2',
+      status: 'pending',
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const counts = store.getProjectCounts(project.id);
+    expect(counts).toEqual({ pending: 1, archived: 1, ignored: 0, suggestion: 0 });
+  });
 });

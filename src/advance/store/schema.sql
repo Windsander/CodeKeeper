@@ -32,3 +32,31 @@ CREATE INDEX IF NOT EXISTS idx_events_project ON watch_events(project_id);
 CREATE INDEX IF NOT EXISTS idx_events_processed ON watch_events(processed);
 CREATE INDEX IF NOT EXISTS idx_entries_project ON knowledge_entries(project_id);
 CREATE INDEX IF NOT EXISTS idx_entries_status ON knowledge_entries(status);
+
+-- 项目自定义分类 schema
+CREATE TABLE IF NOT EXISTS categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  UNIQUE(project_id, name)
+);
+
+-- 归档建议/动作记录
+CREATE TABLE IF NOT EXISTS archive_actions (
+  id TEXT PRIMARY KEY,
+  entry_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('move', 'merge', 'create', 'ignore', 'flag')),
+  reason TEXT NOT NULL,
+  target_path TEXT,
+  related_entry_id TEXT,
+  risk TEXT NOT NULL CHECK(risk IN ('low', 'medium', 'high')),
+  confidence REAL NOT NULL,
+  executed INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  executed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_actions_project ON archive_actions(project_id);
+CREATE INDEX IF NOT EXISTS idx_actions_executed ON archive_actions(executed);

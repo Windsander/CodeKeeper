@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import type { Project, WatchedEvent, KnowledgeEntry } from '../types';
+import type { Project, WatchedEvent, KnowledgeEntry, ArchiveAction } from '../types';
 
 /**
  * SQLite 元数据存储封装
@@ -140,5 +140,104 @@ export class MetadataStore {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
+  }
+
+  // ---------- 分类 ----------
+
+  listCategories(projectId: string): Array<{ name: string; description: string }> {
+    const rows = this.db
+      .prepare('SELECT name, description FROM categories WHERE project_id = ? ORDER BY name')
+      .all(projectId) as Array<{ name: string; description: string }>;
+    return rows;
+  }
+
+  upsertCategory(projectId: string, name: string, description?: string): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO categories (project_id, name, description)
+       VALUES (?, ?, ?)
+       ON CONFLICT(project_id, name) DO UPDATE SET
+         description = excluded.description`
+    );
+    stmt.run(projectId, name, description ?? null);
+  }
+
+  // ---------- 归档动作 ----------
+
+  insertAction(action: ArchiveAction & { projectId: string }): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO archive_actions (id, entry_id, project_id, type, reason, target_path, related_entry_id, risk, confidence, executed, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
+    );
+    stmt.run(
+      action.id,
+      action.entryId,
+      action.projectId,
+      action.type,
+      action.reason,
+      action.targetPath ?? null,
+      action.relatedEntryId ?? null,
+      action.risk,
+      action.confidence,
+      action.createdAt
+    );
+  }
+
+  listPendingActions(projectId: string): Array<ArchiveAction & { projectId: string }> {
+    const rows = this.db
+      .prepare('SELECT * FROM archive_actions WHERE project_id = ? AND executed = 0 ORDER BY created_at ASC')
+      .all(projectId) as Array<{
+      id: string;
+      entry_id: string;
+      project_id: string;
+      type: string;
+      reason: string;
+      target_path: string | null;
+      related_entry_id: string | null;
+      risk: string;
+      confidence: number;
+      created_at: number;
+    }>;
+    return rows.map((r) => ({
+      id: r.id,
+      entryId: r.entry_id,
+      projectId: r.project_id,
+      type: r.type as ArchiveAction['type'],
+      reason: r.reason,
+      targetPath: r.target_path ?? undefined,
+      relatedEntryId: r.related_entry_id ?? undefined,
+      risk: r.risk as ArchiveAction['risk'],
+      confidence: r.confidence,
+      createdAt: r.created_at,
+    }));
+  }
+
+  markActionsExecuted(actionIds: string[]): void {
+    if (actionIds.length === 0) return;
+    const placeholders = actionIds.map(() => '?').join(',');
+    const now = Date.now();
+    this.db.prepare(`UPDATE archive_actions SET executed = 1, executed_at = ? WHERE id IN (${placeholders})`).run(now, ...actionIds);
+  }
+
+  // ---------- 项目统计 ----------
+
+  getProjectCounts(projectId: string): { pending: number; archived: number; ignored: number; suggestion: number } {
+    const entryCounts = this.db
+      .prepare(
+        `SELECT
+          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
+          SUM(CASE WHEN status = 'archived' THEN 1 ELSE 0 END) AS archived,
+          SUM(CASE WHEN status = 'ignored' THEN 1 ELSE 0 END) AS ignored
+         FROM knowledge_entries WHERE project_id = ?`
+      )
+      .get(projectId) as { pending: number; archived: number; ignored: number };
+    const suggestion = this.db
+      .prepare("SELECT COUNT(*) AS c FROM archive_actions WHERE project_id = ? AND executed = 0 AND risk IN ('medium', 'high')")
+      .get(projectId) as { c: number };
+    return {
+      pending: Number(entryCounts.pending ?? 0),
+      archived: Number(entryCounts.archived ?? 0),
+      ignored: Number(entryCounts.ignored ?? 0),
+      suggestion: Number(suggestion.c ?? 0),
+    };
   }
 }
