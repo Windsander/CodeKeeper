@@ -38,6 +38,7 @@ export class Daemon {
         client: new LlmClient({ apiKey: this.options.apiKey ?? '' }),
         maxEvents: this.options.maxEventsPerScan ?? 50,
       }),
+      updateDaemonConfig: (config) => this.updateConfig(config),
     };
   }
 
@@ -75,6 +76,17 @@ export class Daemon {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  updateConfig(config: { apiKey?: string; scanCron?: string }): void {
+    if (config.apiKey !== undefined) {
+      this.options.apiKey = config.apiKey;
+    }
+    if (config.scanCron !== undefined) {
+      this.options.scanCron = config.scanCron;
+      this.scanJob?.stop();
+      this.scanJob = schedule(config.scanCron, () => this.scanAll());
+    }
   }
 
   private async handleIpc(method: string, params: unknown): Promise<unknown> {

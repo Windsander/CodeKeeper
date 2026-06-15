@@ -13,6 +13,7 @@ export interface HandlerContext {
   registry: ProjectRegistry;
   getClient: () => LlmClient | null;
   getPipeline: () => ArchivePipeline;
+  updateDaemonConfig?: (config: { apiKey?: string; scanCron?: string }) => void;
 }
 
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
@@ -114,8 +115,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { lines: all.slice(-count) };
   },
 
-  'daemon.config.update': async (_ctx, params) => {
-    // 实际更新逻辑在 daemon 中处理，这里仅校验
-    return { success: true, params };
+  'daemon.config.update': async (ctx, params) => {
+    ctx.updateDaemonConfig?.(params);
+    return { success: true };
   },
 };
