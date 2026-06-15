@@ -34,6 +34,8 @@ export class MetadataStore {
     this.db.prepare('DELETE FROM projects WHERE id = ?').run(projectId);
     this.db.prepare('DELETE FROM watch_events WHERE project_id = ?').run(projectId);
     this.db.prepare('DELETE FROM knowledge_entries WHERE project_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM categories WHERE project_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM archive_actions WHERE project_id = ?').run(projectId);
   }
 
   listProjects(): Project[] {
@@ -211,7 +213,7 @@ export class MetadataStore {
     }));
   }
 
-  markActionsExecuted(actionIds: string[]): void {
+  markActionsProcessed(actionIds: string[]): void {
     if (actionIds.length === 0) return;
     const placeholders = actionIds.map(() => '?').join(',');
     const now = Date.now();
@@ -220,7 +222,10 @@ export class MetadataStore {
 
   // ---------- 项目统计 ----------
 
-  getProjectCounts(projectId: string): { pending: number; archived: number; ignored: number; suggestion: number } {
+  getProjectCounts(
+    projectId: string,
+    riskLevels: string[] = ['medium', 'high']
+  ): { pending: number; archived: number; ignored: number; suggestion: number } {
     const entryCounts = this.db
       .prepare(
         `SELECT
@@ -230,9 +235,12 @@ export class MetadataStore {
          FROM knowledge_entries WHERE project_id = ?`
       )
       .get(projectId) as { pending: number; archived: number; ignored: number };
+    const riskPlaceholders = riskLevels.map(() => '?').join(',');
     const suggestion = this.db
-      .prepare("SELECT COUNT(*) AS c FROM archive_actions WHERE project_id = ? AND executed = 0 AND risk IN ('medium', 'high')")
-      .get(projectId) as { c: number };
+      .prepare(
+        `SELECT COUNT(*) AS c FROM archive_actions WHERE project_id = ? AND executed = 0 AND risk IN (${riskPlaceholders})`
+      )
+      .get(projectId, ...riskLevels) as { c: number };
     return {
       pending: Number(entryCounts.pending ?? 0),
       archived: Number(entryCounts.archived ?? 0),

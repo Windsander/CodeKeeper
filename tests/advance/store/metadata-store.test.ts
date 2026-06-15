@@ -59,12 +59,17 @@ describe('MetadataStore', () => {
     expect(store.listPendingEvents()).toHaveLength(0);
   });
 
-  it('应支持分类、归档动作与项目统计', () => {
+  it('应支持分类的增查', () => {
     const project = { id: 'p3', rootPath: '/tmp/proj-d', name: 'proj-d', registeredAt: 1, lastScannedAt: null };
     store.registerProject(project);
 
     store.upsertCategory(project.id, 'memory', '记忆模块相关');
     expect(store.listCategories(project.id)).toEqual([{ name: 'memory', description: '记忆模块相关' }]);
+  });
+
+  it('应支持归档动作的插入与标记处理', () => {
+    const project = { id: 'p3', rootPath: '/tmp/proj-d', name: 'proj-d', registeredAt: 1, lastScannedAt: null };
+    store.registerProject(project);
 
     const action: ArchiveAction & { projectId: string } = {
       id: 'a1',
@@ -80,8 +85,13 @@ describe('MetadataStore', () => {
     store.insertAction(action);
     expect(store.listPendingActions(project.id)).toHaveLength(1);
 
-    store.markActionsExecuted(['a1']);
+    store.markActionsProcessed(['a1']);
     expect(store.listPendingActions(project.id)).toHaveLength(0);
+  });
+
+  it('应支持项目统计计数', () => {
+    const project = { id: 'p3', rootPath: '/tmp/proj-d', name: 'proj-d', registeredAt: 1, lastScannedAt: null };
+    store.registerProject(project);
 
     store.upsertEntry({
       id: 'e1',
