@@ -24,4 +24,37 @@ describe('DedupDetector', () => {
     );
     expect(result.relation).toBe('related');
   });
+
+  it('confidence 低于 threshold 时返回 unrelated', async () => {
+    const response = JSON.stringify({ relation: 'duplicate', reason: '内容相同', confidence: 0.3 });
+    const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const detector = new DedupDetector(client);
+    const result = await detector.detect(
+      { filePath: '/a.md', contentHash: 'h1', content: '记忆模块' },
+      [{ filePath: '/b.md', contentHash: 'h2', content: '记忆同步' }]
+    );
+    expect(result.relation).toBe('unrelated');
+  });
+
+  it('parseDedupResponse 对代码块包裹的处理', async () => {
+    const response = '```json\n' + JSON.stringify({ relation: 'related', reason: '主题相近', confidence: 0.8 }) + '\n```';
+    const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const detector = new DedupDetector(client);
+    const result = await detector.detect(
+      { filePath: '/a.md', contentHash: 'h1', content: '记忆模块' },
+      [{ filePath: '/b.md', contentHash: 'h2', content: '记忆同步' }]
+    );
+    expect(result.relation).toBe('related');
+  });
+
+  it('非法 JSON 时返回 unrelated', async () => {
+    const response = '不是 JSON';
+    const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const detector = new DedupDetector(client);
+    const result = await detector.detect(
+      { filePath: '/a.md', contentHash: 'h1', content: '记忆模块' },
+      [{ filePath: '/b.md', contentHash: 'h2', content: '记忆同步' }]
+    );
+    expect(result.relation).toBe('unrelated');
+  });
 });

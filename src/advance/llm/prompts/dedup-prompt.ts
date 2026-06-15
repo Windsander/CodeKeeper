@@ -19,12 +19,12 @@ export function buildDedupPrompt(input: DedupInput): string {
 严格按 JSON 输出。
 
 文档 A: ${input.sourcePath}
-${input.sourceContent.slice(0, 1500)}
+${input.sourceContent.slice(0, 1500)}${input.sourceContent.length > 1500 ? '\n[...内容已截断]' : ''}
 
 ---
 
 文档 B: ${input.candidatePath}
-${input.candidateContent.slice(0, 1500)}
+${input.candidateContent.slice(0, 1500)}${input.candidateContent.length > 1500 ? '\n[...内容已截断]' : ''}
 
 输出格式：
 {
@@ -41,7 +41,8 @@ export function parseDedupResponse(text: string) {
     if (
       ['duplicate', 'conflict', 'related', 'unrelated'].includes(parsed.relation) &&
       typeof parsed.reason === 'string' &&
-      typeof parsed.confidence === 'number'
+      typeof parsed.confidence === 'number' &&
+      !Number.isNaN(parsed.confidence)
     ) {
       return {
         relation: parsed.relation as 'duplicate' | 'conflict' | 'related' | 'unrelated',

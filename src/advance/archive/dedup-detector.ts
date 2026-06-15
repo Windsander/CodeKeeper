@@ -49,8 +49,11 @@ export class DedupDetector {
       };
     }
 
-    // 仅对比最近的候选
-    const limited = candidates.slice(0, maxCandidates);
+    // 按与 source 内容长度差异升序预排序，优先对比更可能相关的候选
+    const sorted = candidates
+      .slice()
+      .sort((a, b) => Math.abs(a.content.length - source.content.length) - Math.abs(b.content.length - source.content.length));
+    const limited = sorted.slice(0, maxCandidates);
     let best: DedupResult = { relation: 'unrelated', reason: '未找到相关候选', confidence: 0 };
 
     for (const candidate of limited) {
