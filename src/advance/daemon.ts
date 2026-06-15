@@ -8,6 +8,7 @@ import { ArchivePipeline } from './pipeline/archive-pipeline';
 import { LlmClient } from './llm/client';
 import { IpcServer } from './ipc/server';
 import { getIpcSocketPath } from './ipc/paths';
+import { handlers, type HandlerContext } from './ipc/handlers';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -25,8 +26,20 @@ export class Daemon {
   private scanJob: ReturnType<typeof schedule> | null = null;
   private running = false;
   private ipcServer: IpcServer | null = null;
+  private handlerContext: HandlerContext;
 
-  constructor(private options: DaemonOptions) {}
+  constructor(private options: DaemonOptions) {
+    this.handlerContext = {
+      store: options.store,
+      registry: options.registry,
+      getClient: () => (this.options.apiKey ? new LlmClient({ apiKey: this.options.apiKey }) : null),
+      getPipeline: () => new ArchivePipeline({
+        store: this.options.store,
+        client: new LlmClient({ apiKey: this.options.apiKey ?? '' }),
+        maxEvents: this.options.maxEventsPerScan ?? 50,
+      }),
+    };
+  }
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -64,9 +77,10 @@ export class Daemon {
     return this.running;
   }
 
-  private async handleIpc(_method: string, _params: unknown): Promise<unknown> {
-    // 临时返回空，handlers 在 Task 3 实现
-    return {};
+  private async handleIpc(method: string, params: unknown): Promise<unknown> {
+    const handler = handlers[method];
+    if (!handler) throw new Error(`未知 method: ${method}`);
+    return handler(this.handlerContext, params);
   }
 
   private watchProject(project: Project): void {
