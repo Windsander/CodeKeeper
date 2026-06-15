@@ -52,6 +52,7 @@ export const projectConfigSchema = z.object({
   ]),
   exclude: z.array(z.string()).default(['node_modules/**', '.git/**', 'dist/**', '.codekeeper/drafts/**']),
   categories: z.array(z.string()).default([]),
+  docTypes: z.array(z.string()).default([]),
 });
 
 export type ProjectConfig = z.infer<typeof projectConfigSchema>;

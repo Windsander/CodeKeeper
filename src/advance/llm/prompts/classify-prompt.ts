@@ -4,15 +4,30 @@
 export const DEFAULT_CATEGORIES = ['memory', 'sync', 'skill', 'review', 'design', 'weekly', 'other'];
 
 /**
+ * 默认文档类型列表
+ */
+export const DEFAULT_DOC_TYPES = ['design', 'spec', 'weekly', 'review', 'note', 'code', 'config', 'snippet', 'other'];
+
+export interface ClassifyPromptOptions {
+  categories?: string[];
+  docTypes?: string[];
+}
+
+/**
  * 根据文件路径与内容生成分类 prompt
  */
-export function buildClassifyPrompt(filePath: string, content: string, categories: string[]): string {
-  const categoryList = categories.length > 0 ? categories.join(', ') : DEFAULT_CATEGORIES.join(', ');
+export function buildClassifyPrompt(
+  filePath: string,
+  content: string,
+  options: ClassifyPromptOptions = {}
+): string {
+  const categoryList = options.categories?.length ? options.categories.join(', ') : DEFAULT_CATEGORIES.join(', ');
+  const docTypeList = options.docTypes?.length ? options.docTypes.join(', ') : DEFAULT_DOC_TYPES.join(', ');
   return `你是一名知识库管理员。请根据以下文件的路径和内容，判断其所属分类。
 
 要求：
-- category: 从 [${categoryList}] 中选择最匹配的一个；如果没有匹配项，使用 "other"。
-- docType: 文档类型，如 design, spec, weekly, review, note, code, config 等。
+- category: 从 [${categoryList}] 中选择最匹配的一个；如果没有匹配项，使用 \"other\"。
+- docType: 从 [${docTypeList}] 中选择最匹配的一个文档类型；如果没有匹配项，使用 \"other\"。
 - tags: 3-5 个关键词字符串数组。
 - summary: 一句话摘要（50 字以内）。
 - confidence: 置信度 0.0-1.0。
@@ -26,11 +41,11 @@ ${content.slice(0, 2000)}
 
 输出格式：
 {
-  "category": "...",
-  "docType": "...",
-  "tags": ["..."],
-  "summary": "...",
-  "confidence": 0.95
+  \"category\": \"...\",
+  \"docType\": \"...\",
+  \"tags\": [\"...\"],
+  \"summary\": \"...\",
+  \"confidence\": 0.95
 }`;
 }
 

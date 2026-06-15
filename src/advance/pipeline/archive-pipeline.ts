@@ -12,6 +12,7 @@ import { writeReadme } from '../codekeeper/readme-writer';
 import type { LlmClient } from '../llm/client';
 import type { MetadataStore } from '../store/metadata-store';
 import type { Project, ArchiveAction } from '../types';
+import { loadProjectConfig } from '../config/project-config';
 import { logger } from '../../core/logger';
 
 export interface ArchivePipelineOptions {
@@ -44,7 +45,11 @@ export class ArchivePipeline {
 
     const now = Date.now();
 
-    const classifier = new DocumentClassifier(this.options.client);
+    const config = loadProjectConfig(project.rootPath);
+    const classifier = new DocumentClassifier(this.options.client, {
+      categories: config.categories.length > 0 ? config.categories : undefined,
+      docTypes: config.docTypes.length > 0 ? config.docTypes : undefined,
+    });
     const dedup = new DedupDetector(this.options.client);
     const suggest = new SuggestionEngine(this.options.client);
     const executor = new ArchiveExecutor({ projectRoot: project.rootPath, autoRiskLevels: this.options.autoRiskLevels });
