@@ -1,0 +1,38 @@
+# CodeKeeper 多项目配置示例
+# 复制为 config/projects.yaml 并修改
+
+projects:
+  - id: my-project
+    name: My Project
+    localPath: /path/to/project
+    git:
+      remote: git@git.example.com:group/project.git
+      defaultBranch: main
+    gitlab:
+      baseUrl: https://git.example.com
+      projectPath: group/project
+      token: env:GITLAB_TOKEN
+    review:
+      enabled: true
+      schedule: "*/30 * * * *"
+      timezone: "Asia/Shanghai"
+      tokenBudget: 200000
+      autoFix: false
+      autoFixBranchPrefix: "codekeeper/fix-"
+      rulesFile: CLAUDE.md
+      astGrepConfig: .claude/rules/sgconfig.yml
+      filter:
+        excludeAuthors: [bot, ci]
+        excludeDrafts: true
+        minChanges: 1
+        maxChanges: 300
+        excludePaths:
+          - "**/*.md"
+          - "docs/**"
+    learning:
+      enabled: true
+      schedule: "0 2 * * *"
+      patternThreshold: 3
+      updateClaudeMd: true
+      createAstGrepRules: true
+      lookbackDays: 7

@@ -1,0 +1,246 @@
+import { logger } from '../core/logger.js';
+import type { ProjectConfig } from '../types.js';
+
+interface GitLabApiOptions {
+  baseUrl: string;
+  token: string;
+}
+
+export class GitLabClient {
+  private baseUrl: string;
+  private token: string;
+  private projectId: string;
+
+  constructor(
+    project: ProjectConfig,
+    options?: GitLabApiOptions
+  ) {
+    this.baseUrl = options?.baseUrl || project.gitlab.baseUrl;
+    this.token = options?.token || project.gitlab.token;
+    // URL-encode project path for GitLab API
+    this.projectId = encodeURIComponent(project.gitlab.projectPath);
+  }
+
+  private async request<T>(
+    method: string,
+    endpoint: string,
+    body?: unknown
+  ): Promise<T> {
+    const url = `${this.baseUrl}/api/v4${endpoint}`;
+
+    const headers: Record<string, string> = {
+      'PRIVATE-TOKEN': this.token,
+      'Content-Type': 'application/json',
+    };
+
+    const fetchOptions: RequestInit = {
+      method,
+      headers,
+    };
+
+    if (body) {
+      fetchOptions.body = JSON.stringify(body);
+    }
+
+    logger.debug(`GitLab API ${method} ${endpoint}`);
+
+    const response = await fetch(url, fetchOptions);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error({ status: response.status, body: errorText }, `GitLab API error: ${method} ${endpoint}`);
+      throw new Error(`GitLab API ${response.status}: ${errorText}`);
+    }
+
+    return response.json() as Promise<T>;
+  }
+
+  /**
+   * List open merge requests
+   */
+  async listMergeRequests(params?: {
+    state?: string;
+    per_page?: number;
+    order_by?: string;
+    sort?: string;
+  }): Promise<GitLabMR[]> {
+    const query = new URLSearchParams({
+      state: params?.state || 'opened',
+      per_page: String(params?.per_page || 50),
+      order_by: params?.order_by || 'updated_at',
+      sort: params?.sort || 'desc',
+    });
+
+    return this.request<GitLabMR[]>(
+      'GET',
+      `/projects/${this.projectId}/merge_requests?${query.toString()}`
+    );
+  }
+
+  /**
+   * Get single merge request
+   */
+  async getMergeRequest(iid: number): Promise<GitLabMR> {
+    return this.request<GitLabMR>(
+      'GET',
+      `/projects/${this.projectId}/merge_requests/${iid}`
+    );
+  }
+
+  /**
+   * Get MR changes (diff metadata)
+   */
+  async getMergeRequestChanges(iid: number): Promise<GitLabMRChanges> {
+    return this.request<GitLabMRChanges>(
+      'GET',
+      `/projects/${this.projectId}/merge_requests/${iid}/changes?per_page=100`
+    );
+  }
+
+  /**
+   * Get MR notes (comments)
+   */
+  async getMergeRequestNotes(iid: number): Promise<GitLabNote[]> {
+    return this.request<GitLabNote[]>(
+      'GET',
+      `/projects/${this.projectId}/merge_requests/${iid}/notes?per_page=100`
+    );
+  }
+
+  /**
+   * Get MR discussions
+   */
+  async getMergeRequestDiscussions(iid: number): Promise<GitLabDiscussion[]> {
+    return this.request<GitLabDiscussion[]>(
+      'GET',
+      `/projects/${this.projectId}/merge_requests/${iid}/discussions?per_page=100`
+    );
+  }
+
+  /**
+   * Create a note (comment) on MR
+   */
+  async createNote(iid: number, body: string): Promise<GitLabNote> {
+    return this.request<GitLabNote>(
+      'POST',
+      `/projects/${this.projectId}/merge_requests/${iid}/notes`,
+      { body }
+    );
+  }
+
+  /**
+   * Create a discussion on MR
+   */
+  async createDiscussion(
+    iid: number,
+    body: string,
+    position?: GitLabDiffPosition
+  ): Promise<GitLabDiscussion> {
+    const payload: Record<string, unknown> = { body };
+    if (position) {
+      payload.position = position;
+    }
+    return this.request<GitLabDiscussion>(
+      'POST',
+      `/projects/${this.projectId}/merge_requests/${iid}/discussions`,
+      payload
+    );
+  }
+
+  /**
+   * Create a new merge request
+   */
+  async createMergeRequest(params: {
+    sourceBranch: string;
+    targetBranch: string;
+    title: string;
+    description?: string;
+  }): Promise<GitLabMR> {
+    return this.request<GitLabMR>(
+      'POST',
+      `/projects/${this.projectId}/merge_requests`,
+      {
+        source_branch: params.sourceBranch,
+        target_branch: params.targetBranch,
+        title: params.title,
+        description: params.description || '',
+      }
+    );
+  }
+
+  /**
+   * List recently merged MRs (for learning loop)
+   */
+  async listMergedMRs(since?: string, perPage = 50): Promise<GitLabMR[]> {
+    const query = new URLSearchParams({
+      state: 'merged',
+      per_page: String(perPage),
+      order_by: 'updated_at',
+      sort: 'desc',
+    });
+
+    if (since) {
+      query.set('updated_after', since);
+    }
+
+    return this.request<GitLabMR[]>(
+      'GET',
+      `/projects/${this.projectId}/merge_requests?${query.toString()}`
+    );
+  }
+}
+
+// GitLab API response types
+export interface GitLabMR {
+  iid: number;
+  title: string;
+  description: string | null;
+  source_branch: string;
+  target_branch: string;
+  author: { username: string; name: string };
+  draft: boolean;
+  changes_count: string;
+  created_at: string;
+  updated_at: string;
+  web_url: string;
+  state: string;
+  merge_status: string;
+}
+
+export interface GitLabMRChanges {
+  changes: Array<{
+    old_path: string;
+    new_path: string;
+    new_file: boolean;
+    deleted_file: boolean;
+    renamed_file: boolean;
+    diff: string;
+  }>;
+}
+
+export interface GitLabNote {
+  id: number;
+  body: string;
+  author: { username: string; name: string };
+  created_at: string;
+  resolved: boolean;
+  system: boolean;
+}
+
+export interface GitLabDiscussion {
+  id: string;
+  notes: GitLabNote[];
+  resolvable: boolean;
+  resolved: boolean;
+}
+
+export interface GitLabDiffPosition {
+  base_sha: string;
+  head_sha: string;
+  start_sha: string;
+  position_type: 'text';
+  old_path: string;
+  new_path: string;
+  new_line: number;
+  old_line?: number;
+}

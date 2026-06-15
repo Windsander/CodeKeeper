@@ -21,7 +21,7 @@ export class LlmClient {
   private mock?: LlmClientOptions['mock'];
   private mockCallIndex = 0;
 
-  constructor(private options: LlmClientOptions) {
+  constructor(options: LlmClientOptions) {
     this.model = options.model ?? 'claude-3-5-sonnet-20241022';
     this.maxTokens = options.maxTokens ?? 1024;
     this.mock = options.mock;
@@ -50,19 +50,24 @@ export class LlmClient {
       throw new Error('LLM client 未初始化');
     }
 
-    const response = await this.anthropic.messages.create({
-      model: this.model,
-      max_tokens: this.maxTokens,
-      system,
-      messages: [{ role: 'user', content: prompt }],
-    });
+    try {
+      const response = await this.anthropic.messages.create({
+        model: this.model,
+        max_tokens: this.maxTokens,
+        system,
+        messages: [{ role: 'user', content: prompt }],
+      });
 
-    const text = response.content
-      .filter((c): c is Anthropic.TextBlock => c.type === 'text')
-      .map((c) => c.text)
-      .join('')
-      .trim();
+      const text = response.content
+        .filter((c): c is Anthropic.TextBlock => c.type === 'text')
+        .map((c) => c.text)
+        .join('')
+        .trim();
 
-    return text;
+      return text;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`[LlmClient] ${message}`);
+    }
   }
 }
