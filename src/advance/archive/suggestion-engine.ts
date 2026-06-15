@@ -47,7 +47,7 @@ export class SuggestionEngine {
     // 解析失败时回退为人工 review
     return {
       id: makeActionId(filePath, content),
-      entryId: filePath,
+      sourcePath: filePath,
       type: 'flag',
       reason: 'LLM 建议解析失败，需要人工 review',
       risk: 'high',
