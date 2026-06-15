@@ -4,12 +4,12 @@
   "description": "通用、去品牌化、Agent 自驱动的知识智库系统",
   "main": "dist/index.js",
   "bin": {
-    "codekeeper": "dist/advance/cli.js"
+    "codekeeper": "dist/advance/cli-entry.js"
   },
   "scripts": {
     "build": "node node_modules/typescript/bin/tsc",
-    "dev": "node node_modules/tsx/dist/cli.mjs src/advance/cli.ts",
-    "start": "node dist/advance/cli.js start",
+    "dev": "node node_modules/tsx/dist/cli.mjs src/advance/cli-entry.ts",
+    "start": "node dist/advance/cli-entry.js start",
     "test": "node node_modules/vitest/vitest.mjs run",
     "test:watch": "node node_modules/vitest/vitest.mjs",
     "lint": "ESLINT_USE_FLAT_CONFIG=false node node_modules/eslint/bin/eslint.js src --ext ts",

@@ -17,13 +17,28 @@ function getDeps() {
   return { store, registry };
 }
 
-function parseFlag(args: string[], flag: string): string | undefined {
+export function parseFlag(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
   if (idx === -1 || idx === args.length - 1) return undefined;
   return args[idx + 1];
 }
 
-async function main(): Promise<void> {
+export function extractRootPath(args: string[], flags: string[]): string | undefined {
+  const skipSet = new Set<number>();
+  for (const flag of flags) {
+    const idx = args.indexOf(flag);
+    if (idx !== -1) {
+      skipSet.add(idx);
+      if (idx + 1 < args.length) skipSet.add(idx + 1);
+    }
+  }
+  for (let i = 0; i < args.length; i++) {
+    if (!skipSet.has(i)) return args[i];
+  }
+  return undefined;
+}
+
+export async function main(): Promise<void> {
   const [, , command, ...args] = process.argv;
 
   if (command === 'register') {
@@ -87,7 +102,7 @@ async function main(): Promise<void> {
       console.error('缺少 --api-key');
       process.exit(1);
     }
-    const rootPath = args[0];
+    const rootPath = extractRootPath(args, ['--api-key']);
     if (!rootPath) {
       console.error('请提供项目路径');
       process.exit(1);
@@ -129,5 +144,3 @@ async function main(): Promise<void> {
   console.log('用法: codekeeper-advance [register|unregister|list|start|process|status]');
   process.exit(1);
 }
-
-main();
