@@ -36,8 +36,10 @@ ${input.candidateContent.slice(0, 1500)}${input.candidateContent.length > 1500 ?
 
 export function parseDedupResponse(text: string) {
   try {
-    const json = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(json);
+    // 先尝试匹配 ```json 或 ``` 代码块，提取内部内容
+    const codeBlockMatch = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/);
+    const json = codeBlockMatch ? codeBlockMatch[1] : text;
+    const parsed = JSON.parse(json.trim());
     if (
       ['duplicate', 'conflict', 'related', 'unrelated'].includes(parsed.relation) &&
       typeof parsed.reason === 'string' &&

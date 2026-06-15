@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { DedupDetector } from '../../../src/advance/archive/dedup-detector';
 import { LlmClient } from '../../../src/advance/llm/client';
+import { parseDedupResponse } from '../../../src/advance/llm/prompts/dedup-prompt';
 
 describe('DedupDetector', () => {
   it('应通过哈希快速判定重复', async () => {
@@ -56,5 +57,12 @@ describe('DedupDetector', () => {
       [{ filePath: '/b.md', contentHash: 'h2', content: '记忆同步' }]
     );
     expect(result.relation).toBe('unrelated');
+  });
+
+  it('parseDedupResponse 对 NaN confidence 返回 null', () => {
+    // JSON 标准不支持 NaN，这里用字符串拼接构造含 NaN 的 JSON 文本
+    const raw = '{"relation":"related","reason":"x","confidence":NaN}';
+    const result = parseDedupResponse(raw);
+    expect(result).toBeNull();
   });
 });
