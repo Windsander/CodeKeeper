@@ -26,4 +26,46 @@ describe('DocumentClassifier', () => {
     expect(result.category).toBe('other');
     expect(result.confidence).toBeLessThan(1);
   });
+
+  it('应将通过 category 不在白名单时归一化为 other', async () => {
+    const response = JSON.stringify({
+      category: 'unknown',
+      docType: 'note',
+      tags: ['a'],
+      summary: '摘要',
+      confidence: 0.8,
+    });
+    const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const classifier = new DocumentClassifier(client, { categories: ['memory', 'sync', 'skill'] });
+    const result = await classifier.classify('/x.md', '内容');
+    expect(result.category).toBe('other');
+  });
+
+  it('应对超出范围的 confidence 做截断', async () => {
+    const response = JSON.stringify({
+      category: 'memory',
+      docType: 'note',
+      tags: ['a'],
+      summary: '摘要',
+      confidence: 1.5,
+    });
+    const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const classifier = new DocumentClassifier(client, { categories: ['memory', 'sync'] });
+    const result = await classifier.classify('/x.md', '内容');
+    expect(result.confidence).toBe(1);
+  });
+
+  it('categories 为空时应使用默认分类列表', async () => {
+    const response = JSON.stringify({
+      category: 'memory',
+      docType: 'note',
+      tags: ['a'],
+      summary: '摘要',
+      confidence: 0.8,
+    });
+    const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const classifier = new DocumentClassifier(client);
+    const result = await classifier.classify('/x.md', '内容');
+    expect(result.category).toBe('memory');
+  });
 });

@@ -1,14 +1,19 @@
 /**
+ * 默认分类列表
+ */
+export const DEFAULT_CATEGORIES = ['memory', 'sync', 'skill', 'review', 'design', 'weekly', 'other'];
+
+/**
  * 根据文件路径与内容生成分类 prompt
  */
 export function buildClassifyPrompt(filePath: string, content: string, categories: string[]): string {
-  const categoryList = categories.length > 0 ? categories.join(', ') : 'memory, sync, skill, review, design, weekly, other';
+  const categoryList = categories.length > 0 ? categories.join(', ') : DEFAULT_CATEGORIES.join(', ');
   return `你是一名知识库管理员。请根据以下文件的路径和内容，判断其所属分类。
 
 要求：
 - category: 从 [${categoryList}] 中选择最匹配的一个；如果没有匹配项，使用 "other"。
 - docType: 文档类型，如 design, spec, weekly, review, note, code, config 等。
-- tags: 3-5 个关键词，用逗号分隔。
+- tags: 3-5 个关键词字符串数组。
 - summary: 一句话摘要（50 字以内）。
 - confidence: 置信度 0.0-1.0。
 

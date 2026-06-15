@@ -1,5 +1,5 @@
-import type { LlmClient } from '../llm/client';
-import { buildClassifyPrompt, parseClassifyResponse } from '../llm/prompts/classify-prompt';
+import { LlmClient } from '../llm/client';
+import { buildClassifyPrompt, parseClassifyResponse, DEFAULT_CATEGORIES } from '../llm/prompts/classify-prompt';
 import type { ClassificationResult } from '../types';
 
 export interface ClassifierOptions {
@@ -23,7 +23,7 @@ export class DocumentClassifier {
     const parsed = parseClassifyResponse(text);
 
     if (parsed) {
-      const accepted = categories.length > 0 ? categories : ['memory', 'sync', 'skill', 'review', 'design', 'weekly', 'other'];
+      const accepted = this.options.categories ?? DEFAULT_CATEGORIES;
       const normalized = accepted.includes(parsed.category) ? parsed.category : 'other';
       return { ...parsed, category: normalized };
     }
