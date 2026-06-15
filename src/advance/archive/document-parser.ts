@@ -17,7 +17,7 @@ export interface ParsedDocument {
 }
 
 export interface ParseOptions {
-  /** 最大读取字符数，默认 10000 */
+  /** 最大读取字符数（按 JavaScript 字符串长度计算），默认 10000 */
   maxLength?: number;
   /** 文件编码，默认 utf-8 */
   encoding?: BufferEncoding;
@@ -35,7 +35,7 @@ export function parseDocument(filePath: string, options: ParseOptions = {}): Par
   const truncated = full.length > maxLength;
   const content = truncated ? full.slice(0, maxLength) : full;
 
-  const hash = createHash('sha256').update(content).digest('hex').slice(0, 16);
+  const hash = createHash('sha256').update(full).digest('hex').slice(0, 16);
 
   return {
     filePath,
