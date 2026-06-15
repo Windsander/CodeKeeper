@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { Dashboard } from './pages/Dashboard';
 
 export function App() {
   return (
@@ -10,7 +11,7 @@ export function App() {
         </nav>
         <main style={{ flex: 1, padding: 16, overflow: 'auto' }}>
           <Routes>
-            <Route path="/" element={<div>仪表盘占位</div>} />
+            <Route path="/" element={<Dashboard />} />
           </Routes>
         </main>
       </div>
