@@ -31,15 +31,20 @@ export function generateContext(options: ContextGeneratorOptions): void {
 
   const lines: string[] = [`# ${options.projectName} 知识上下文`, '', `> 自动生成于 ${new Date().toISOString()}`, ''];
 
-  for (const [category, items] of byCategory) {
-    lines.push(`## ${category}`);
-    for (const item of items) {
-      lines.push(`- **${item.docType}** [${item.filePath}] — ${item.summary}`);
-      if (item.tags.length > 0) {
-        lines.push(`  - 标签：${item.tags.join(', ')}`);
-      }
-    }
+  if (byCategory.size === 0) {
+    lines.push('当前暂无已归档知识条目。');
     lines.push('');
+  } else {
+    for (const [category, items] of byCategory) {
+      lines.push(`## ${category}`);
+      for (const item of items) {
+        lines.push(`- **${item.docType}** [${item.filePath}] — ${item.summary}`);
+        if (item.tags.length > 0) {
+          lines.push(`  - 标签：${item.tags.join(', ')}`);
+        }
+      }
+      lines.push('');
+    }
   }
 
   writeFileSync(join(dir, 'context.md'), lines.join('\n'), 'utf-8');

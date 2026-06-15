@@ -24,5 +24,14 @@ describe('writeSuggestions', () => {
     const content = readFileSync(join(tmp, '.codekeeper', 'suggestions.md'), 'utf-8');
     expect(content).toContain('# 归档建议');
     expect(content).toContain('移到 docs');
+    expect(content).toContain('/docs/x.md');
+    expect(content).toContain('风险等级：medium');
+  });
+
+  it('actions 为空时应显示提示', () => {
+    writeSuggestions({ projectRoot: tmp, actions: [] });
+    const content = readFileSync(join(tmp, '.codekeeper', 'suggestions.md'), 'utf-8');
+    expect(content).toContain('# 归档建议');
+    expect(content).toContain('当前没有待处理的归档建议。');
   });
 });

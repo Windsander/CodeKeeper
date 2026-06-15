@@ -23,7 +23,16 @@ describe('generateContext', () => {
     generateContext({ projectRoot: tmp, projectName: '测试项目', entries });
     const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');
     expect(content).toContain('# 测试项目 知识上下文');
+    expect(content).toContain('## memory');
+    expect(content).toContain('  - 标签：a');
     expect(content).toContain('A 设计');
     expect(content).toContain('B 周报');
+  });
+
+  it('entries 为空时应显示提示', () => {
+    generateContext({ projectRoot: tmp, projectName: '测试项目', entries: [] });
+    const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');
+    expect(content).toContain('# 测试项目 知识上下文');
+    expect(content).toContain('当前暂无已归档知识条目。');
   });
 });
