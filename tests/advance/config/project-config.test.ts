@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync, mkdirSync, rmdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, afterEach } from 'vitest';
@@ -10,7 +10,7 @@ describe('loadProjectConfig', () => {
   afterEach(() => {
     for (const dir of tempDirs) {
       try {
-        rmdirSync(dir, { recursive: true });
+        rmSync(dir, { recursive: true, force: true });
       } catch {
         // 忽略清理失败
       }
