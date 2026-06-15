@@ -7,6 +7,8 @@ import { Daemon } from './daemon';
 import { LlmClient } from './llm/client';
 import { ArchivePipeline } from './pipeline/archive-pipeline';
 
+import { UndoExecutor } from './archive/undo-executor';
+
 const DATA_DIR = join(homedir(), '.codekeeper-advance');
 const DB_PATH = join(DATA_DIR, 'metadata.db');
 
@@ -140,7 +142,58 @@ export async function main(): Promise<void> {
     return;
   }
 
+  if (command === 'history') {
+    const rootPath = args[0];
+    if (!rootPath) {
+      console.error('请提供项目路径');
+      process.exit(1);
+    }
+    const { store, registry } = getDeps();
+    try {
+      const projectId = makeProjectId(resolve(rootPath));
+      const project = registry.get(projectId);
+      if (!project) {
+        console.error('项目未注册');
+        process.exit(1);
+      }
+      const history = store.listActionHistory(project.id);
+      console.log(`动作历史（${history.length} 条）`);
+      for (const h of history) {
+        const status = h.status === 'undone' ? '已撤销' : '已应用';
+        console.log(`  ${h.id} [${h.type}] ${h.sourcePath} -> ${h.targetPath ?? '-'} (${status})`);
+      }
+    } finally {
+      store.close();
+    }
+    return;
+  }
+
+  if (command === 'undo') {
+    const actionId = args[0];
+    const rootPath = args[1];
+    if (!actionId || !rootPath) {
+      console.error('用法: codekeeper-advance undo <action-id> <project-path>');
+      process.exit(1);
+    }
+    const { store, registry } = getDeps();
+    try {
+      const projectId = makeProjectId(resolve(rootPath));
+      const project = registry.get(projectId);
+      if (!project) {
+        console.error('项目未注册');
+        process.exit(1);
+      }
+      const executor = new UndoExecutor({ store, projectRoot: project.rootPath });
+      const result = await executor.undo(actionId);
+      console.log(result.message);
+      if (!result.success) process.exit(1);
+    } finally {
+      store.close();
+    }
+    return;
+  }
+
   console.log(`未知命令: ${command}`);
-  console.log('用法: codekeeper-advance [register|unregister|list|start|process|status]');
+  console.log('用法: codekeeper-advance [register|unregister|list|start|process|status|history|undo]');
   process.exit(1);
 }

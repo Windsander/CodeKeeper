@@ -88,6 +88,7 @@ export class ArchivePipeline {
         const result = await executor.execute(action);
         if (result.success && result.finalPath) {
           executedIds.push(action.id);
+          this.options.store.insertActionHistory({ ...action, projectId: project.id });
           this.options.store.upsertEntry({
             id: makeEntryId(project.id, result.finalPath),
             projectId: project.id,

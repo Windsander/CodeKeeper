@@ -36,6 +36,7 @@ export class MetadataStore {
     this.db.prepare('DELETE FROM knowledge_entries WHERE project_id = ?').run(projectId);
     this.db.prepare('DELETE FROM categories WHERE project_id = ?').run(projectId);
     this.db.prepare('DELETE FROM archive_actions WHERE project_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM action_history WHERE project_id = ?').run(projectId);
   }
 
   listProjects(): Project[] {
@@ -218,6 +219,88 @@ export class MetadataStore {
     const placeholders = actionIds.map(() => '?').join(',');
     const now = Date.now();
     this.db.prepare(`UPDATE archive_actions SET executed = 1, executed_at = ? WHERE id IN (${placeholders})`).run(now, ...actionIds);
+  }
+
+  // ---------- 动作历史（支持撤销） ----------
+
+  insertActionHistory(action: ArchiveAction & { projectId: string }): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO action_history (action_id, project_id, type, source_path, target_path, status, applied_at)
+       VALUES (?, ?, ?, ?, ?, 'applied', ?)`
+    );
+    stmt.run(
+      action.id,
+      action.projectId,
+      action.type,
+      action.sourcePath,
+      action.targetPath ?? null,
+      action.createdAt
+    );
+  }
+
+  getActionHistory(actionId: string): (ArchiveAction & { projectId: string; historyId: number; status: 'applied' | 'undone' }) | null {
+    const r = this.db
+      .prepare('SELECT * FROM action_history WHERE action_id = ? ORDER BY id DESC LIMIT 1')
+      .get(actionId) as
+      | {
+          id: number;
+          action_id: string;
+          project_id: string;
+          type: string;
+          source_path: string;
+          target_path: string | null;
+          status: string;
+          applied_at: number;
+        }
+      | undefined;
+    if (!r) return null;
+    return {
+      historyId: r.id,
+      id: r.action_id,
+      projectId: r.project_id,
+      sourcePath: r.source_path,
+      type: r.type as ArchiveAction['type'],
+      targetPath: r.target_path ?? undefined,
+      risk: 'low',
+      reason: '',
+      confidence: 0,
+      createdAt: r.applied_at,
+      status: r.status as 'applied' | 'undone',
+    };
+  }
+
+  listActionHistory(projectId: string): Array<ArchiveAction & { projectId: string; historyId: number; status: 'applied' | 'undone' }> {
+    const rows = this.db
+      .prepare('SELECT * FROM action_history WHERE project_id = ? ORDER BY applied_at DESC')
+      .all(projectId) as Array<{
+        id: number;
+        action_id: string;
+        project_id: string;
+        type: string;
+        source_path: string;
+        target_path: string | null;
+        status: string;
+        applied_at: number;
+      }>;
+    return rows.map((r) => ({
+      historyId: r.id,
+      id: r.action_id,
+      projectId: r.project_id,
+      sourcePath: r.source_path,
+      type: r.type as ArchiveAction['type'],
+      targetPath: r.target_path ?? undefined,
+      risk: 'low',
+      reason: '',
+      confidence: 0,
+      createdAt: r.applied_at,
+      status: r.status as 'applied' | 'applied',
+    }));
+  }
+
+  markHistoryUndone(historyId: number): void {
+    this.db
+      .prepare('UPDATE action_history SET status = ?, undone_at = ? WHERE id = ?')
+      .run('undone', Date.now(), historyId);
   }
 
   // ---------- 项目统计 ----------

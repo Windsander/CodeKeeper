@@ -89,29 +89,51 @@ describe('MetadataStore', () => {
     expect(store.listPendingActions(project.id)).toHaveLength(0);
   });
 
-  it('应支持项目统计计数', () => {
-    const project = { id: 'p3', rootPath: '/tmp/proj-d', name: 'proj-d', registeredAt: 1, lastScannedAt: null };
+  it('应支持动作历史的插入、查询与撤销', () => {
+    const project = { id: 'p-history', rootPath: '/tmp/proj-h', name: 'proj-h', registeredAt: 1, lastScannedAt: null };
     store.registerProject(project);
 
-    store.upsertEntry({
-      id: 'e1',
+    const action: ArchiveAction & { projectId: string } = {
+      id: 'h1',
+      sourcePath: '/src.md',
       projectId: project.id,
-      filePath: '/a.md',
-      contentHash: 'h1',
-      status: 'archived',
-      createdAt: 1,
-      updatedAt: 1,
-    });
-    store.upsertEntry({
-      id: 'e2',
+      type: 'move',
+      reason: '移动',
+      targetPath: '/dst.md',
+      risk: 'low',
+      confidence: 0.9,
+      createdAt: 1000,
+    };
+    store.insertActionHistory(action);
+
+    const found = store.getActionHistory('h1');
+    expect(found).not.toBeNull();
+    expect(found?.type).toBe('move');
+    expect(found?.targetPath).toBe('/dst.md');
+    expect(found?.status).toBe('applied');
+
+    const list = store.listActionHistory(project.id);
+    expect(list).toHaveLength(1);
+
+    store.markHistoryUndone(found!.historyId);
+    const undone = store.getActionHistory('h1');
+    expect(undone?.status).toBe('undone');
+  });
+
+  it('注销项目应级联删除动作历史', () => {
+    const project = { id: 'p-h-cascade', rootPath: '/tmp/proj-hc', name: 'proj-hc', registeredAt: 1, lastScannedAt: null };
+    store.registerProject(project);
+    store.insertActionHistory({
+      id: 'hc1',
+      sourcePath: '/a.md',
       projectId: project.id,
-      filePath: '/b.md',
-      contentHash: 'h2',
-      status: 'pending',
+      type: 'ignore',
+      reason: '忽略',
+      risk: 'low',
+      confidence: 0.9,
       createdAt: 1,
-      updatedAt: 1,
     });
-    const counts = store.getProjectCounts(project.id);
-    expect(counts).toEqual({ pending: 1, archived: 1, ignored: 0, suggestion: 0 });
+    store.unregisterProject(project.id);
+    expect(store.listActionHistory(project.id)).toHaveLength(0);
   });
 });

@@ -60,3 +60,20 @@ CREATE TABLE IF NOT EXISTS archive_actions (
 
 CREATE INDEX IF NOT EXISTS idx_actions_project ON archive_actions(project_id);
 CREATE INDEX IF NOT EXISTS idx_actions_executed ON archive_actions(executed);
+
+-- 归档动作执行历史，支持撤销
+CREATE TABLE IF NOT EXISTS action_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action_id TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  type TEXT NOT NULL CHECK(type IN ('move', 'merge', 'create', 'ignore', 'flag')),
+  source_path TEXT NOT NULL,
+  target_path TEXT,
+  status TEXT NOT NULL DEFAULT 'applied' CHECK(status IN ('applied', 'undone')),
+  applied_at INTEGER NOT NULL,
+  undone_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_history_project ON action_history(project_id);
+CREATE INDEX IF NOT EXISTS idx_history_action ON action_history(action_id);
+CREATE INDEX IF NOT EXISTS idx_history_status ON action_history(status);
