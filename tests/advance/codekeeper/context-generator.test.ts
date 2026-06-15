@@ -54,6 +54,27 @@ describe('generateContext', () => {
     expect(content).toContain('- [zeta](#zeta)');
   });
 
+  it('应展示分节摘要', () => {
+    const entries = [
+      {
+        filePath: join(tmp, 'docs', 'x.md'),
+        category: 'memory',
+        docType: 'spec',
+        summary: 'X',
+        tags: [],
+        sections: [
+          { heading: '背景', summary: '项目背景说明', confidence: 0.9 },
+          { heading: '方案', summary: '采用新架构', confidence: 0.85 },
+        ],
+      },
+    ];
+    generateContext({ projectRoot: tmp, projectName: '分节测试', entries });
+    const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');
+    expect(content).toContain('- 要点：');
+    expect(content).toContain('**背景**：项目背景说明');
+    expect(content).toContain('**方案**：采用新架构');
+  });
+
   it('应使用相对路径的 Markdown 链接并标注状态', () => {
     const entries = [
       {

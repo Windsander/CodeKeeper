@@ -57,6 +57,18 @@ export interface KnowledgeEntry {
 }
 
 /**
+ * 文档分节摘要
+ */
+export interface DocumentSection {
+  /** 节标题或关键句 */
+  heading: string;
+  /** 该节摘要 */
+  summary: string;
+  /** 置信度 0-1 */
+  confidence: number;
+}
+
+/**
  * 文档分类结果
  */
 export interface ClassificationResult {
@@ -68,6 +80,8 @@ export interface ClassificationResult {
   tags: string[];
   /** 一句话摘要 */
   summary: string;
+  /** 分节摘要；短文档可能为空 */
+  sections: DocumentSection[];
   /** 置信度 0-1 */
   confidence: number;
 }

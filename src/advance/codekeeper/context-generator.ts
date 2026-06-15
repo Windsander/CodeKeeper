@@ -7,6 +7,8 @@ export interface ContextEntry {
   docType: string;
   summary: string;
   tags: string[];
+  /** 分节摘要 */
+  sections?: Array<{ heading: string; summary: string; confidence: number }>;
   /** 条目状态 */
   status?: 'pending' | 'archived' | 'ignored';
   /** 更新时间戳 */
@@ -66,6 +68,12 @@ export function generateContext(options: ContextGeneratorOptions): void {
         lines.push(`- **${item.docType}** [${relPath}](${encodePath(relPath)})${statusBadge} — ${item.summary}`);
         if (item.tags.length > 0) {
           lines.push(`  - 标签：${item.tags.join(', ')}`);
+        }
+        if (item.sections && item.sections.length > 0) {
+          lines.push('  - 要点：');
+          for (const section of item.sections) {
+            lines.push(`    - **${section.heading}**：${section.summary}`);
+          }
         }
         if (item.updatedAt) {
           lines.push(`  - 更新：${new Date(item.updatedAt).toISOString()}`);

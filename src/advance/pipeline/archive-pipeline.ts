@@ -63,6 +63,7 @@ export class ArchivePipeline {
       docType: string;
       summary: string;
       tags: string[];
+      sections: Array<{ heading: string; summary: string; confidence: number }>;
       status: 'pending' | 'archived' | 'ignored';
       updatedAt: number;
     }> = [];
@@ -104,6 +105,7 @@ export class ArchivePipeline {
             docType: classification.docType,
             summary: classification.summary,
             tags: classification.tags,
+            sections: classification.sections,
             status: action.type === 'ignore' ? 'ignored' : 'archived',
             updatedAt: now,
           });

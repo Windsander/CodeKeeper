@@ -30,7 +30,14 @@ export class DocumentClassifier {
       const acceptedDocTypes = docTypes.length > 0 ? docTypes : DEFAULT_DOC_TYPES;
       const normalizedCategory = acceptedCategories.includes(parsed.category) ? parsed.category : 'other';
       const normalizedDocType = acceptedDocTypes.includes(parsed.docType) ? parsed.docType : 'other';
-      return { ...parsed, category: normalizedCategory, docType: normalizedDocType };
+      return {
+        category: normalizedCategory,
+        docType: normalizedDocType,
+        tags: parsed.tags,
+        summary: parsed.summary,
+        sections: parsed.sections,
+        confidence: parsed.confidence,
+      };
     }
 
     return {
@@ -38,6 +45,7 @@ export class DocumentClassifier {
       docType: 'other',
       tags: [],
       summary: '自动分类失败，等待人工 review',
+      sections: [],
       confidence: 0,
     };
   }

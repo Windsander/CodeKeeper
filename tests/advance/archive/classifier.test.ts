@@ -9,6 +9,7 @@ describe('DocumentClassifier', () => {
       docType: 'spec',
       tags: ['memory', 'sync', 'schema'],
       summary: '记忆模块 schema 设计',
+      sections: [],
       confidence: 0.92,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
@@ -17,6 +18,41 @@ describe('DocumentClassifier', () => {
     expect(result.category).toBe('memory');
     expect(result.docType).toBe('spec');
     expect(result.confidence).toBe(0.92);
+    expect(result.sections).toEqual([]);
+  });
+
+  it('应解析并保留分节摘要', async () => {
+    const response = JSON.stringify({
+      category: 'design',
+      docType: 'spec',
+      tags: ['auth'],
+      summary: '认证设计',
+      sections: [
+        { heading: '背景', summary: '需要统一认证', confidence: 0.9 },
+        { heading: '方案', summary: '使用 JWT', confidence: 1.2 },
+      ],
+      confidence: 0.88,
+    });
+    const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const classifier = new DocumentClassifier(client);
+    const result = await classifier.classify('/auth.md', '# 认证设计\n...');
+    expect(result.sections).toHaveLength(2);
+    expect(result.sections[0].heading).toBe('背景');
+    expect(result.sections[1].confidence).toBe(1);
+  });
+
+  it('LLM 未返回 sections 时应回退到空数组', async () => {
+    const response = JSON.stringify({
+      category: 'memory',
+      docType: 'note',
+      tags: ['a'],
+      summary: '摘要',
+      confidence: 0.8,
+    });
+    const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const classifier = new DocumentClassifier(client);
+    const result = await classifier.classify('/x.md', '内容');
+    expect(result.sections).toEqual([]);
   });
 
   it('LLM 返回无效 JSON 时应使用 fallback', async () => {
@@ -33,6 +69,7 @@ describe('DocumentClassifier', () => {
       docType: 'note',
       tags: ['a'],
       summary: '摘要',
+      sections: [],
       confidence: 0.8,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
@@ -47,6 +84,7 @@ describe('DocumentClassifier', () => {
       docType: 'illegal-type',
       tags: ['a'],
       summary: '摘要',
+      sections: [],
       confidence: 0.8,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
@@ -64,6 +102,7 @@ describe('DocumentClassifier', () => {
       docType: 'note',
       tags: ['a'],
       summary: '摘要',
+      sections: [],
       confidence: 1.5,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
@@ -78,6 +117,7 @@ describe('DocumentClassifier', () => {
       docType: 'note',
       tags: ['a'],
       summary: '摘要',
+      sections: [],
       confidence: 0.8,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
@@ -92,6 +132,7 @@ describe('DocumentClassifier', () => {
       docType: 'weekly',
       tags: ['a'],
       summary: '摘要',
+      sections: [],
       confidence: 0.8,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
