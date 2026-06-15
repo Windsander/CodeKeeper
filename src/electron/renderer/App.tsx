@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import { Dashboard } from './pages/Dashboard';
+import { ProjectDetail } from './pages/ProjectDetail';
 
 export function App() {
   return (
@@ -12,6 +13,7 @@ export function App() {
         <main style={{ flex: 1, padding: 16, overflow: 'auto' }}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/project/:id" element={<ProjectDetail />} />
           </Routes>
         </main>
       </div>
