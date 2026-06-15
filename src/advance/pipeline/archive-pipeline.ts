@@ -6,11 +6,12 @@ import { DedupDetector } from '../archive/dedup-detector';
 import { parseDocument } from '../archive/document-parser';
 import { SuggestionEngine } from '../archive/suggestion-engine';
 import { generateContext } from '../codekeeper/context-generator';
-import { updateStatus } from '../codekeeper/status-updater';
+import { updateStatus, buildProjectStatus } from '../codekeeper/status-updater';
 import { writeSuggestions } from '../codekeeper/suggestions-writer';
+import { writeReadme } from '../codekeeper/readme-writer';
 import type { LlmClient } from '../llm/client';
 import type { MetadataStore } from '../store/metadata-store';
-import type { Project, ProjectStatus, ArchiveAction } from '../types';
+import type { Project, ArchiveAction } from '../types';
 import { logger } from '../../core/logger';
 
 export interface ArchivePipelineOptions {
@@ -51,7 +52,15 @@ export class ArchivePipeline {
     const existing = this.options.store.listEntriesByProject(project.id);
     const processedEventIds: number[] = [];
     const executedIds: string[] = [];
-    const contextEntries: Array<{ filePath: string; category: string; docType: string; summary: string; tags: string[] }> = [];
+    const contextEntries: Array<{
+      filePath: string;
+      category: string;
+      docType: string;
+      summary: string;
+      tags: string[];
+      status: 'pending' | 'archived' | 'ignored';
+      updatedAt: number;
+    }> = [];
 
     for (const event of events) {
       try {
@@ -89,6 +98,8 @@ export class ArchivePipeline {
             docType: classification.docType,
             summary: classification.summary,
             tags: classification.tags,
+            status: action.type === 'ignore' ? 'ignored' : 'archived',
+            updatedAt: now,
           });
         } else {
           this.options.store.upsertEntry({
@@ -139,27 +150,30 @@ export class ArchivePipeline {
     writeSuggestions({ projectRoot: project.rootPath, actions: allPending });
 
     const counts = this.options.store.getProjectCounts(project.id);
-    const status: ProjectStatus = {
+    const hasFailure = processedEventIds.length < events.length;
+    const scanStatus: 'success' | 'partial' | 'failed' = hasFailure
+      ? processedEventIds.length === 0
+        ? 'failed'
+        : 'partial'
+      : 'success';
+    const status = buildProjectStatus({
       projectId: project.id,
       lastScannedAt: now,
+      scanStatus,
       pendingCount: counts.pending,
       archivedCount: counts.archived,
       ignoredCount: counts.ignored,
-      healthScore: computeHealthScore(counts),
       suggestionCount: allPending.length,
-    };
+    });
     updateStatus({ projectRoot: project.rootPath, status });
+
+    // 生成 README 说明
+    writeReadme({ projectRoot: project.rootPath });
   }
 }
 
 function makeEntryId(projectId: string, filePath: string): string {
   return createHash('sha256').update(`${projectId}:${filePath}`).digest('hex').slice(0, 16);
-}
-
-function computeHealthScore(counts: { pending: number; archived: number; ignored: number }): number {
-  const total = counts.pending + counts.archived + counts.ignored;
-  if (total === 0) return 1;
-  return Math.round(((counts.archived + counts.ignored) / total) * 100) / 100;
 }
 
 function readExistingContent(filePath: string): string {

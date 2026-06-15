@@ -105,10 +105,18 @@ export interface ArchiveAction {
  * 项目实时状态（写入 status.json）
  */
 export interface ProjectStatus {
+  /** schema 版本 */
+  schemaVersion: number;
   /** 项目 ID */
   projectId: string;
   /** 最后扫描时间戳 */
   lastScannedAt: number;
+  /** 最后扫描时间的 ISO 8601 表示 */
+  lastScannedAtIso: string;
+  /** 扫描结果状态：success / partial / failed */
+  scanStatus: 'success' | 'partial' | 'failed';
+  /** 总条目数 */
+  totalCount: number;
   /** 未归档/待处理数量 */
   pendingCount: number;
   /** 已归档数量 */
@@ -117,6 +125,8 @@ export interface ProjectStatus {
   ignoredCount: number;
   /** 健康度 0-1 */
   healthScore: number;
+  /** 健康度计算说明 */
+  healthScoreDefinition: string;
   /** 当前建议数量 */
   suggestionCount: number;
 }
