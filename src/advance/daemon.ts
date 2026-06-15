@@ -6,6 +6,8 @@ import type { Project, WatchedEvent } from './types';
 import { loadProjectConfig } from './config/project-config';
 import { ArchivePipeline } from './pipeline/archive-pipeline';
 import { LlmClient } from './llm/client';
+import { IpcServer } from './ipc/server';
+import { getIpcSocketPath } from './ipc/paths';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -22,10 +24,11 @@ export class Daemon {
   private watchers = new Map<string, FileWatcher>();
   private scanJob: ReturnType<typeof schedule> | null = null;
   private running = false;
+  private ipcServer: IpcServer | null = null;
 
   constructor(private options: DaemonOptions) {}
 
-  start(): void {
+  async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
 
@@ -33,6 +36,12 @@ export class Daemon {
     for (const project of projects) {
       this.watchProject(project);
     }
+
+    this.ipcServer = new IpcServer({
+      socketPath: getIpcSocketPath(),
+      handler: (method, params) => this.handleIpc(method, params),
+    });
+    await this.ipcServer.start();
 
     const cron = this.options.scanCron ?? '*/5 * * * *';
     this.scanJob = schedule(cron, () => this.scanAll());
@@ -47,10 +56,16 @@ export class Daemon {
       watcher.stop();
     }
     this.watchers.clear();
+    this.ipcServer?.stop();
   }
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  private async handleIpc(_method: string, _params: unknown): Promise<unknown> {
+    // 临时返回空，handlers 在 Task 3 实现
+    return {};
   }
 
   private watchProject(project: Project): void {
