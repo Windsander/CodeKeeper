@@ -43,8 +43,8 @@ export class IpcServer {
       this.server.listen(this.options.socketPath, () => {
         try {
           chmodSync(this.options.socketPath, 0o600);
-        } catch {
-          // Windows 不支持 chmod
+        } catch (err) {
+          logger.warn({ err, path: this.options.socketPath }, 'chmod 失败');
         }
         logger.info({ path: this.options.socketPath }, 'IPC server 已启动');
         resolve();
@@ -56,11 +56,15 @@ export class IpcServer {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
+      if (!this.server) {
+        resolve();
+        return;
+      }
       for (const socket of this.sockets) {
         socket.destroy();
       }
       this.sockets.clear();
-      this.server?.close(() => {
+      this.server.close(() => {
         try {
           if (existsSync(this.options.socketPath)) unlinkSync(this.options.socketPath);
         } catch {
@@ -75,7 +79,13 @@ export class IpcServer {
     const msg: IpcPushEvent = { type: 'push', event, payload };
     const line = JSON.stringify(msg) + '\n';
     for (const socket of this.sockets) {
-      socket.write(line);
+      if (socket.writable) {
+        socket.write(line, (err) => {
+          if (err) {
+            logger.warn({ err, event }, 'IPC broadcast 写入失败');
+          }
+        });
+      }
     }
   }
 
@@ -85,6 +95,11 @@ export class IpcServer {
       request = JSON.parse(line);
     } catch {
       this.send(socket, { id: 'unknown', error: { code: 'INVALID_JSON', message: '非法 JSON' } });
+      return;
+    }
+
+    if (typeof request.id !== 'string' || typeof request.method !== 'string') {
+      this.send(socket, { id: 'unknown', error: { code: 'INVALID_REQUEST', message: '请求缺少 id 或 method 字段' } });
       return;
     }
 
@@ -103,6 +118,14 @@ export class IpcServer {
   }
 
   private send(socket: Socket, response: IpcResponse): void {
-    socket.write(JSON.stringify(response) + '\n');
+    if (!socket.writable) {
+      logger.warn({ response }, 'IPC socket 不可写，跳过发送');
+      return;
+    }
+    socket.write(JSON.stringify(response) + '\n', (err) => {
+      if (err) {
+        logger.warn({ err, response }, 'IPC socket 写入失败');
+      }
+    });
   }
 }

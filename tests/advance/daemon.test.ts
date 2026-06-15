@@ -29,17 +29,17 @@ describe('Daemon', () => {
     daemon = new Daemon({ registry, store, apiKey: 'test' });
   });
 
-  afterEach(() => {
-    daemon.stop();
+  afterEach(async () => {
+    await daemon.stop();
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('启动和停止状态正确', () => {
+  it('启动和停止状态正确', async () => {
     expect(daemon.isRunning()).toBe(false);
     daemon.start();
     expect(daemon.isRunning()).toBe(true);
-    daemon.stop();
+    await daemon.stop();
     expect(daemon.isRunning()).toBe(false);
   });
 
@@ -58,7 +58,7 @@ describe('Daemon', () => {
       () => store.listPendingEvents().some((e) => e.filePath.endsWith('note.md')),
       3000,
     );
-    daemon.stop();
+    await daemon.stop();
 
     const events = store.listPendingEvents();
     expect(events.some((e) => e.filePath.endsWith('note.md'))).toBe(true);

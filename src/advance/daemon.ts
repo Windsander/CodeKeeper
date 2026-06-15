@@ -47,7 +47,7 @@ export class Daemon {
     this.scanJob = schedule(cron, () => this.scanAll());
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
     this.scanJob?.stop();
@@ -56,7 +56,8 @@ export class Daemon {
       watcher.stop();
     }
     this.watchers.clear();
-    this.ipcServer?.stop();
+    await this.ipcServer?.stop();
+    this.ipcServer = null;
   }
 
   isRunning(): boolean {

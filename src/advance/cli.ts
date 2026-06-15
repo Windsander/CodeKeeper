@@ -90,8 +90,8 @@ export async function main(): Promise<void> {
     const daemon = new Daemon({ registry, store, apiKey });
     daemon.start();
     console.log('守护进程已启动');
-    process.on('SIGINT', () => {
-      daemon.stop();
+    process.on('SIGINT', async () => {
+      await daemon.stop();
       store.close();
       process.exit(0);
     });
