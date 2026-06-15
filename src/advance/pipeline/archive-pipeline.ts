@@ -1,0 +1,149 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { ArchiveExecutor } from '../archive/archive-executor';
+import { DocumentClassifier } from '../archive/classifier';
+import { DedupDetector } from '../archive/dedup-detector';
+import { parseDocument } from '../archive/document-parser';
+import { SuggestionEngine } from '../archive/suggestion-engine';
+import { generateContext } from '../codekeeper/context-generator';
+import { updateStatus } from '../codekeeper/status-updater';
+import { writeSuggestions } from '../codekeeper/suggestions-writer';
+import type { LlmClient } from '../llm/client';
+import type { MetadataStore } from '../store/metadata-store';
+import type { Project, ProjectStatus, ArchiveAction } from '../types';
+
+export interface ArchivePipelineOptions {
+  store: MetadataStore;
+  client: LlmClient;
+  /** 最大处理事件数，默认 50 */
+  maxEvents?: number;
+  /** 自动执行的风险等级 */
+  autoRiskLevels?: ArchiveAction['risk'][];
+}
+
+/**
+ * 归档管道：编排分类、去重、建议、执行与文件生成
+ */
+export class ArchivePipeline {
+  private options: Required<Pick<ArchivePipelineOptions, 'maxEvents' | 'autoRiskLevels'>> &
+    Omit<ArchivePipelineOptions, 'maxEvents' | 'autoRiskLevels'>;
+
+  constructor(options: ArchivePipelineOptions) {
+    this.options = {
+      ...options,
+      maxEvents: options.maxEvents ?? 50,
+      autoRiskLevels: options.autoRiskLevels ?? ['low'],
+    };
+  }
+
+  async run(project: Project): Promise<void> {
+    const events = this.options.store.listPendingEvents(this.options.maxEvents);
+    if (events.length === 0) return;
+
+    const classifier = new DocumentClassifier(this.options.client);
+    const dedup = new DedupDetector(this.options.client);
+    const suggest = new SuggestionEngine(this.options.client);
+    const executor = new ArchiveExecutor({ projectRoot: project.rootPath, autoRiskLevels: this.options.autoRiskLevels });
+
+    const existing = this.options.store.listEntriesByProject(project.id);
+    const executedIds: string[] = [];
+    const contextEntries: Array<{ filePath: string; category: string; docType: string; summary: string; tags: string[] }> = [];
+
+    for (const event of events) {
+      try {
+        const doc = parseDocument(event.filePath);
+        const entryId = makeEntryId(project.id, event.filePath);
+        const classification = await classifier.classify(event.filePath, doc.content);
+
+        const dedupResult = await dedup.detect(
+          { filePath: event.filePath, contentHash: doc.contentHash, content: doc.content },
+          existing.map((e) => ({ filePath: e.filePath, contentHash: e.contentHash, content: readExistingContent(e.filePath) }))
+        );
+
+        const action = await suggest.suggest(event.filePath, doc.content, classification, {
+          dedupRelation: dedupResult.relation,
+          relatedPath: dedupResult.relatedPath,
+        });
+
+        this.options.store.insertAction({ ...action, projectId: project.id });
+
+        const result = await executor.execute(action);
+        if (result.success && result.finalPath) {
+          executedIds.push(action.id);
+          this.options.store.upsertEntry({
+            id: makeEntryId(project.id, result.finalPath),
+            projectId: project.id,
+            filePath: result.finalPath,
+            contentHash: doc.contentHash,
+            status: action.type === 'ignore' ? 'ignored' : 'archived',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+          contextEntries.push({
+            filePath: result.finalPath,
+            category: classification.category,
+            docType: classification.docType,
+            summary: classification.summary,
+            tags: classification.tags,
+          });
+        } else {
+          this.options.store.upsertEntry({
+            id: entryId,
+            projectId: project.id,
+            filePath: event.filePath,
+            contentHash: doc.contentHash,
+            status: 'pending',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+        }
+      } catch (err) {
+        // 单条事件失败不应阻塞后续事件
+        console.warn(`[ArchivePipeline] 处理事件失败: ${event.filePath}`, err);
+      }
+    }
+
+    this.options.store.markEventsProcessed(events.map((e) => e.eventId));
+    this.options.store.markActionsProcessed(executedIds);
+
+    // 生成 .codekeeper/ 文件
+    generateContext({
+      projectRoot: project.rootPath,
+      projectName: project.name,
+      entries: contextEntries,
+    });
+
+    const allPending = this.options.store.listPendingActions(project.id);
+    writeSuggestions({ projectRoot: project.rootPath, actions: allPending });
+
+    const counts = this.options.store.getProjectCounts(project.id);
+    const status: ProjectStatus = {
+      projectId: project.id,
+      lastScannedAt: Date.now(),
+      pendingCount: counts.pending,
+      archivedCount: counts.archived,
+      ignoredCount: counts.ignored,
+      healthScore: computeHealthScore(counts),
+      suggestionCount: allPending.length,
+    };
+    updateStatus({ projectRoot: project.rootPath, status });
+  }
+}
+
+function makeEntryId(projectId: string, filePath: string): string {
+  return createHash('sha256').update(`${projectId}:${filePath}`).digest('hex').slice(0, 16);
+}
+
+function computeHealthScore(counts: { pending: number; archived: number; ignored: number }): number {
+  const total = counts.pending + counts.archived + counts.ignored;
+  if (total === 0) return 1;
+  return Math.round(((counts.archived + counts.ignored) / total) * 100) / 100;
+}
+
+function readExistingContent(filePath: string): string {
+  try {
+    return readFileSync(filePath, 'utf-8');
+  } catch {
+    return '';
+  }
+}
