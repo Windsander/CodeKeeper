@@ -1,16 +1,24 @@
-import { app, ipcMain, shell } from 'electron';
+import { app, ipcMain, shell, BrowserWindow } from 'electron';
 import { createMainWindow } from './window-manager';
 import { ElectronIpcClient } from './ipc-client';
 import type { IpcPushEvent } from '../../advance/ipc/types';
 
 const client = new ElectronIpcClient();
+let mainWindow: BrowserWindow | null = null;
 
 app.whenReady().then(async () => {
   await client.connect().catch(() => {
     console.warn('未能连接到守护进程，部分功能不可用');
   });
 
-  createMainWindow();
+  mainWindow = createMainWindow();
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+  });
+
+  client.onPush((event: IpcPushEvent) => {
+    mainWindow?.webContents.send('ipc-push', event);
+  });
 
   ipcMain.handle('ipc-invoke', async (_event, method: string, params?: unknown) => {
     return client.invoke(method, params);
