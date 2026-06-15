@@ -22,5 +22,8 @@ logs/
 # Local private rules
 .claude/RULES.md
 
+# Session context resume (local only)
+CONTEXT_RESUME.md
+
 # Design docs and local specifications (not committed)
 docs/
