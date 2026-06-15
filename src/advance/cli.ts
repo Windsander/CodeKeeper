@@ -2,8 +2,10 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { MetadataStore } from './store/metadata-store';
-import { ProjectRegistry } from './project-registry';
+import { ProjectRegistry, makeProjectId } from './project-registry';
 import { Daemon } from './daemon';
+import { LlmClient } from './llm/client';
+import { ArchivePipeline } from './pipeline/archive-pipeline';
 
 const DATA_DIR = join(homedir(), '.codekeeper-advance');
 const DB_PATH = join(DATA_DIR, 'metadata.db');
@@ -13,6 +15,12 @@ function getDeps() {
   const store = new MetadataStore(DB_PATH);
   const registry = new ProjectRegistry({ store });
   return { store, registry };
+}
+
+function parseFlag(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  if (idx === -1 || idx === args.length - 1) return undefined;
+  return args[idx + 1];
 }
 
 async function main(): Promise<void> {
@@ -61,7 +69,8 @@ async function main(): Promise<void> {
 
   if (command === 'start') {
     const { store, registry } = getDeps();
-    const daemon = new Daemon({ registry, store });
+    const apiKey = parseFlag(args, '--api-key');
+    const daemon = new Daemon({ registry, store, apiKey });
     daemon.start();
     console.log('守护进程已启动');
     process.on('SIGINT', () => {
@@ -69,6 +78,35 @@ async function main(): Promise<void> {
       store.close();
       process.exit(0);
     });
+    return;
+  }
+
+  if (command === 'process') {
+    const apiKey = parseFlag(args, '--api-key');
+    if (!apiKey) {
+      console.error('缺少 --api-key');
+      process.exit(1);
+    }
+    const rootPath = args[0];
+    if (!rootPath) {
+      console.error('请提供项目路径');
+      process.exit(1);
+    }
+    const { store, registry } = getDeps();
+    try {
+      const projectId = makeProjectId(resolve(rootPath));
+      const project = registry.get(projectId);
+      if (!project) {
+        console.error('项目未注册');
+        process.exit(1);
+      }
+      const client = new LlmClient({ apiKey });
+      const pipeline = new ArchivePipeline({ store, client });
+      await pipeline.run(project);
+      console.log('归档流程执行完成');
+    } finally {
+      store.close();
+    }
     return;
   }
 
@@ -88,7 +126,7 @@ async function main(): Promise<void> {
   }
 
   console.log(`未知命令: ${command}`);
-  console.log('用法: codekeeper-advance [register|unregister|list|start|status]');
+  console.log('用法: codekeeper-advance [register|unregister|list|start|process|status]');
   process.exit(1);
 }
 

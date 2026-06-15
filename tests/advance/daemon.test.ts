@@ -26,7 +26,7 @@ describe('Daemon', () => {
     dir = mkdtempSync(join(tmpdir(), 'ck-daemon-'));
     store = new MetadataStore(join(dir, 'test.db'));
     registry = new ProjectRegistry({ store });
-    daemon = new Daemon({ registry, store });
+    daemon = new Daemon({ registry, store, apiKey: 'test' });
   });
 
   afterEach(() => {
