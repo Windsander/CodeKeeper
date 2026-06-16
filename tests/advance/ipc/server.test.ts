@@ -5,6 +5,13 @@ import { join } from 'node:path';
 import { createConnection } from 'node:net';
 import { IpcServer } from '../../../src/advance/ipc/server';
 
+function getTestSocketPath(tmp: string): string {
+  if (process.platform === 'win32') {
+    return `\\\\?\\pipe\\cka-ipc-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+  return join(tmp, 'test.sock');
+}
+
 function sendAndReceive(socketPath: string, msg: object | string, timeoutMs = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
     const client = createConnection(socketPath, () => {
@@ -60,7 +67,7 @@ describe('IpcServer', () => {
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'cka-ipc-'));
-    socketPath = join(tmp, 'test.sock');
+    socketPath = getTestSocketPath(tmp);
     server = new IpcServer({
       socketPath,
       handler: async (method, params) => {
