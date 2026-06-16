@@ -9,6 +9,8 @@ export interface DaemonPersistedConfig {
   model?: string;
   headers?: Record<string, string>;
   scanCron?: string;
+  /** 每分钟 LLM 请求数限制，默认 10 */
+  llmRequestsPerMinute?: number;
 }
 
 const CONFIG_DIR = join(homedir(), '.codekeeper-advance');

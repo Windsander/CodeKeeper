@@ -101,6 +101,7 @@ export async function main(): Promise<void> {
       model: persisted.model,
       headers: persisted.headers,
       scanCron: persisted.scanCron,
+      llmRequestsPerMinute: persisted.llmRequestsPerMinute,
     });
     daemon.start();
     console.log('守护进程已启动');

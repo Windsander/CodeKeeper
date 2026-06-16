@@ -30,6 +30,8 @@ export interface DaemonOptions {
   scanCron?: string;
   /** 每次扫描最多处理事件数 */
   maxEventsPerScan?: number;
+  /** 每分钟 LLM 请求数限制，默认 10 */
+  llmRequestsPerMinute?: number;
 }
 
 export class Daemon {
@@ -51,6 +53,7 @@ export class Daemon {
               provider: this.options.provider,
               model: this.options.model,
               headers: this.options.headers,
+              minRequestInterval: this.llmRequestInterval(),
             })
           : null,
       getPipeline: () =>
@@ -62,6 +65,7 @@ export class Daemon {
             provider: this.options.provider,
             model: this.options.model,
             headers: this.options.headers,
+            minRequestInterval: this.llmRequestInterval(),
           }),
           maxEvents: this.options.maxEventsPerScan ?? 10,
         }),
@@ -73,6 +77,7 @@ export class Daemon {
         model: this.options.model ?? '',
         headers: this.options.headers ? JSON.stringify(this.options.headers) : '',
         scanCron: this.options.scanCron ?? '*/5 * * * *',
+        llmRequestsPerMinute: this.options.llmRequestsPerMinute ?? 10,
       }),
       watchProject: (project) => this.watchProject(project),
       unwatchProject: (projectId) => this.unwatchProject(projectId),
@@ -115,8 +120,8 @@ export class Daemon {
     return this.running;
   }
 
-  updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string }): void {
-    const persisted: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string } = {};
+  updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string; llmRequestsPerMinute?: number }): void {
+    const persisted: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string; llmRequestsPerMinute?: number } = {};
 
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
@@ -144,10 +149,20 @@ export class Daemon {
       this.scanJob = schedule(config.scanCron, () => this.scanAll());
       persisted.scanCron = config.scanCron;
     }
+    if (config.llmRequestsPerMinute !== undefined) {
+      this.options.llmRequestsPerMinute = config.llmRequestsPerMinute;
+      persisted.llmRequestsPerMinute = config.llmRequestsPerMinute;
+    }
 
     if (Object.keys(persisted).length > 0) {
       saveDaemonConfig(persisted);
     }
+  }
+
+  private llmRequestInterval(): number {
+    const rpm = this.options.llmRequestsPerMinute ?? 10;
+    if (rpm <= 0) return 6000;
+    return Math.ceil(60000 / rpm);
   }
 
   private async handleIpc(method: string, params: unknown): Promise<unknown> {
@@ -206,6 +221,7 @@ export class Daemon {
       provider: this.options.provider,
       model: this.options.model,
       headers: this.options.headers,
+      minRequestInterval: this.llmRequestInterval(),
     });
     const pipeline = new ArchivePipeline({
       store: this.options.store,

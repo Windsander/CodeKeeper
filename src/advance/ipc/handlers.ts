@@ -24,6 +24,7 @@ export interface HandlerContext {
     model?: string;
     headers?: Record<string, string>;
     scanCron?: string;
+    llmRequestsPerMinute?: number;
   }) => void;
   getDaemonConfig?: () => {
     apiKey: string;
@@ -32,6 +33,7 @@ export interface HandlerContext {
     model: string;
     headers: string;
     scanCron: string;
+    llmRequestsPerMinute: number;
   };
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
@@ -160,6 +162,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       model: '',
       headers: '',
       scanCron: '*/5 * * * *',
+      llmRequestsPerMinute: 10,
     };
   },
 
@@ -181,12 +184,19 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       model?: string;
       headers?: Record<string, string>;
       scanCron?: string;
+      llmRequestsPerMinute?: number;
     } = {};
 
     if (params.apiKey !== undefined) config.apiKey = params.apiKey;
     if (params.apiUrl !== undefined) config.apiUrl = params.apiUrl || undefined;
     if (params.scanCron !== undefined) config.scanCron = params.scanCron;
     if (params.model !== undefined) config.model = params.model || undefined;
+    if (params.llmRequestsPerMinute !== undefined) {
+      const rpm = Number(params.llmRequestsPerMinute);
+      if (!Number.isNaN(rpm) && rpm > 0) {
+        config.llmRequestsPerMinute = rpm;
+      }
+    }
 
     if (params.provider === 'anthropic' || params.provider === 'openai') {
       config.provider = params.provider;

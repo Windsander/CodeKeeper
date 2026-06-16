@@ -8,6 +8,7 @@ interface DaemonConfig {
   model: string;
   headers: string;
   scanCron: string;
+  llmRequestsPerMinute: number;
 }
 
 interface HeaderEntry {
@@ -54,6 +55,7 @@ export function Settings() {
   const [headerEntries, setHeaderEntries] = useState<HeaderEntry[]>([{ key: '', value: '' }]);
   const [scanCron, setScanCron] = useState('*/5 * * * *');
   const [customCron, setCustomCron] = useState('*/5 * * * *');
+  const [llmRequestsPerMinute, setLlmRequestsPerMinute] = useState(10);
   const [saved, setSaved] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
 
@@ -65,6 +67,7 @@ export function Settings() {
       setApiUrl(data.apiUrl ?? '');
       setProvider(data.provider ?? 'anthropic');
       setModel(data.model ?? '');
+      setLlmRequestsPerMinute(data.llmRequestsPerMinute ?? 10);
       const entries = parseHeaders(data.headers ?? '');
       setHeaderEntries(entries.length > 0 ? entries : [{ key: '', value: '' }]);
     }
@@ -114,7 +117,8 @@ export function Settings() {
       model?: string;
       headers?: string;
       scanCron: string;
-    } = { apiKey: apiKey.trim(), scanCron };
+      llmRequestsPerMinute: number;
+    } = { apiKey: apiKey.trim(), scanCron, llmRequestsPerMinute };
 
     if (apiUrl.trim()) payload.apiUrl = apiUrl.trim();
     if (provider.trim()) payload.provider = provider.trim();
@@ -250,6 +254,21 @@ export function Settings() {
           )}
           <div className="project-meta" style={{ marginTop: 6 }}>
             当前 cron: {scanCron}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label>LLM 每分钟请求数限制</label>
+          <input
+            type="number"
+            className="input"
+            min={1}
+            max={600}
+            value={llmRequestsPerMinute}
+            onChange={(e) => setLlmRequestsPerMinute(Math.max(1, Number(e.target.value) || 10))}
+          />
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            请求间隔约 {Math.ceil(60000 / llmRequestsPerMinute)}ms；当前服务商限制是 10 次/分钟
           </div>
         </div>
 
