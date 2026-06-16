@@ -44,7 +44,11 @@ export class ArchivePipeline {
 
   async run(project: Project): Promise<void> {
     const events = this.options.store.listPendingEvents(this.options.maxEvents);
-    if (events.length === 0) return;
+    logger.info({ projectId: project.id, projectRoot: project.rootPath, eventCount: events.length }, '开始归档扫描');
+    if (events.length === 0) {
+      logger.info('没有待处理的文件事件，跳过本次扫描');
+      return;
+    }
 
     const now = Date.now();
     const archiveRoot = getArchiveRoot(project);
@@ -188,6 +192,11 @@ export class ArchivePipeline {
 
     // 生成 README 说明
     writeReadme({ archiveRoot });
+
+    logger.info(
+      { projectId: project.id, scanStatus: status.scanStatus, processed: processedEventIds.length, total: events.length },
+      '归档扫描完成'
+    );
   }
 }
 

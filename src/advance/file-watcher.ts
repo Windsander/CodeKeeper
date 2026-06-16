@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import type { ProjectConfig } from './config/project-config';
 import type { WatchedEvent, WatchEventType } from './types';
+import { logger } from '../core/logger';
 
 export interface FileWatcherOptions {
   projectRoot: string;
@@ -45,9 +46,15 @@ export class FileWatcher {
       interval: isWsl() ? 100 : undefined,
     });
 
+    logger.info({ projectRoot }, '文件监控已启动');
+
     const emit = (type: WatchEventType, filePath: string) => {
       const absolutePath = join(projectRoot, filePath).replace(/\\/g, '/');
-      if (isExcluded(absolutePath)) return;
+      if (isExcluded(absolutePath)) {
+        logger.debug({ filePath: absolutePath }, '忽略被排除的文件事件');
+        return;
+      }
+      logger.info({ type, filePath: absolutePath }, '收到文件变更事件');
       onEvent({
         type,
         filePath: absolutePath,

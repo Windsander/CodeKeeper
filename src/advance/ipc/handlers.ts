@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getLogDir } from '../../core/platform';
+import { logger } from '../../core/logger';
 import type { MetadataStore } from '../store/metadata-store';
 import type { ProjectRegistry } from '../project-registry';
 import type { ArchivePipeline } from '../pipeline/archive-pipeline';
@@ -86,9 +87,11 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!project) throw new Error('项目未注册');
     const client = ctx.getClient();
     if (!client) throw new Error('未配置 API Key');
+    logger.info({ projectId: project.id, projectRoot: project.rootPath }, '收到手动扫描请求');
     const pipeline = ctx.getPipeline();
     ctx.store.updateLastScannedAt(project.id, Date.now());
     await pipeline.run(project);
+    logger.info({ projectId: project.id }, '手动扫描完成');
     return { scannedAt: Date.now() };
   },
 
