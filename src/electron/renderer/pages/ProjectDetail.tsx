@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useIpc } from '../hooks/useIpc';
 import { ContextView } from '../components/ContextView';
 import { SuggestionList } from '../components/SuggestionList';
+import { invoke } from '../api/electron-api';
 import type { ProjectStatus } from '../../shared/types';
 
 type Tab = 'context' | 'suggestions' | 'status';
@@ -10,9 +11,25 @@ type Tab = 'context' | 'suggestions' | 'status';
 export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const [tab, setTab] = useState<Tab>('context');
-  const { data: context } = useIpc<{ content: string }>('project.context', { projectId: id });
-  const { data: suggestions } = useIpc<{ content: string }>('project.suggestions', { projectId: id });
-  const { data: status } = useIpc<ProjectStatus>('project.status', { projectId: id });
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const { data: project } = useIpc<{ name: string; rootPath: string; archiveRoot?: string }>('project.get', { projectId: id });
+  const { data: context, refresh: refreshContext } = useIpc<{ content: string }>('project.context', { projectId: id });
+  const { data: suggestions, refresh: refreshSuggestions } = useIpc<{ content: string }>('project.suggestions', { projectId: id });
+  const { data: status, refresh: refreshStatus } = useIpc<ProjectStatus>('project.status', { projectId: id });
+
+  const scan = async () => {
+    setScanning(true);
+    setScanError(null);
+    try {
+      await invoke('project.scan', { projectId: id });
+      await Promise.all([refreshContext(), refreshSuggestions(), refreshStatus()]);
+    } catch (err) {
+      setScanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setScanning(false);
+    }
+  };
 
   return (
     <div>
@@ -23,7 +40,19 @@ export function ProjectDetail() {
         </svg>
         返回仪表盘
       </Link>
-      <h1 className="page-title">项目详情</h1>
+      <div className="page-header">
+        <h1 className="page-title">{project?.name ?? '项目详情'}</h1>
+        <button className="btn btn-primary" onClick={scan} disabled={scanning}>
+          {scanning ? '扫描中...' : '立即扫描'}
+        </button>
+      </div>
+      {project && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="project-meta">项目路径: {project.rootPath}</div>
+          {project.archiveRoot && <div className="project-meta">归档位置: {project.archiveRoot}</div>}
+        </div>
+      )}
+      {scanError && <div className="error-message" style={{ marginBottom: 16 }}>扫描失败: {scanError}</div>}
       <div className="tabs">
         <button
           className={`tab-btn${tab === 'context' ? ' active' : ''}`}
