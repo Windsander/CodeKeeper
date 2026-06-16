@@ -16,7 +16,7 @@ export function createMainWindow(): BrowserWindow {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
     win.webContents.openDevTools();
   } else {
-    win.loadFile(join(__dirname, '../../renderer/index.html'));
+    win.loadFile(join(__dirname, '../renderer/index.html'));
   }
 
   return win;
