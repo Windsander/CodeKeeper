@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, memo } from 'react';
 
-export function LogViewer({ lines }: { lines: string[] }) {
+export const LogViewer = memo(function LogViewer({ lines }: { lines: string[] }) {
   const bottomRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -22,4 +22,4 @@ export function LogViewer({ lines }: { lines: string[] }) {
       <span ref={bottomRef} style={{ display: 'block', height: 1 }} />
     </pre>
   );
-}
+});

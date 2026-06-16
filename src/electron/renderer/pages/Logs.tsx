@@ -33,7 +33,7 @@ export function Logs() {
         </div>
       </div>
 
-      {loading ? <div className="loading">加载中...</div> : <LogViewer lines={data?.lines || []} />}
+      {loading && !data ? <div className="loading">加载中...</div> : <LogViewer lines={data?.lines || []} />}
     </div>
   );
 }
