@@ -10,13 +10,38 @@ interface DaemonConfig {
   scanCron: string;
 }
 
+interface HeaderEntry {
+  key: string;
+  value: string;
+}
+
+function parseHeaders(json: string): HeaderEntry[] {
+  if (!json.trim()) return [];
+  try {
+    const obj = JSON.parse(json) as Record<string, string>;
+    return Object.entries(obj).map(([key, value]) => ({ key, value }));
+  } catch {
+    return [];
+  }
+}
+
+function stringifyHeaders(entries: HeaderEntry[]): string {
+  const obj: Record<string, string> = {};
+  for (const entry of entries) {
+    if (entry.key.trim()) {
+      obj[entry.key.trim()] = entry.value;
+    }
+  }
+  return JSON.stringify(obj);
+}
+
 export function Settings() {
   const { data, loading, refresh } = useIpc<DaemonConfig>('daemon.config');
   const [apiKey, setApiKey] = useState('');
   const [apiUrl, setApiUrl] = useState('');
   const [provider, setProvider] = useState('anthropic');
   const [model, setModel] = useState('');
-  const [headers, setHeaders] = useState('');
+  const [headerEntries, setHeaderEntries] = useState<HeaderEntry[]>([{ key: '', value: '' }]);
   const [scanCron, setScanCron] = useState('*/5 * * * *');
   const [saved, setSaved] = useState(false);
 
@@ -26,9 +51,29 @@ export function Settings() {
       setApiUrl(data.apiUrl ?? '');
       setProvider(data.provider ?? 'anthropic');
       setModel(data.model ?? '');
-      setHeaders(data.headers ?? '');
+      const entries = parseHeaders(data.headers ?? '');
+      setHeaderEntries(entries.length > 0 ? entries : [{ key: '', value: '' }]);
     }
   }, [data]);
+
+  const updateHeader = (index: number, field: keyof HeaderEntry, value: string) => {
+    setHeaderEntries((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const addHeader = () => {
+    setHeaderEntries((prev) => [...prev, { key: '', value: '' }]);
+  };
+
+  const removeHeader = (index: number) => {
+    setHeaderEntries((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length > 0 ? next : [{ key: '', value: '' }];
+    });
+  };
 
   const save = async () => {
     setSaved(false);
@@ -45,7 +90,9 @@ export function Settings() {
     if (apiUrl.trim()) payload.apiUrl = apiUrl.trim();
     if (provider.trim()) payload.provider = provider.trim();
     if (model.trim()) payload.model = model.trim();
-    if (headers.trim()) payload.headers = headers.trim();
+
+    const headers = stringifyHeaders(headerEntries);
+    if (headers !== '{}') payload.headers = headers;
 
     await window.electronAPI.invoke('daemon.config.update', payload);
     setSaved(true);
@@ -109,14 +156,25 @@ export function Settings() {
         </div>
 
         <div className="form-group">
-          <label>自定义 Headers（JSON，可选）</label>
-          <textarea
-            className="input"
-            rows={4}
-            value={headers}
-            placeholder='{"X-Model-Request-Id": "1234"}'
-            onChange={(e) => setHeaders(e.target.value)}
-          />
+          <label>自定义 Headers</label>
+          {headerEntries.map((entry, index) => (
+            <div key={index} className="form-row" style={{ marginBottom: 8 }}>
+              <input
+                className="input"
+                placeholder="Header 名称，如 X-Model-Request-Id"
+                value={entry.key}
+                onChange={(e) => updateHeader(index, 'key', e.target.value)}
+              />
+              <input
+                className="input"
+                placeholder="Header 值，如 1234"
+                value={entry.value}
+                onChange={(e) => updateHeader(index, 'value', e.target.value)}
+              />
+              <button className="btn btn-danger btn-sm" onClick={() => removeHeader(index)}>删除</button>
+            </div>
+          ))}
+          <button className="btn btn-primary btn-sm" onClick={addHeader}>+ 添加 Header</button>
         </div>
 
         <div className="form-group">
