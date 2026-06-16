@@ -45,7 +45,7 @@ export class SuggestionEngine {
       };
     }
 
-    logger.warn({ filePath, response: text.slice(0, 500) }, 'LLM 建议解析失败');
+    logger.warn({ filePath, response: text.slice(0, 2000) }, 'LLM 建议解析失败');
 
     // 解析失败时回退为人工 review
     return {
