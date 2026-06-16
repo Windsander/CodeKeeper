@@ -38,23 +38,31 @@ export class Daemon {
   private handlerContext: HandlerContext;
 
   constructor(private options: DaemonOptions) {
-    const llmOptions = {
-      apiKey: this.options.apiKey ?? '',
-      baseURL: this.options.apiUrl,
-      provider: this.options.provider,
-      model: this.options.model,
-      headers: this.options.headers,
-    };
-
     this.handlerContext = {
       store: options.store,
       registry: options.registry,
-      getClient: () => (this.options.apiKey ? new LlmClient(llmOptions) : null),
-      getPipeline: () => new ArchivePipeline({
-        store: this.options.store,
-        client: new LlmClient(llmOptions),
-        maxEvents: this.options.maxEventsPerScan ?? 50,
-      }),
+      getClient: () =>
+        this.options.apiKey
+          ? new LlmClient({
+              apiKey: this.options.apiKey,
+              baseURL: this.options.apiUrl,
+              provider: this.options.provider,
+              model: this.options.model,
+              headers: this.options.headers,
+            })
+          : null,
+      getPipeline: () =>
+        new ArchivePipeline({
+          store: this.options.store,
+          client: new LlmClient({
+            apiKey: this.options.apiKey ?? '',
+            baseURL: this.options.apiUrl,
+            provider: this.options.provider,
+            model: this.options.model,
+            headers: this.options.headers,
+          }),
+          maxEvents: this.options.maxEventsPerScan ?? 50,
+        }),
       updateDaemonConfig: (config) => this.updateConfig(config),
       getDaemonConfig: () => ({
         apiKey: this.options.apiKey ?? '',
