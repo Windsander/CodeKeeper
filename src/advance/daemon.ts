@@ -39,6 +39,8 @@ export class Daemon {
         maxEvents: this.options.maxEventsPerScan ?? 50,
       }),
       updateDaemonConfig: (config) => this.updateConfig(config),
+      watchProject: (project) => this.watchProject(project),
+      unwatchProject: (projectId) => this.unwatchProject(projectId),
     };
   }
 
@@ -95,7 +97,7 @@ export class Daemon {
     return handler(this.handlerContext, params);
   }
 
-  private watchProject(project: Project): void {
+  watchProject(project: Project): void {
     if (this.watchers.has(project.id)) return;
     const config = loadProjectConfig(project.rootPath);
     const watcher = new FileWatcher();
@@ -110,6 +112,13 @@ export class Daemon {
       },
     });
     this.watchers.set(project.id, watcher);
+  }
+
+  unwatchProject(projectId: string): void {
+    const watcher = this.watchers.get(projectId);
+    if (!watcher) return;
+    watcher.stop();
+    this.watchers.delete(projectId);
   }
 
   private async scanAll(): Promise<void> {

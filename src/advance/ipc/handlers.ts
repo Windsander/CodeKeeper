@@ -5,6 +5,7 @@ import type { MetadataStore } from '../store/metadata-store';
 import type { ProjectRegistry } from '../project-registry';
 import type { ArchivePipeline } from '../pipeline/archive-pipeline';
 import type { LlmClient } from '../llm/client';
+import type { Project } from '../types';
 import { loadProjectConfig } from '../config/project-config';
 import { UndoExecutor } from '../archive/undo-executor';
 
@@ -14,9 +15,23 @@ export interface HandlerContext {
   getClient: () => LlmClient | null;
   getPipeline: () => ArchivePipeline;
   updateDaemonConfig?: (config: { apiKey?: string; scanCron?: string }) => void;
+  watchProject?: (project: Project) => void;
+  unwatchProject?: (projectId: string) => void;
 }
 
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
+  'project.register': async (ctx, params) => {
+    const project = ctx.registry.register(params.rootPath);
+    ctx.watchProject?.(project);
+    return project;
+  },
+
+  'project.unregister': async (ctx, params) => {
+    ctx.unwatchProject?.(params.projectId);
+    ctx.registry.unregister(params.projectId);
+    return { success: true };
+  },
+
   'project.list': async (ctx) => {
     const projects = ctx.registry.list();
     return projects.map((p) => {

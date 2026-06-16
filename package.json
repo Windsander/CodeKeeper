@@ -7,7 +7,7 @@
     "codekeeper": "dist/advance/cli-entry.js"
   },
   "scripts": {
-    "copy-schema": "cp src/advance/store/schema.sql dist/advance/store/schema.sql",
+    "copy-schema": "node -e \"const fs=require('fs');const src='src/advance/store/schema.sql';const dest='dist/advance/store/schema.sql';fs.mkdirSync('dist/advance/store',{recursive:true});fs.writeFileSync(dest, fs.readFileSync(src));\"",
     "build": "node node_modules/typescript/bin/tsc && npm run copy-schema",
     "dev": "node node_modules/tsx/dist/cli.mjs src/advance/cli-entry.ts",
     "start": "node dist/advance/cli-entry.js start",
