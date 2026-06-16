@@ -9,6 +9,7 @@ import type { LlmClient } from '../llm/client';
 import type { Project } from '../types';
 import { getArchiveRoot } from '../types';
 import { loadProjectConfig } from '../config/project-config';
+import { scanExistingFiles } from '../project-scanner';
 import { UndoExecutor } from '../archive/undo-executor';
 
 export interface HandlerContext {
@@ -39,6 +40,9 @@ export interface HandlerContext {
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
   'project.register': async (ctx, params) => {
     const project = ctx.registry.register(params.rootPath, params.archiveRoot);
+    const config = loadProjectConfig(project.rootPath, project.archiveRoot);
+    const scannedCount = scanExistingFiles(ctx.store, project, config);
+    logger.info({ projectId: project.id, scannedCount }, '注册项目时全量扫描完成');
     ctx.watchProject?.(project);
     return project;
   },
