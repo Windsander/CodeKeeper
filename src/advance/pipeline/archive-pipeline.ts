@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { relative } from 'node:path';
+import { minimatch } from 'minimatch';
 import { ArchiveExecutor } from '../archive/archive-executor';
 import { DocumentClassifier } from '../archive/classifier';
 import { DedupDetector } from '../archive/dedup-detector';
@@ -72,6 +74,12 @@ export class ArchivePipeline {
 
     for (const event of events) {
       try {
+        const relPath = relative(project.rootPath, event.filePath).replace(/\\/g, '/');
+        if (config.exclude.some((pattern) => minimatch(relPath, pattern, { dot: true }))) {
+          processedEventIds.push(event.eventId);
+          continue;
+        }
+
         const doc = parseDocument(event.filePath);
         const entryId = makeEntryId(project.id, event.filePath);
         const classification = await classifier.classify(event.filePath, doc.content);

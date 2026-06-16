@@ -1,5 +1,6 @@
 import { watch, type FSWatcher } from 'chokidar';
 import { existsSync } from 'node:fs';
+import { minimatch } from 'minimatch';
 import type { ProjectConfig } from './config/project-config';
 import type { WatchedEvent, WatchEventType } from './types';
 
@@ -28,9 +29,15 @@ export class FileWatcher {
 
   start(options: FileWatcherOptions): void {
     const { projectRoot, config, onEvent, onReady, onError } = options;
+
+    const isExcluded = (filePath: string): boolean => {
+      const normalized = filePath.replace(/\\/g, '/');
+      return config.exclude.some((pattern) => minimatch(normalized, pattern, { dot: true }));
+    };
+
     this.watcher = watch(projectRoot, {
       cwd: projectRoot,
-      ignored: config.exclude,
+      ignored: (filePath: string) => isExcluded(filePath),
       ignoreInitial: true,
       persistent: true,
       usePolling: isWsl(),
@@ -38,6 +45,7 @@ export class FileWatcher {
     });
 
     const emit = (type: WatchEventType, filePath: string) => {
+      if (isExcluded(filePath)) return;
       onEvent({
         type,
         filePath,
