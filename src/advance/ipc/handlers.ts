@@ -24,7 +24,7 @@ export interface HandlerContext {
     scanCron?: string;
   }) => void;
   getDaemonConfig?: () => {
-    apiKeyConfigured: boolean;
+    apiKey: string;
     apiUrl: string;
     provider: string;
     model: string;
@@ -147,7 +147,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
   'daemon.config': async (ctx) => {
     return ctx.getDaemonConfig?.() ?? {
-      apiKeyConfigured: false,
+      apiKey: '',
       apiUrl: '',
       provider: 'anthropic',
       model: '',
@@ -176,7 +176,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       scanCron?: string;
     } = {};
 
-    if (params.apiKey !== undefined) config.apiKey = params.apiKey || undefined;
+    if (params.apiKey !== undefined) config.apiKey = params.apiKey;
     if (params.apiUrl !== undefined) config.apiUrl = params.apiUrl || undefined;
     if (params.scanCron !== undefined) config.scanCron = params.scanCron;
     if (params.model !== undefined) config.model = params.model || undefined;

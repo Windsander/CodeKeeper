@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useIpc } from '../hooks/useIpc';
 
 interface DaemonConfig {
-  apiKeyConfigured: boolean;
+  apiKey: string;
   apiUrl: string;
   provider: string;
   model: string;
@@ -61,6 +61,7 @@ export function Settings() {
     if (data) {
       setScanCron(data.scanCron);
       setCustomCron(data.scanCron);
+      setApiKey(data.apiKey ?? '');
       setApiUrl(data.apiUrl ?? '');
       setProvider(data.provider ?? 'anthropic');
       setModel(data.model ?? '');
@@ -107,15 +108,14 @@ export function Settings() {
   const save = async () => {
     setSaved(false);
     const payload: {
-      apiKey?: string;
+      apiKey: string;
       apiUrl?: string;
       provider?: string;
       model?: string;
       headers?: string;
       scanCron: string;
-    } = { scanCron };
+    } = { apiKey: apiKey.trim(), scanCron };
 
-    if (apiKey.trim()) payload.apiKey = apiKey.trim();
     if (apiUrl.trim()) payload.apiUrl = apiUrl.trim();
     if (provider.trim()) payload.provider = provider.trim();
     if (model.trim()) payload.model = model.trim();
@@ -157,7 +157,7 @@ export function Settings() {
               type={showApiKey ? 'text' : 'password'}
               className="input"
               value={apiKey}
-              placeholder={data?.apiKeyConfigured ? '已配置（留空保持不变）' : '请输入 API Key'}
+              placeholder="请输入 API Key"
               onChange={(e) => setApiKey(e.target.value)}
             />
             <button

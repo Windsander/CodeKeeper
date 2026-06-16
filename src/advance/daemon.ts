@@ -57,7 +57,7 @@ export class Daemon {
       }),
       updateDaemonConfig: (config) => this.updateConfig(config),
       getDaemonConfig: () => ({
-        apiKeyConfigured: this.options.apiKey ? true : false,
+        apiKey: this.options.apiKey ?? '',
         apiUrl: this.options.apiUrl ?? '',
         provider: this.options.provider ?? 'anthropic',
         model: this.options.model ?? '',
