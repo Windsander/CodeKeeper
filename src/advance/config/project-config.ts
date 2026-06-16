@@ -24,7 +24,7 @@ export const projectConfigSchema = z.object({
     '**/*.xml',
     '**/*.svg',
   ]),
-  exclude: z.array(z.string()).default(['node_modules/**', '.git/**', 'dist/**', '.codekeeper/drafts/**']),
+  exclude: z.array(z.string()).default(['node_modules/**', '.git/**', 'dist/**', '.codekeeper/drafts/**', '**/*.tmp', '**/*.tmp.*', '**/*~', '**/.DS_Store', '**/Thumbs.db', '**/*.swp', '**/*.bak']),
   categories: z.array(z.string()).default([]),
   docTypes: z.array(z.string()).default([]),
 });

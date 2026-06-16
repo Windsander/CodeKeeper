@@ -62,11 +62,24 @@ export class LlmClient {
       return this.mock.response ?? '';
     }
 
-    if (this.provider === 'openai') {
-      return this.completeOpenAI(prompt, system);
+    const maxRetries = 3;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (this.provider === 'openai') {
+          return await this.completeOpenAI(prompt, system);
+        }
+        return await this.completeAnthropic(prompt, system);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const isRateLimit = message.includes('429') || message.includes('Too many requests');
+        if (!isRateLimit || attempt === maxRetries) {
+          throw new Error(`[LlmClient:${this.provider}] ${message}`);
+        }
+        const delay = Math.min(1000 * 2 ** attempt, 8000);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
-
-    return this.completeAnthropic(prompt, system);
+    throw new Error(`[LlmClient:${this.provider}] 重试后仍失败`);
   }
 
   private inferProvider(baseURL?: string): LlmProvider {
