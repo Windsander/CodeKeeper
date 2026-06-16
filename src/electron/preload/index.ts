@@ -9,4 +9,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.off('ipc-push', handler);
   },
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
+  showOpenDialog: (options: { title?: string; defaultPath?: string; properties?: string[] }) =>
+    ipcRenderer.invoke('show-open-dialog', options),
 });

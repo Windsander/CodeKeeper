@@ -16,13 +16,14 @@ export interface ProjectRegistryDeps {
 export class ProjectRegistry {
   constructor(private deps: ProjectRegistryDeps) {}
 
-  register(rootPath: string): Project {
+  register(rootPath: string, archiveRoot?: string): Project {
     const normalized = normalize(resolve(rootPath));
-    const config = loadProjectConfig(normalized);
+    const config = loadProjectConfig(normalized, archiveRoot);
     const id = makeProjectId(normalized);
     const project: Project = {
       id,
       rootPath: normalized,
+      archiveRoot: archiveRoot ? normalize(resolve(archiveRoot)) : undefined,
       name: config.name ?? normalized.split(/[\\/]/).pop() ?? id,
       registeredAt: Date.now(),
       lastScannedAt: null,

@@ -45,10 +45,14 @@ export async function main(): Promise<void> {
 
   if (command === 'register') {
     const rootPath = args[0] ?? process.cwd();
+    const archiveRoot = parseFlag(args, '--archive-root');
     const { store, registry } = getDeps();
     try {
-      const project = registry.register(resolve(rootPath));
+      const project = registry.register(resolve(rootPath), archiveRoot ? resolve(archiveRoot) : undefined);
       console.log(`已注册项目: ${project.name} (${project.id})`);
+      if (project.archiveRoot) {
+        console.log(`归档位置: ${project.archiveRoot}`);
+      }
     } finally {
       store.close();
     }

@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 /**
  * 已注册项目的运行时元数据（区别于 ProjectConfig 项目配置）
  */
@@ -12,6 +14,13 @@ export interface Project {
   registeredAt: number;
   /** 最后扫描时间戳；null 表示从未扫描 */
   lastScannedAt: number | null;
+  /** 归档位置；未设置时默认使用 <rootPath>/.codekeeper */
+  archiveRoot?: string;
+}
+
+/** 获取项目归档目录 */
+export function getArchiveRoot(project: Pick<Project, 'rootPath' | 'archiveRoot'>): string {
+  return project.archiveRoot ?? join(project.rootPath, '.codekeeper');
 }
 
 /**

@@ -22,12 +22,13 @@ export class MetadataStore {
 
   registerProject(project: Project): void {
     const stmt = this.db.prepare(
-      `INSERT INTO projects (id, root_path, name, registered_at, last_scanned_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO projects (id, root_path, archive_root, name, registered_at, last_scanned_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
+         archive_root = excluded.archive_root,
          name = excluded.name`
     );
-    stmt.run(project.id, project.rootPath, project.name, project.registeredAt, project.lastScannedAt);
+    stmt.run(project.id, project.rootPath, project.archiveRoot ?? null, project.name, project.registeredAt, project.lastScannedAt);
   }
 
   unregisterProject(projectId: string): void {
@@ -43,6 +44,7 @@ export class MetadataStore {
     const rows = this.db.prepare('SELECT * FROM projects ORDER BY registered_at DESC').all() as Array<{
       id: string;
       root_path: string;
+      archive_root: string | null;
       name: string;
       registered_at: number;
       last_scanned_at: number | null;
@@ -50,6 +52,7 @@ export class MetadataStore {
     return rows.map((r) => ({
       id: r.id,
       rootPath: r.root_path,
+      archiveRoot: r.archive_root ?? undefined,
       name: r.name,
       registeredAt: r.registered_at,
       lastScannedAt: r.last_scanned_at,
@@ -58,12 +61,13 @@ export class MetadataStore {
 
   getProject(projectId: string): Project | null {
     const r = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as
-      | { id: string; root_path: string; name: string; registered_at: number; last_scanned_at: number | null }
+      | { id: string; root_path: string; archive_root: string | null; name: string; registered_at: number; last_scanned_at: number | null }
       | undefined;
     return r
       ? {
           id: r.id,
           rootPath: r.root_path,
+          archiveRoot: r.archive_root ?? undefined,
           name: r.name,
           registeredAt: r.registered_at,
           lastScannedAt: r.last_scanned_at,

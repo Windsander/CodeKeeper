@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateContext } from '../../../src/advance/codekeeper/context-generator';
 
+function ctxOptions(tmp: string, projectName: string, entries: unknown[]) {
+  return { projectRoot: tmp, archiveRoot: join(tmp, '.codekeeper'), projectName, entries };
+}
+
 describe('generateContext', () => {
   let tmp: string;
 
@@ -20,7 +24,7 @@ describe('generateContext', () => {
       { filePath: join(tmp, 'a.md'), category: 'memory', docType: 'spec', summary: 'A 设计', tags: ['a'] },
       { filePath: join(tmp, 'b.md'), category: 'sync', docType: 'weekly', summary: 'B 周报', tags: ['b'] },
     ];
-    generateContext({ projectRoot: tmp, projectName: '测试项目', entries });
+    generateContext(ctxOptions(tmp, '测试项目', entries));
     const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');
     expect(content).toContain('# 测试项目 知识上下文');
     expect(content).toContain('## memory');
@@ -30,7 +34,7 @@ describe('generateContext', () => {
   });
 
   it('entries 为空时应显示提示', () => {
-    generateContext({ projectRoot: tmp, projectName: '测试项目', entries: [] });
+    generateContext(ctxOptions(tmp, '测试项目', []));
     const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');
     expect(content).toContain('# 测试项目 知识上下文');
     expect(content).toContain('当前暂无已归档知识条目。');
@@ -42,7 +46,7 @@ describe('generateContext', () => {
       { filePath: join(tmp, 'a.md'), category: 'alpha', docType: 'note', summary: 'A', tags: [] },
       { filePath: join(tmp, 'm.md'), category: 'alpha', docType: 'note', summary: 'M', tags: [] },
     ];
-    generateContext({ projectRoot: tmp, projectName: '排序测试', entries });
+    generateContext(ctxOptions(tmp, '排序测试', entries));
     const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');
     const alphaIndex = content.indexOf('## alpha');
     const zetaIndex = content.indexOf('## zeta');
@@ -68,7 +72,7 @@ describe('generateContext', () => {
         ],
       },
     ];
-    generateContext({ projectRoot: tmp, projectName: '分节测试', entries });
+    generateContext(ctxOptions(tmp, '分节测试', entries));
     const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');
     expect(content).toContain('- 要点：');
     expect(content).toContain('**背景**：项目背景说明');
@@ -87,7 +91,7 @@ describe('generateContext', () => {
         updatedAt: 1000,
       },
     ];
-    generateContext({ projectRoot: tmp, projectName: '状态测试', entries });
+    generateContext(ctxOptions(tmp, '状态测试', entries));
     const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');
     expect(content).toContain('[docs/x.md](docs/x.md)');
     expect(content).toContain('(已归档)');

@@ -4,14 +4,15 @@ import type { ArchiveAction } from '../types';
 
 export interface SuggestionsWriterOptions {
   projectRoot: string;
+  archiveRoot: string;
   actions: ArchiveAction[];
 }
 
 /**
- * 将未执行的中高风险归档建议写入 .codekeeper/suggestions.md
+ * 将未执行的中高风险归档建议写入归档位置的 suggestions.md
  */
 export function writeSuggestions(options: SuggestionsWriterOptions): void {
-  const dir = join(options.projectRoot, '.codekeeper');
+  const dir = options.archiveRoot;
   mkdirSync(dir, { recursive: true });
 
   const byRisk = groupByRisk(options.actions);

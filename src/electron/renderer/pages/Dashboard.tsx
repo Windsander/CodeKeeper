@@ -1,18 +1,44 @@
 import { useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
+import { showOpenDialog } from '../api/electron-api';
 import { ProjectCard, type ProjectSummary } from '../components/ProjectCard';
 
 export function Dashboard() {
   const { data: projects, loading, error, refresh } = useIpc<ProjectSummary[]>('project.list');
   const [rootPath, setRootPath] = useState('');
+  const [archiveRoot, setArchiveRoot] = useState('');
   const [registerError, setRegisterError] = useState<string | null>(null);
+
+  const pickRootPath = async () => {
+    const result = await showOpenDialog({
+      title: '选择要监控的项目目录',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (!result.canceled && result.filePaths.length > 0) {
+      setRootPath(result.filePaths[0]);
+    }
+  };
+
+  const pickArchiveRoot = async () => {
+    const result = await showOpenDialog({
+      title: '选择归档位置',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (!result.canceled && result.filePaths.length > 0) {
+      setArchiveRoot(result.filePaths[0]);
+    }
+  };
 
   const register = async () => {
     if (!rootPath.trim()) return;
     setRegisterError(null);
     try {
-      await window.electronAPI.invoke('project.register', { rootPath: rootPath.trim() });
+      await window.electronAPI.invoke('project.register', {
+        rootPath: rootPath.trim(),
+        archiveRoot: archiveRoot.trim() || undefined,
+      });
       setRootPath('');
+      setArchiveRoot('');
       refresh();
     } catch (err) {
       setRegisterError(err instanceof Error ? err.message : String(err));
@@ -40,22 +66,41 @@ export function Dashboard() {
 
       <div className="card">
         <h3 className="card-title">注册新项目</h3>
-        <div className="form-row">
-          <input
-            className="input"
-            placeholder="项目根目录绝对路径，例如 D:\\WorkingSpace\\my-project"
-            value={rootPath}
-            onChange={(e) => setRootPath(e.target.value)}
-          />
-          <button className="btn btn-primary" onClick={register}>注册</button>
+
+        <div className="form-group">
+          <label>项目路径（被监控的源码目录）</label>
+          <div className="form-row">
+            <input
+              className="input"
+              placeholder="点击右侧按钮选择项目目录"
+              value={rootPath}
+              onChange={(e) => setRootPath(e.target.value)}
+            />
+            <button className="btn btn-primary" onClick={pickRootPath}>选择...</button>
+          </div>
         </div>
+
+        <div className="form-group">
+          <label>归档位置（存放整理后的文档，留空则使用项目内 .codekeeper）</label>
+          <div className="form-row">
+            <input
+              className="input"
+              placeholder="点击右侧按钮选择归档目录"
+              value={archiveRoot}
+              onChange={(e) => setArchiveRoot(e.target.value)}
+            />
+            <button className="btn btn-primary" onClick={pickArchiveRoot}>选择...</button>
+          </div>
+        </div>
+
+        <button className="btn btn-primary" onClick={register}>注册</button>
         {registerError && <div className="error-message">{registerError}</div>}
       </div>
 
       {(!projects || projects.length === 0) ? (
         <div className="empty-state">
           <h3>暂无注册项目</h3>
-          <p>在上方输入项目路径并注册，即可开始监控。</p>
+          <p>在上方选择项目路径和归档位置，即可开始监控。</p>
         </div>
       ) : (
         <div className="project-grid">

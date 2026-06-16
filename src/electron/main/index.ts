@@ -1,4 +1,4 @@
-import { app, ipcMain, shell, BrowserWindow } from 'electron';
+import { app, ipcMain, shell, BrowserWindow, dialog } from 'electron';
 import { createMainWindow } from './window-manager';
 import { ElectronIpcClient } from './ipc-client';
 import type { IpcPushEvent } from '../shared/types';
@@ -47,6 +47,25 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('open-external', async (_event, url: string) => {
     await shell.openExternal(url);
+  });
+
+  ipcMain.handle('show-open-dialog', async (_event, options: {
+    title?: string;
+    defaultPath?: string;
+    properties?: string[];
+  }) => {
+    const win = BrowserWindow.getFocusedWindow();
+    const dialogOptions = {
+      title: options.title,
+      defaultPath: options.defaultPath,
+      properties: (options.properties ?? ['openDirectory']) as Array<
+        'openFile' | 'openDirectory' | 'multiSelections' | 'showHiddenFiles' | 'createDirectory' | 'promptToCreate' | 'noResolveAliases' | 'treatPackageAsDirectory' | 'dontAddToRecent'
+      >,
+    };
+    const result = win
+      ? await dialog.showOpenDialog(win, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions);
+    return result;
   });
 });
 

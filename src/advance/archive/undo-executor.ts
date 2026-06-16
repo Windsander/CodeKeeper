@@ -10,7 +10,7 @@ export interface UndoResult {
  * 归档动作撤销器：根据 action_history 恢复已执行的动作
  */
 export class UndoExecutor {
-  constructor(private options: { store: MetadataStore; projectRoot: string }) {}
+  constructor(private options: { store: MetadataStore; projectRoot?: string }) {}
 
   async undo(actionId: string): Promise<UndoResult> {
     const history = this.options.store.getActionHistory(actionId);

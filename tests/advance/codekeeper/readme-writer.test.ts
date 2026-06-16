@@ -16,9 +16,9 @@ describe('writeReadme', () => {
   });
 
   it('应生成 README.md 说明文件', () => {
-    writeReadme({ projectRoot: tmp });
+    writeReadme({ archiveRoot: join(tmp, '.codekeeper') });
     const content = readFileSync(join(tmp, '.codekeeper', 'README.md'), 'utf-8');
-    expect(content).toContain('# .codekeeper/ 目录说明');
+    expect(content).toContain('# CodeKeeper 归档目录说明');
     expect(content).toContain('| context.md |');
     expect(content).toContain('| suggestions.md |');
     expect(content).toContain('| status.json |');

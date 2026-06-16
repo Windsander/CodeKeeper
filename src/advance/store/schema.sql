@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,
   root_path TEXT NOT NULL UNIQUE,
+  archive_root TEXT,
   name TEXT NOT NULL,
   registered_at INTEGER NOT NULL,
   last_scanned_at INTEGER

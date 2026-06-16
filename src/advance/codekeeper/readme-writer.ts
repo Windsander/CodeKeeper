@@ -2,18 +2,18 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface ReadmeWriterOptions {
-  projectRoot: string;
+  archiveRoot: string;
 }
 
 /**
- * 生成 .codekeeper/README.md，说明目录内各文件用途
+ * 生成 README.md 到归档位置，说明目录内各文件用途
  */
 export function writeReadme(options: ReadmeWriterOptions): void {
-  const dir = join(options.projectRoot, '.codekeeper');
+  const dir = options.archiveRoot;
   mkdirSync(dir, { recursive: true });
 
   const lines: string[] = [
-    '# .codekeeper/ 目录说明',
+    '# CodeKeeper 归档目录说明',
     '',
     '本目录由 CodeKeeper Advance 自动生成与维护，用于向各 Agent 提供项目知识上下文、归档建议与处理状态。',
     '',

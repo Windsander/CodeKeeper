@@ -4,6 +4,11 @@ export interface ElectronAPI {
   invoke(method: string, params?: unknown): Promise<unknown>;
   onPush(callback: (event: IpcPushEvent) => void): () => void;
   openExternal(url: string): Promise<void>;
+  showOpenDialog(options: {
+    title?: string;
+    defaultPath?: string;
+    properties?: string[];
+  }): Promise<{ canceled: boolean; filePaths: string[] }>;
 }
 
 export function getAPI(): ElectronAPI {
@@ -23,6 +28,14 @@ export function onPush(callback: (event: IpcPushEvent) => void): () => void {
 
 export function openExternal(url: string): Promise<void> {
   return getAPI().openExternal(url);
+}
+
+export function showOpenDialog(options: {
+  title?: string;
+  defaultPath?: string;
+  properties?: string[];
+}): Promise<{ canceled: boolean; filePaths: string[] }> {
+  return getAPI().showOpenDialog(options);
 }
 
 declare global {

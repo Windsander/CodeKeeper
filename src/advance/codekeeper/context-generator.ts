@@ -17,15 +17,16 @@ export interface ContextEntry {
 
 export interface ContextGeneratorOptions {
   projectRoot: string;
+  archiveRoot: string;
   projectName: string;
   entries: ContextEntry[];
 }
 
 /**
- * 生成 .codekeeper/context.md，按 category 分组展示知识条目
+ * 生成 context.md 到归档位置，按 category 分组展示知识条目
  */
 export function generateContext(options: ContextGeneratorOptions): void {
-  const dir = join(options.projectRoot, '.codekeeper');
+  const dir = options.archiveRoot;
   mkdirSync(dir, { recursive: true });
 
   const byCategory = new Map<string, ContextEntry[]>();

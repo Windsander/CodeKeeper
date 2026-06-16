@@ -20,7 +20,7 @@ describe('writeSuggestions', () => {
     const actions: ArchiveAction[] = [
       { id: 'a1', sourcePath: '/x.md', type: 'move', reason: '移到 docs', targetPath: '/docs/x.md', risk: 'medium', confidence: 0.7, createdAt: 1 },
     ];
-    writeSuggestions({ projectRoot: tmp, actions });
+    writeSuggestions({ projectRoot: tmp, archiveRoot: join(tmp, '.codekeeper'), actions });
     const content = readFileSync(join(tmp, '.codekeeper', 'suggestions.md'), 'utf-8');
     expect(content).toContain('# 归档建议');
     expect(content).toContain('移到 docs');
@@ -30,7 +30,7 @@ describe('writeSuggestions', () => {
   });
 
   it('actions 为空时应显示提示', () => {
-    writeSuggestions({ projectRoot: tmp, actions: [] });
+    writeSuggestions({ projectRoot: tmp, archiveRoot: join(tmp, '.codekeeper'), actions: [] });
     const content = readFileSync(join(tmp, '.codekeeper', 'suggestions.md'), 'utf-8');
     expect(content).toContain('# 归档建议');
     expect(content).toContain('当前没有待处理的归档建议。');
@@ -42,7 +42,7 @@ describe('writeSuggestions', () => {
       { id: 'h2', sourcePath: '/h2.md', type: 'ignore', reason: '高 2', risk: 'high', confidence: 0.95, createdAt: 1 },
       { id: 'm1', sourcePath: '/m1.md', type: 'move', reason: '中 1', targetPath: '/docs/m1.md', risk: 'medium', confidence: 0.7, createdAt: 1 },
     ];
-    writeSuggestions({ projectRoot: tmp, actions });
+    writeSuggestions({ projectRoot: tmp, archiveRoot: join(tmp, '.codekeeper'), actions });
     const content = readFileSync(join(tmp, '.codekeeper', 'suggestions.md'), 'utf-8');
     const highIndex = content.indexOf('## 高 风险');
     const mediumIndex = content.indexOf('## 中 风险');
@@ -56,7 +56,7 @@ describe('writeSuggestions', () => {
     const actions: ArchiveAction[] = [
       { id: 'a1', sourcePath: '/x.md', type: 'move', reason: '移到 docs', targetPath: '/docs/x.md', risk: 'medium', confidence: 0.7, createdAt: 1 },
     ];
-    writeSuggestions({ projectRoot: tmp, actions });
+    writeSuggestions({ projectRoot: tmp, archiveRoot: join(tmp, '.codekeeper'), actions });
     const content = readFileSync(join(tmp, '.codekeeper', 'suggestions.md'), 'utf-8');
     expect(content).toContain('## 批量操作');
     expect(content).toContain('codekeeper-advance process --api-key');

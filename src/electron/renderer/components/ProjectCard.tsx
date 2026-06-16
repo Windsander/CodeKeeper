@@ -4,6 +4,7 @@ export interface ProjectSummary {
   id: string;
   name: string;
   rootPath: string;
+  archiveRoot?: string;
   healthScore: number;
   pending: number;
   archived: number;
@@ -22,6 +23,9 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
     <div>
       <h3><Link to={`/project/${project.id}`}>{project.name}</Link></h3>
       <div className="project-path">{project.rootPath}</div>
+      {project.archiveRoot && (
+        <div className="project-meta">归档位置: {project.archiveRoot}</div>
+      )}
       <div className="project-stats">
         <div className="project-stat">
           <div className="project-stat-label">健康度</div>

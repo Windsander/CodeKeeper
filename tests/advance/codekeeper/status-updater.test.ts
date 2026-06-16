@@ -25,7 +25,7 @@ describe('updateStatus', () => {
       ignoredCount: 1,
       suggestionCount: 1,
     });
-    updateStatus({ projectRoot: tmp, status });
+    updateStatus({ archiveRoot: join(tmp, '.codekeeper'), status });
     const content = readFileSync(join(tmp, '.codekeeper', 'status.json'), 'utf-8');
     const parsed = JSON.parse(content);
     expect(parsed.projectId).toBe('p1');
@@ -45,7 +45,7 @@ describe('updateStatus', () => {
       ignoredCount: 0,
       suggestionCount: 0,
     });
-    updateStatus({ projectRoot: tmp, status });
+    updateStatus({ archiveRoot: join(tmp, '.codekeeper'), status });
     expect(existsSync(join(tmp, '.codekeeper', 'status.json'))).toBe(true);
     expect(existsSync(join(tmp, '.codekeeper', 'status.json.tmp'))).toBe(false);
   });

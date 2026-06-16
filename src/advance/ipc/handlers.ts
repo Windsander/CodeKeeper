@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { getLogDir } from '../../core/platform';
 import type { MetadataStore } from '../store/metadata-store';
@@ -6,6 +6,7 @@ import type { ProjectRegistry } from '../project-registry';
 import type { ArchivePipeline } from '../pipeline/archive-pipeline';
 import type { LlmClient } from '../llm/client';
 import type { Project } from '../types';
+import { getArchiveRoot } from '../types';
 import { loadProjectConfig } from '../config/project-config';
 import { UndoExecutor } from '../archive/undo-executor';
 
@@ -14,14 +15,21 @@ export interface HandlerContext {
   registry: ProjectRegistry;
   getClient: () => LlmClient | null;
   getPipeline: () => ArchivePipeline;
-  updateDaemonConfig?: (config: { apiKey?: string; scanCron?: string }) => void;
+  updateDaemonConfig?: (config: {
+    apiKey?: string;
+    apiUrl?: string;
+    provider?: 'anthropic' | 'openai';
+    model?: string;
+    headers?: Record<string, string>;
+    scanCron?: string;
+  }) => void;
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
 }
 
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
   'project.register': async (ctx, params) => {
-    const project = ctx.registry.register(params.rootPath);
+    const project = ctx.registry.register(params.rootPath, params.archiveRoot);
     ctx.watchProject?.(project);
     return project;
   },
@@ -65,35 +73,37 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.context': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    const path = join(project.rootPath, '.codekeeper', 'context.md');
+    const path = join(getArchiveRoot(project), 'context.md');
     return { content: readFileSync(path, 'utf-8') };
   },
 
   'project.suggestions': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    const path = join(project.rootPath, '.codekeeper', 'suggestions.md');
+    const path = join(getArchiveRoot(project), 'suggestions.md');
     return { content: readFileSync(path, 'utf-8') };
   },
 
   'project.status': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    const path = join(project.rootPath, '.codekeeper', 'status.json');
+    const path = join(getArchiveRoot(project), 'status.json');
     return JSON.parse(readFileSync(path, 'utf-8'));
   },
 
   'project.config': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    const config = loadProjectConfig(project.rootPath);
+    const config = loadProjectConfig(project.rootPath, project.archiveRoot);
     return { content: config };
   },
 
   'project.config.update': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    const path = join(project.rootPath, '.codekeeper', 'config.yaml');
+    const dir = getArchiveRoot(project);
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, 'config.yaml');
     writeFileSync(path, params.content, 'utf-8');
     return { success: true };
   },
@@ -109,7 +119,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'action.undo': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    const executor = new UndoExecutor({ store: ctx.store, projectRoot: project.rootPath });
+    const executor = new UndoExecutor({ store: ctx.store });
     return executor.undo(params.actionId);
   },
 

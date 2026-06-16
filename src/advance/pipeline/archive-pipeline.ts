@@ -12,6 +12,7 @@ import { writeReadme } from '../codekeeper/readme-writer';
 import type { LlmClient } from '../llm/client';
 import type { MetadataStore } from '../store/metadata-store';
 import type { Project, ArchiveAction } from '../types';
+import { getArchiveRoot } from '../types';
 import { loadProjectConfig } from '../config/project-config';
 import { logger } from '../../core/logger';
 
@@ -44,8 +45,9 @@ export class ArchivePipeline {
     if (events.length === 0) return;
 
     const now = Date.now();
+    const archiveRoot = getArchiveRoot(project);
 
-    const config = loadProjectConfig(project.rootPath);
+    const config = loadProjectConfig(project.rootPath, project.archiveRoot);
     const classifier = new DocumentClassifier(this.options.client, {
       categories: config.categories.length > 0 ? config.categories : undefined,
       docTypes: config.docTypes.length > 0 ? config.docTypes : undefined,
@@ -147,15 +149,16 @@ export class ArchivePipeline {
     this.options.store.markEventsProcessed(processedEventIds);
     this.options.store.markActionsProcessed(executedIds);
 
-    // 生成 .codekeeper/ 文件
+    // 生成归档位置文件
     generateContext({
       projectRoot: project.rootPath,
+      archiveRoot,
       projectName: project.name,
       entries: contextEntries,
     });
 
     const allPending = this.options.store.listPendingActions(project.id);
-    writeSuggestions({ projectRoot: project.rootPath, actions: allPending });
+    writeSuggestions({ projectRoot: project.rootPath, archiveRoot, actions: allPending });
 
     const counts = this.options.store.getProjectCounts(project.id);
     const hasFailure = processedEventIds.length < events.length;
@@ -173,10 +176,10 @@ export class ArchivePipeline {
       ignoredCount: counts.ignored,
       suggestionCount: allPending.length,
     });
-    updateStatus({ projectRoot: project.rootPath, status });
+    updateStatus({ archiveRoot, status });
 
     // 生成 README 说明
-    writeReadme({ projectRoot: project.rootPath });
+    writeReadme({ archiveRoot });
   }
 }
 

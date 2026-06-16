@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, normalize, resolve } from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
 
@@ -60,9 +60,11 @@ export type ProjectConfig = z.infer<typeof projectConfigSchema>;
 /**
  * 读取项目配置，若文件不存在则返回默认配置
  * @param projectRoot 项目根目录
+ * @param archiveRoot 归档位置；未提供时使用 projectRoot/.codekeeper
  */
-export function loadProjectConfig(projectRoot: string): ProjectConfig {
-  const configPath = join(projectRoot, '.codekeeper', 'config.yaml');
+export function loadProjectConfig(projectRoot: string, archiveRoot?: string): ProjectConfig {
+  const configDir = archiveRoot ? normalize(resolve(archiveRoot)) : join(projectRoot, '.codekeeper');
+  const configPath = join(configDir, 'config.yaml');
   try {
     const raw = readFileSync(configPath, 'utf-8');
     const parsed = YAML.parse(raw);

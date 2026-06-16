@@ -3,15 +3,15 @@ import { join } from 'node:path';
 import type { ProjectStatus } from '../types';
 
 export interface StatusUpdaterOptions {
-  projectRoot: string;
+  archiveRoot: string;
   status: ProjectStatus;
 }
 
 /**
- * 原子写入 .codekeeper/status.json
+ * 原子写入 status.json 到归档位置
  */
 export function updateStatus(options: StatusUpdaterOptions): void {
-  const dir = join(options.projectRoot, '.codekeeper');
+  const dir = options.archiveRoot;
   mkdirSync(dir, { recursive: true });
   const tmpPath = join(dir, 'status.json.tmp');
   const finalPath = join(dir, 'status.json');

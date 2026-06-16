@@ -127,7 +127,7 @@ export class Daemon {
 
   watchProject(project: Project): void {
     if (this.watchers.has(project.id)) return;
-    const config = loadProjectConfig(project.rootPath);
+    const config = loadProjectConfig(project.rootPath, project.archiveRoot);
     const watcher = new FileWatcher();
     watcher.start({
       projectRoot: project.rootPath,
