@@ -117,6 +117,16 @@ export class MetadataStore {
     }));
   }
 
+  /**
+   * 获取指定项目所有待处理事件的文件路径
+   */
+  listPendingEventPaths(projectId: string): string[] {
+    const rows = this.db
+      .prepare('SELECT DISTINCT file_path FROM watch_events WHERE project_id = ? AND processed = 0')
+      .all(projectId) as Array<{ file_path: string }>;
+    return rows.map((r) => r.file_path);
+  }
+
   markEventsProcessed(eventIds: number[]): void {
     if (eventIds.length === 0) return;
     const placeholders = eventIds.map(() => '?').join(',');
@@ -156,6 +166,16 @@ export class MetadataStore {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
+  }
+
+  /**
+   * 获取指定项目所有知识条目的文件路径
+   */
+  listEntryPaths(projectId: string): string[] {
+    const rows = this.db
+      .prepare('SELECT DISTINCT file_path FROM knowledge_entries WHERE project_id = ?')
+      .all(projectId) as Array<{ file_path: string }>;
+    return rows.map((r) => r.file_path);
   }
 
   // ---------- 分类 ----------

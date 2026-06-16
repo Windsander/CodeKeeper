@@ -5,6 +5,7 @@ import type { MetadataStore } from './store/metadata-store';
 import type { Project, WatchedEvent } from './types';
 import { loadProjectConfig } from './config/project-config';
 import { saveDaemonConfig } from './config/daemon-config';
+import { scanExistingFiles } from './project-scanner';
 import { ArchivePipeline } from './pipeline/archive-pipeline';
 import { LlmClient } from './llm/client';
 import { IpcServer } from './ipc/server';
@@ -190,6 +191,15 @@ export class Daemon {
       return;
     }
 
+    const projects = this.options.registry.list();
+
+    // 1. 先对每个项目做全量扫描，补全漏掉的新文件
+    for (const project of projects) {
+      const config = loadProjectConfig(project.rootPath, project.archiveRoot);
+      const addedCount = scanExistingFiles(this.options.store, project, config);
+      logger.info({ projectId: project.id, addedCount }, '定时全量扫描完成');
+    }
+
     const client = new LlmClient({
       apiKey,
       baseURL: this.options.apiUrl,
@@ -203,7 +213,7 @@ export class Daemon {
       maxEvents: this.options.maxEventsPerScan ?? 50,
     });
 
-    const projects = this.options.registry.list();
+    // 2. 处理所有 pending 事件（包括实时监控和全量扫描产生的）
     for (const project of projects) {
       this.options.store.updateLastScannedAt(project.id, Date.now());
       try {

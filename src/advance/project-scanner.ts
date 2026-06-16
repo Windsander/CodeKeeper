@@ -13,6 +13,12 @@ export function scanExistingFiles(
   project: Project,
   config: ProjectConfig
 ): number {
+  // 已跟踪的文件路径集合：pending 事件 + 已处理条目，避免重复生成事件
+  const tracked = new Set<string>([
+    ...store.listPendingEventPaths(project.id),
+    ...store.listEntryPaths(project.id),
+  ]);
+
   const matched: string[] = [];
 
   function walk(dir: string): void {
@@ -42,7 +48,9 @@ export function scanExistingFiles(
       if (isDirectory) {
         walk(fullPath);
       } else if (config.include.some((pattern) => minimatch(relPath, pattern, { dot: true }))) {
-        matched.push(fullPath);
+        if (!tracked.has(fullPath)) {
+          matched.push(fullPath);
+        }
       }
     }
   }
