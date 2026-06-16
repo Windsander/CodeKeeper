@@ -12,6 +12,15 @@ export class MetadataStore {
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
     this.db.exec(readFileSync(join(__dirname, 'schema.sql'), 'utf-8'));
+    this.migrate();
+  }
+
+  private migrate(): void {
+    const columns = this.db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+    const hasArchiveRoot = columns.some((c) => c.name === 'archive_root');
+    if (!hasArchiveRoot) {
+      this.db.exec('ALTER TABLE projects ADD COLUMN archive_root TEXT');
+    }
   }
 
   close(): void {
