@@ -1,5 +1,6 @@
 import { watch, type FSWatcher } from 'chokidar';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import type { ProjectConfig } from './config/project-config';
 import type { WatchedEvent, WatchEventType } from './types';
@@ -45,10 +46,11 @@ export class FileWatcher {
     });
 
     const emit = (type: WatchEventType, filePath: string) => {
-      if (isExcluded(filePath)) return;
+      const absolutePath = join(projectRoot, filePath).replace(/\\/g, '/');
+      if (isExcluded(absolutePath)) return;
       onEvent({
         type,
-        filePath,
+        filePath: absolutePath,
         timestamp: Date.now(),
       });
     };

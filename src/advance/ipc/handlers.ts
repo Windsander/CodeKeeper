@@ -52,9 +52,23 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const projects = ctx.registry.list();
     return projects.map((p) => {
       const counts = ctx.store.getProjectCounts(p.id);
+      const archiveRoot = getArchiveRoot(p);
+      const statusPath = join(archiveRoot, 'status.json');
+      let healthScore = 1;
+      if (existsSync(statusPath)) {
+        try {
+          const status = JSON.parse(readFileSync(statusPath, 'utf-8')) as { healthScore?: number };
+          if (typeof status.healthScore === 'number') {
+            healthScore = status.healthScore;
+          }
+        } catch {
+          // 状态文件读取失败时回退到默认值
+        }
+      }
       return {
         ...p,
         ...counts,
+        healthScore,
         lastScannedAt: p.lastScannedAt,
       };
     });
