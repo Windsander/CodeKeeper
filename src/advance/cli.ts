@@ -6,8 +6,8 @@ import { ProjectRegistry, makeProjectId } from './project-registry';
 import { Daemon } from './daemon';
 import { LlmClient } from './llm/client';
 import { ArchivePipeline } from './pipeline/archive-pipeline';
-
 import { UndoExecutor } from './archive/undo-executor';
+import { loadDaemonConfig } from './config/daemon-config';
 
 const DATA_DIR = join(homedir(), '.codekeeper-advance');
 const DB_PATH = join(DATA_DIR, 'metadata.db');
@@ -90,8 +90,18 @@ export async function main(): Promise<void> {
 
   if (command === 'start') {
     const { store, registry } = getDeps();
-    const apiKey = parseFlag(args, '--api-key');
-    const daemon = new Daemon({ registry, store, apiKey });
+    const cmdApiKey = parseFlag(args, '--api-key');
+    const persisted = loadDaemonConfig();
+    const daemon = new Daemon({
+      registry,
+      store,
+      apiKey: cmdApiKey,
+      apiUrl: persisted.apiUrl,
+      provider: persisted.provider,
+      model: persisted.model,
+      headers: persisted.headers,
+      scanCron: persisted.scanCron,
+    });
     daemon.start();
     console.log('守护进程已启动');
     process.on('SIGINT', async () => {

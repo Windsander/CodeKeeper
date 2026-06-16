@@ -4,6 +4,7 @@ import { FileWatcher } from './file-watcher';
 import type { MetadataStore } from './store/metadata-store';
 import type { Project, WatchedEvent } from './types';
 import { loadProjectConfig } from './config/project-config';
+import { saveDaemonConfig } from './config/daemon-config';
 import { ArchivePipeline } from './pipeline/archive-pipeline';
 import { LlmClient } from './llm/client';
 import { IpcServer } from './ipc/server';
@@ -105,25 +106,36 @@ export class Daemon {
   }
 
   updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string }): void {
+    const persisted: { apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string } = {};
+
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
     }
     if (config.apiUrl !== undefined) {
       this.options.apiUrl = config.apiUrl;
+      persisted.apiUrl = config.apiUrl;
     }
     if (config.provider !== undefined) {
       this.options.provider = config.provider;
+      persisted.provider = config.provider;
     }
     if (config.model !== undefined) {
       this.options.model = config.model;
+      persisted.model = config.model;
     }
     if (config.headers !== undefined) {
       this.options.headers = config.headers;
+      persisted.headers = config.headers;
     }
     if (config.scanCron !== undefined) {
       this.options.scanCron = config.scanCron;
       this.scanJob?.stop();
       this.scanJob = schedule(config.scanCron, () => this.scanAll());
+      persisted.scanCron = config.scanCron;
+    }
+
+    if (Object.keys(persisted).length > 0) {
+      saveDaemonConfig(persisted);
     }
   }
 
