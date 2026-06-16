@@ -4,7 +4,9 @@ import { join } from 'node:path';
 export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
-    height: 800,
+    height: 1200,
+    frame: false,
+    titleBarStyle: 'hidden',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

@@ -67,6 +67,37 @@ app.whenReady().then(async () => {
       : await dialog.showOpenDialog(dialogOptions);
     return result;
   });
+
+  ipcMain.handle('window-minimize', () => {
+    const win = BrowserWindow.getFocusedWindow();
+    win?.minimize();
+  });
+
+  ipcMain.handle('window-maximize', () => {
+    const win = BrowserWindow.getFocusedWindow();
+    if (!win) return;
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else {
+      win.maximize();
+    }
+  });
+
+  ipcMain.handle('window-close', () => {
+    const win = BrowserWindow.getFocusedWindow();
+    win?.close();
+  });
+
+  function sendWindowState(win: BrowserWindow, isMaximized: boolean): void {
+    win.webContents.send('window-state-change', { isMaximized });
+  }
+
+  mainWindow?.on('maximize', () => {
+    if (mainWindow) sendWindowState(mainWindow, true);
+  });
+  mainWindow?.on('unmaximize', () => {
+    if (mainWindow) sendWindowState(mainWindow, false);
+  });
 });
 
 app.on('window-all-closed', () => {

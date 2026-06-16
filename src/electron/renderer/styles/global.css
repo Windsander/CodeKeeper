@@ -37,7 +37,87 @@ body {
 
 .app-layout {
   display: flex;
+  flex-direction: column;
   height: 100vh;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.titlebar {
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  color: var(--sidebar-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.titlebar-icon {
+  color: var(--primary);
+  font-size: 13px;
+}
+
+.titlebar-name {
+  opacity: 0.95;
+}
+
+.titlebar-drag {
+  flex: 1;
+  height: 100%;
+}
+
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--sidebar-text);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.titlebar-btn:hover {
+  background: var(--sidebar-hover);
+}
+
+.titlebar-btn.titlebar-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.titlebar-btn svg {
+  opacity: 0.85;
+}
+
+.titlebar-btn:hover svg {
+  opacity: 1;
 }
 
 .sidebar {

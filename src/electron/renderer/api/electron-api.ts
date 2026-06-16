@@ -9,6 +9,10 @@ export interface ElectronAPI {
     defaultPath?: string;
     properties?: string[];
   }): Promise<{ canceled: boolean; filePaths: string[] }>;
+  windowMinimize(): Promise<void>;
+  windowMaximize(): Promise<void>;
+  windowClose(): Promise<void>;
+  onWindowStateChange(callback: (state: { isMaximized: boolean }) => void): () => void;
 }
 
 export function getAPI(): ElectronAPI {
@@ -36,6 +40,22 @@ export function showOpenDialog(options: {
   properties?: string[];
 }): Promise<{ canceled: boolean; filePaths: string[] }> {
   return getAPI().showOpenDialog(options);
+}
+
+export function windowMinimize(): Promise<void> {
+  return getAPI().windowMinimize();
+}
+
+export function windowMaximize(): Promise<void> {
+  return getAPI().windowMaximize();
+}
+
+export function windowClose(): Promise<void> {
+  return getAPI().windowClose();
+}
+
+export function onWindowStateChange(callback: (state: { isMaximized: boolean }) => void): () => void {
+  return getAPI().onWindowStateChange(callback);
 }
 
 declare global {
