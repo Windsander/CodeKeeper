@@ -1,7 +1,12 @@
 export function LogViewer({ lines }: { lines: string[] }) {
-  return (
-    <pre style={{ background: '#1e1e1e', color: '#d4d4d4', padding: 12, overflow: 'auto', maxHeight: '80vh' }}>
-      {lines.length === 0 ? '暂无日志' : lines.join('\n')}
-    </pre>
-  );
+  if (lines.length === 0) {
+    return (
+      <div className="empty-state">
+        <h3>暂无日志</h3>
+        <p>守护进程运行后会产生日志输出。</p>
+      </div>
+    );
+  }
+
+  return <pre className="log-viewer">{lines.join('\n')}</pre>;
 }

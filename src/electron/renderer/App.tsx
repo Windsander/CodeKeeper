@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { Dashboard } from './pages/Dashboard';
 import { ProjectDetail } from './pages/ProjectDetail';
 import { ActionHistory } from './pages/ActionHistory';
@@ -8,15 +8,23 @@ import { Settings } from './pages/Settings';
 export function App() {
   return (
     <BrowserRouter>
-      <div style={{ display: 'flex', height: '100vh' }}>
-        <nav style={{ width: 200, borderRight: '1px solid #ccc', padding: 16 }}>
-          <h2>CodeKeeper</h2>
-          <div><Link to="/">仪表盘</Link></div>
-          <div><Link to="/history">动作历史</Link></div>
-          <div><Link to="/logs">日志</Link></div>
-          <div><Link to="/settings">设置</Link></div>
+      <div className="app-layout">
+        <nav className="sidebar">
+          <h2 className="sidebar-title">CodeKeeper</h2>
+          <NavLink to="/" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
+            仪表盘
+          </NavLink>
+          <NavLink to="/history" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
+            动作历史
+          </NavLink>
+          <NavLink to="/logs" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
+            日志
+          </NavLink>
+          <NavLink to="/settings" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
+            设置
+          </NavLink>
         </nav>
-        <main style={{ flex: 1, padding: 16, overflow: 'auto' }}>
+        <main className="main-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/project/:id" element={<ProjectDetail />} />

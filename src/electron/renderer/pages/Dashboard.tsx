@@ -28,44 +28,48 @@ export function Dashboard() {
     }
   };
 
-  if (loading) return <div>加载中...</div>;
-  if (error) return <div style={{ color: 'red' }}>错误: {error}</div>;
+  if (loading) return <div className="loading">加载中...</div>;
+  if (error) return <div className="error-message">错误: {error}</div>;
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>仪表盘</h1>
-        <button onClick={refresh}>刷新</button>
+      <div className="page-header">
+        <h1 className="page-title">仪表盘</h1>
+        <button className="btn btn-primary" onClick={refresh}>刷新</button>
       </div>
 
-      <div style={{ marginBottom: 24, padding: 16, border: '1px solid #ddd', borderRadius: 8 }}>
-        <h3>注册新项目</h3>
-        <div style={{ display: 'flex', gap: 8 }}>
+      <div className="card">
+        <h3 className="card-title">注册新项目</h3>
+        <div className="form-row">
           <input
-            style={{ flex: 1 }}
+            className="input"
             placeholder="项目根目录绝对路径，例如 D:\\WorkingSpace\\my-project"
             value={rootPath}
             onChange={(e) => setRootPath(e.target.value)}
           />
-          <button onClick={register}>注册</button>
+          <button className="btn btn-primary" onClick={register}>注册</button>
         </div>
-        {registerError && <div style={{ color: 'red', marginTop: 8 }}>{registerError}</div>}
+        {registerError && <div className="error-message">{registerError}</div>}
       </div>
 
       {(!projects || projects.length === 0) ? (
-        <div>暂无注册项目</div>
+        <div className="empty-state">
+          <h3>暂无注册项目</h3>
+          <p>在上方输入项目路径并注册，即可开始监控。</p>
+        </div>
       ) : (
-        projects.map((p) => (
-          <div key={p.id} style={{ position: 'relative' }}>
-            <ProjectCard project={p} />
-            <button
-              style={{ position: 'absolute', top: 16, right: 16 }}
-              onClick={() => unregister(p.id)}
-            >
-              注销
-            </button>
-          </div>
-        ))
+        <div className="project-grid">
+          {projects.map((p) => (
+            <div key={p.id} className="project-card">
+              <ProjectCard project={p} />
+              <div className="project-actions">
+                <button className="btn btn-danger btn-sm" onClick={() => unregister(p.id)}>
+                  注销
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

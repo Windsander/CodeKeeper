@@ -16,18 +16,33 @@ export function ProjectDetail() {
 
   return (
     <div>
-      <Link to="/">← 返回</Link>
-      <h1>项目详情</h1>
-      <div>
-        <button onClick={() => setTab('context')}>Context</button>
-        <button onClick={() => setTab('suggestions')}>Suggestions</button>
-        <button onClick={() => setTab('status')}>Status</button>
+      <Link to="/" className="back-link">← 返回</Link>
+      <h1 className="page-title">项目详情</h1>
+      <div className="tabs">
+        <button
+          className={`tab-btn${tab === 'context' ? ' active' : ''}`}
+          onClick={() => setTab('context')}
+        >
+          Context
+        </button>
+        <button
+          className={`tab-btn${tab === 'suggestions' ? ' active' : ''}`}
+          onClick={() => setTab('suggestions')}
+        >
+          Suggestions
+        </button>
+        <button
+          className={`tab-btn${tab === 'status' ? ' active' : ''}`}
+          onClick={() => setTab('status')}
+        >
+          Status
+        </button>
       </div>
-      <div style={{ marginTop: 16 }}>
+      <div className="card">
         {tab === 'context' && context && <ContextView content={context.content} />}
         {tab === 'suggestions' && suggestions && <SuggestionList content={suggestions.content} />}
         {tab === 'status' && status && (
-          <pre>{JSON.stringify(status, null, 2)}</pre>
+          <pre className="log-viewer">{JSON.stringify(status, null, 2)}</pre>
         )}
       </div>
     </div>

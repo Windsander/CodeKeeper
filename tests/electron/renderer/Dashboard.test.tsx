@@ -19,7 +19,7 @@ describe('Dashboard', () => {
     render(<BrowserRouter><Dashboard /></BrowserRouter>);
     await waitFor(() => {
       expect(screen.getByText('proj')).toBeTruthy();
-      expect(screen.getByText('健康度: 80%')).toBeTruthy();
+      expect(screen.getByText('80%')).toBeTruthy();
     });
   });
 });
