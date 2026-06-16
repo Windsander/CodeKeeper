@@ -4,7 +4,7 @@ export function LogViewer({ lines }: { lines: string[] }) {
   const bottomRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [lines]);
 
   if (lines.length === 0) {
