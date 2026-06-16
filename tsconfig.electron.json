@@ -10,5 +10,6 @@
     "declaration": false,
     "declarationMap": false
   },
-  "include": ["src/electron/**/*"]
+  "include": ["src/electron/**/*"],
+  "exclude": ["node_modules", "dist"]
 }

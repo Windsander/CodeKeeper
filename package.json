@@ -17,6 +17,7 @@
     "format:fix": "node node_modules/prettier/bin/prettier.cjs --write .",
     "rebuild-native": "cd node_modules/better-sqlite3 && npm run build-release",
     "electron:dev": "concurrently \"node node_modules/vite/bin/vite.js\" \"node node_modules/typescript/bin/tsc -p tsconfig.electron.json --watch\" \"node node_modules/wait-on/bin/wait-on http://localhost:5173 && node node_modules/electron/cli.js dist/electron/main/index.js\"",
+    "electron:dev:all": "npm run build && concurrently \"npm run start\" \"node node_modules/vite/bin/vite.js\" \"node node_modules/typescript/bin/tsc -p tsconfig.electron.json --watch\" \"node node_modules/wait-on/bin/wait-on http://localhost:5173 && node node_modules/electron/cli.js dist/electron/main/index.js\"",
     "electron:build": "node node_modules/vite/bin/vite.js build && node node_modules/typescript/bin/tsc -p tsconfig.electron.json",
     "electron:start": "npm run electron:build && node node_modules/electron/cli.js dist/electron/main/index.js"
   },
