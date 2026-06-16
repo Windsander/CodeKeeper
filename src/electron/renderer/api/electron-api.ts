@@ -1,4 +1,4 @@
-import type { IpcPushEvent } from '../../advance/ipc/types';
+import type { IpcPushEvent } from '../../shared/types';
 
 export interface ElectronAPI {
   invoke(method: string, params?: unknown): Promise<unknown>;

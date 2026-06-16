@@ -1,7 +1,7 @@
 import { app, ipcMain, shell, BrowserWindow } from 'electron';
 import { createMainWindow } from './window-manager';
 import { ElectronIpcClient } from './ipc-client';
-import type { IpcPushEvent } from '../../advance/ipc/types';
+import type { IpcPushEvent } from '../shared/types';
 
 const client = new ElectronIpcClient();
 let mainWindow: BrowserWindow | null = null;

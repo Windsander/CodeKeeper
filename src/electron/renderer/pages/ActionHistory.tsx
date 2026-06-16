@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
-import type { ArchiveAction } from '../../../advance/types';
+import type { ArchiveAction } from '../../shared/types';
 
 interface HistoryItem extends ArchiveAction {
   historyId: number;
+  projectId: string;
   status: 'applied' | 'undone';
 }
 

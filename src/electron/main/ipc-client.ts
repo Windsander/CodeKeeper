@@ -1,6 +1,6 @@
 import { createConnection, Socket } from 'node:net';
-import { getIpcSocketPath } from '../../advance/ipc/paths';
-import type { IpcRequest, IpcResponse, IpcPushEvent } from '../../advance/ipc/types';
+import { getIpcSocketPath } from '../shared/paths';
+import type { IpcRequest, IpcPushEvent } from '../shared/types';
 
 export class ElectronIpcClient {
   private socket: Socket | null = null;

@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useIpc } from '../hooks/useIpc';
 import { ContextView } from '../components/ContextView';
 import { SuggestionList } from '../components/SuggestionList';
-import type { ProjectStatus } from '../../../advance/types';
+import type { ProjectStatus } from '../../shared/types';
 
 type Tab = 'context' | 'suggestions' | 'status';
 
