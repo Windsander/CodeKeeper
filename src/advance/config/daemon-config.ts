@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 export interface DaemonPersistedConfig {
+  apiKey?: string;
   apiUrl?: string;
   provider?: 'anthropic' | 'openai';
   model?: string;

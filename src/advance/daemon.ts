@@ -106,10 +106,11 @@ export class Daemon {
   }
 
   updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string }): void {
-    const persisted: { apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string } = {};
+    const persisted: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string } = {};
 
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
+      persisted.apiKey = config.apiKey;
     }
     if (config.apiUrl !== undefined) {
       this.options.apiUrl = config.apiUrl;
