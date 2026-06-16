@@ -290,6 +290,8 @@ input[type='number']:focus {
   padding: 20px;
   position: relative;
   transition: box-shadow 0.15s ease, transform 0.15s ease;
+  cursor: pointer;
+  display: block;
 }
 
 .project-card:hover {
@@ -300,15 +302,7 @@ input[type='number']:focus {
 .project-card h3 {
   margin: 0 0 8px;
   font-size: 18px;
-}
-
-.project-card h3 a {
   color: var(--primary);
-  text-decoration: none;
-}
-
-.project-card h3 a:hover {
-  text-decoration: underline;
 }
 
 .project-path {
@@ -472,14 +466,23 @@ input[type='number']:focus {
 .back-link {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  background: var(--card-bg);
   color: var(--primary);
   text-decoration: none;
   margin-bottom: 16px;
   font-size: 14px;
+  font-weight: 500;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border-color);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .back-link:hover {
-  text-decoration: underline;
+  background: var(--main-bg);
+  box-shadow: var(--shadow-lg);
 }
 
 .markdown-body {

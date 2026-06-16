@@ -1,5 +1,3 @@
-import { Link } from 'react-router-dom';
-
 export interface ProjectSummary {
   id: string;
   name: string;
@@ -21,7 +19,7 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
 
   return (
     <div>
-      <h3><Link to={`/project/${project.id}`}>{project.name}</Link></h3>
+      <h3>{project.name}</h3>
       <div className="project-path">{project.rootPath}</div>
       {project.archiveRoot && (
         <div className="project-meta">归档位置: {project.archiveRoot}</div>

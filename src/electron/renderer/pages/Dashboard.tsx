@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useIpc } from '../hooks/useIpc';
 import { showOpenDialog } from '../api/electron-api';
 import { ProjectCard, type ProjectSummary } from '../components/ProjectCard';
 
 export function Dashboard() {
+  const navigate = useNavigate();
   const { data: projects, loading, error, refresh } = useIpc<ProjectSummary[]>('project.list');
   const [rootPath, setRootPath] = useState('');
   const [archiveRoot, setArchiveRoot] = useState('');
@@ -105,10 +107,27 @@ export function Dashboard() {
       ) : (
         <div className="project-grid">
           {projects.map((p) => (
-            <div key={p.id} className="project-card">
+            <div
+              key={p.id}
+              className="project-card"
+              onClick={() => navigate(`/project/${p.id}`)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  navigate(`/project/${p.id}`);
+                }
+              }}
+            >
               <ProjectCard project={p} />
               <div className="project-actions">
-                <button className="btn btn-danger btn-sm" onClick={() => unregister(p.id)}>
+                <button
+                  className="btn btn-danger btn-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    unregister(p.id);
+                  }}
+                >
                   注销
                 </button>
               </div>
