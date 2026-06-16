@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { logger } from '../../core/logger';
 
 export type LlmProvider = 'anthropic' | 'openai';
 
@@ -130,7 +131,10 @@ export class LlmClient {
         .map((c) => c.text)
         .join('')
         .trim();
-
+      logger.debug({ model: this.model, contentLength: text.length }, 'Anthropic 响应');
+      if (!text) {
+        throw new Error('响应内容为空');
+      }
       return text;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -171,6 +175,10 @@ export class LlmClient {
         choices?: Array<{ message?: { content?: string } }>;
       };
       const content = data.choices?.[0]?.message?.content ?? '';
+      logger.debug({ status: response.status, model: this.model, contentLength: content.length }, 'OpenAI 响应');
+      if (!content) {
+        throw new Error('响应内容为空');
+      }
       return String(content).trim();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
