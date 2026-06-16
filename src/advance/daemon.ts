@@ -10,6 +10,7 @@ import { LlmClient } from './llm/client';
 import { IpcServer } from './ipc/server';
 import { getIpcSocketPath } from './ipc/paths';
 import { handlers, type HandlerContext } from './ipc/handlers';
+import { logger } from '../core/logger';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -162,10 +163,14 @@ export class Daemon {
       projectRoot: project.rootPath,
       config,
       onEvent: (event: WatchedEvent) => {
+        logger.info({ projectId: project.id, type: event.type, filePath: event.filePath }, '文件事件入库');
         this.options.store.insertEvent({ ...event, projectId: project.id });
       },
       onReady: () => {
-        // watcher 已就绪
+        logger.info({ projectId: project.id, projectRoot: project.rootPath }, '项目文件监控已就绪');
+      },
+      onError: (err) => {
+        logger.warn({ projectId: project.id, err }, '文件监控错误');
       },
     });
     this.watchers.set(project.id, watcher);
