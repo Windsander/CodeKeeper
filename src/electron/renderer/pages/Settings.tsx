@@ -35,6 +35,16 @@ function stringifyHeaders(entries: HeaderEntry[]): string {
   return JSON.stringify(obj);
 }
 
+const SCAN_INTERVALS = [
+  { label: '每 1 分钟', cron: '*/1 * * * *' },
+  { label: '每 5 分钟', cron: '*/5 * * * *' },
+  { label: '每 15 分钟', cron: '*/15 * * * *' },
+  { label: '每 30 分钟', cron: '*/30 * * * *' },
+  { label: '每小时', cron: '0 * * * *' },
+  { label: '每天', cron: '0 9 * * *' },
+  { label: '自定义', cron: 'custom' },
+];
+
 export function Settings() {
   const { data, loading, refresh } = useIpc<DaemonConfig>('daemon.config');
   const [apiKey, setApiKey] = useState('');
@@ -43,11 +53,13 @@ export function Settings() {
   const [model, setModel] = useState('');
   const [headerEntries, setHeaderEntries] = useState<HeaderEntry[]>([{ key: '', value: '' }]);
   const [scanCron, setScanCron] = useState('*/5 * * * *');
+  const [customCron, setCustomCron] = useState('*/5 * * * *');
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (data) {
       setScanCron(data.scanCron);
+      setCustomCron(data.scanCron);
       setApiUrl(data.apiUrl ?? '');
       setProvider(data.provider ?? 'anthropic');
       setModel(data.model ?? '');
@@ -55,6 +67,22 @@ export function Settings() {
       setHeaderEntries(entries.length > 0 ? entries : [{ key: '', value: '' }]);
     }
   }, [data]);
+
+  const handleIntervalChange = (value: string) => {
+    if (value === 'custom') {
+      setScanCron(customCron);
+    } else {
+      setScanCron(value);
+      setCustomCron(value);
+    }
+  };
+
+  const handleCustomCronChange = (value: string) => {
+    setCustomCron(value);
+    setScanCron(value);
+  };
+
+  const isCustom = !SCAN_INTERVALS.some((i) => i.cron === scanCron && i.cron !== 'custom');
 
   const updateHeader = (index: number, field: keyof HeaderEntry, value: string) => {
     setHeaderEntries((prev) => {
@@ -178,13 +206,30 @@ export function Settings() {
         </div>
 
         <div className="form-group">
-          <label>扫描间隔 (cron)</label>
-          <input
+          <label>扫描间隔</label>
+          <select
             className="input"
-            value={scanCron}
-            placeholder="*/5 * * * *"
-            onChange={(e) => setScanCron(e.target.value)}
-          />
+            value={isCustom ? 'custom' : scanCron}
+            onChange={(e) => handleIntervalChange(e.target.value)}
+          >
+            {SCAN_INTERVALS.map((item) => (
+              <option key={item.cron} value={item.cron}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+          {isCustom && (
+            <input
+              className="input"
+              style={{ marginTop: 8 }}
+              value={customCron}
+              placeholder="*/5 * * * *"
+              onChange={(e) => handleCustomCronChange(e.target.value)}
+            />
+          )}
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            当前 cron: {scanCron}
+          </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
