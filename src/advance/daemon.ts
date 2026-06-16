@@ -55,6 +55,14 @@ export class Daemon {
         maxEvents: this.options.maxEventsPerScan ?? 50,
       }),
       updateDaemonConfig: (config) => this.updateConfig(config),
+      getDaemonConfig: () => ({
+        apiKeyConfigured: this.options.apiKey ? true : false,
+        apiUrl: this.options.apiUrl ?? '',
+        provider: this.options.provider ?? 'anthropic',
+        model: this.options.model ?? '',
+        headers: this.options.headers ? JSON.stringify(this.options.headers) : '',
+        scanCron: this.options.scanCron ?? '*/5 * * * *',
+      }),
       watchProject: (project) => this.watchProject(project),
       unwatchProject: (projectId) => this.unwatchProject(projectId),
     };

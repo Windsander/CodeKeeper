@@ -23,6 +23,14 @@ export interface HandlerContext {
     headers?: Record<string, string>;
     scanCron?: string;
   }) => void;
+  getDaemonConfig?: () => {
+    apiKeyConfigured: boolean;
+    apiUrl: string;
+    provider: string;
+    model: string;
+    headers: string;
+    scanCron: string;
+  };
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
 }
@@ -124,8 +132,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'daemon.config': async (ctx) => {
-    return {
-      apiKeyConfigured: ctx.getClient() !== null,
+    return ctx.getDaemonConfig?.() ?? {
+      apiKeyConfigured: false,
       apiUrl: '',
       provider: 'anthropic',
       model: '',
