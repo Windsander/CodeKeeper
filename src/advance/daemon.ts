@@ -63,7 +63,7 @@ export class Daemon {
             model: this.options.model,
             headers: this.options.headers,
           }),
-          maxEvents: this.options.maxEventsPerScan ?? 50,
+          maxEvents: this.options.maxEventsPerScan ?? 10,
         }),
       updateDaemonConfig: (config) => this.updateConfig(config),
       getDaemonConfig: () => ({
@@ -210,7 +210,7 @@ export class Daemon {
     const pipeline = new ArchivePipeline({
       store: this.options.store,
       client,
-      maxEvents: this.options.maxEventsPerScan ?? 50,
+      maxEvents: this.options.maxEventsPerScan ?? 10,
     });
 
     // 2. 处理所有 pending 事件（包括实时监控和全量扫描产生的）

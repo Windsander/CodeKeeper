@@ -17,6 +17,8 @@ export interface LlmClientOptions {
   maxTokens?: number;
   /** mock 模式配置，用于测试；responses 支持按调用顺序返回不同结果 */
   mock?: { response?: string; responses?: string[]; error?: Error };
+  /** 两次 LLM 请求之间的最小间隔（毫秒），默认 1000ms */
+  minRequestInterval?: number;
 }
 
 /**
@@ -32,6 +34,8 @@ export class LlmClient {
   private maxTokens: number;
   private mock?: LlmClientOptions['mock'];
   private mockCallIndex = 0;
+  private minRequestInterval: number;
+  private lastRequestTime = 0;
 
   constructor(options: LlmClientOptions) {
     this.apiKey = options.apiKey;
@@ -41,6 +45,7 @@ export class LlmClient {
     this.headers = options.headers ?? {};
     this.maxTokens = options.maxTokens ?? 1024;
     this.mock = options.mock;
+    this.minRequestInterval = options.minRequestInterval ?? 1000;
     if (!this.mock && this.provider === 'anthropic') {
       this.anthropic = new Anthropic({ apiKey: options.apiKey, baseURL: options.baseURL });
     }
@@ -65,6 +70,7 @@ export class LlmClient {
     const maxRetries = 3;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
+        await this.respectRateLimit();
         if (this.provider === 'openai') {
           return await this.completeOpenAI(prompt, system);
         }
@@ -75,11 +81,20 @@ export class LlmClient {
         if (!isRateLimit || attempt === maxRetries) {
           throw new Error(`[LlmClient:${this.provider}] ${message}`);
         }
-        const delay = Math.min(1000 * 2 ** attempt, 8000);
+        const delay = Math.min(2000 * 2 ** attempt, 30000);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
     throw new Error(`[LlmClient:${this.provider}] 重试后仍失败`);
+  }
+
+  private async respectRateLimit(): Promise<void> {
+    const now = Date.now();
+    const elapsed = now - this.lastRequestTime;
+    if (elapsed < this.minRequestInterval) {
+      await new Promise((resolve) => setTimeout(resolve, this.minRequestInterval - elapsed));
+    }
+    this.lastRequestTime = Date.now();
   }
 
   private inferProvider(baseURL?: string): LlmProvider {
