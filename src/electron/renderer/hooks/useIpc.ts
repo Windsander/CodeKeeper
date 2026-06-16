@@ -6,6 +6,9 @@ export function useIpc<T>(method: string, params?: unknown) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // 用 JSON 序列化稳定 params 引用，避免对象字面量导致无限重试
+  const paramsKey = JSON.stringify(params);
+
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -13,7 +16,7 @@ export function useIpc<T>(method: string, params?: unknown) {
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [method, params]);
+  }, [method, paramsKey]);
 
   useEffect(() => {
     refresh();

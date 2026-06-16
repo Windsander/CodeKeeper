@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, Menu } from 'electron';
 import { join } from 'node:path';
 
 export function createMainWindow(): BrowserWindow {
@@ -11,6 +11,12 @@ export function createMainWindow(): BrowserWindow {
       nodeIntegration: false,
     },
   });
+
+  // 隐藏默认菜单栏（保留 Alt 键显示）
+  win.setMenu(null);
+  if (process.platform === 'darwin') {
+    Menu.setApplicationMenu(null);
+  }
 
   if (process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL);
