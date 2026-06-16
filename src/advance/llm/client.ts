@@ -176,13 +176,82 @@ export class LlmClient {
       };
       const content = data.choices?.[0]?.message?.content ?? '';
       logger.debug({ status: response.status, model: this.model, contentLength: content.length }, 'OpenAI 响应');
-      if (!content) {
-        throw new Error('响应内容为空');
+
+      if (content) {
+        return String(content).trim();
       }
-      return String(content).trim();
+
+      // 非流式响应内容为空时，尝试流式请求（部分服务商只支持流式输出）
+      logger.info('非流式响应为空，尝试 SSE 流式请求');
+      return await this.completeOpenAIStream(messages);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`[LlmClient:openai] ${message}`);
     }
+  }
+
+  private async completeOpenAIStream(messages: Array<{ role: string; content: string }>): Promise<string> {
+    const url = this.baseURL ?? 'https://api.openai.com/v1/chat/completions';
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+        ...this.headers,
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        max_tokens: this.maxTokens,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`HTTP ${response.status}: ${text}`);
+    }
+
+    if (!response.body) {
+      throw new Error('流式响应体为空');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let content = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const data = trimmed.slice(5).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const chunk = JSON.parse(data) as {
+            choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
+          };
+          const delta = chunk.choices?.[0]?.delta?.content;
+          if (delta) {
+            content += delta;
+          }
+        } catch {
+          // 忽略无法解析的 SSE 行
+        }
+      }
+    }
+
+    logger.debug({ model: this.model, contentLength: content.length }, 'OpenAI 流式响应');
+    if (!content) {
+      throw new Error('流式响应内容为空');
+    }
+    return content.trim();
   }
 }
