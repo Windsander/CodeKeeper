@@ -1,10 +1,16 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
 import { LogViewer } from '../components/LogViewer';
 
 export function Logs() {
   const [lines, setLines] = useState(100);
   const { data, loading, refresh } = useIpc<{ lines: string[] }>('daemon.logs', { lines });
+
+  // 每 2 秒自动刷新一次日志
+  useEffect(() => {
+    const id = setInterval(refresh, 2000);
+    return () => clearInterval(id);
+  }, [refresh]);
 
   return (
     <div>

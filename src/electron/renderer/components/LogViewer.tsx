@@ -1,4 +1,12 @@
+import { useEffect, useRef } from 'react';
+
 export function LogViewer({ lines }: { lines: string[] }) {
+  const bottomRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [lines]);
+
   if (lines.length === 0) {
     return (
       <div className="empty-state">
@@ -8,5 +16,10 @@ export function LogViewer({ lines }: { lines: string[] }) {
     );
   }
 
-  return <pre className="log-viewer">{lines.join('\n')}</pre>;
+  return (
+    <pre className="log-viewer">
+      {lines.join('\n')}
+      <span ref={bottomRef} style={{ display: 'block', height: 1 }} />
+    </pre>
+  );
 }
