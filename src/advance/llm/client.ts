@@ -45,7 +45,7 @@ export class LlmClient {
     this.headers = options.headers ?? {};
     this.maxTokens = options.maxTokens ?? 1024;
     this.mock = options.mock;
-    this.minRequestInterval = options.minRequestInterval ?? 1000;
+    this.minRequestInterval = options.minRequestInterval ?? 6000;
     if (!this.mock && this.provider === 'anthropic') {
       this.anthropic = new Anthropic({ apiKey: options.apiKey, baseURL: options.baseURL });
     }
@@ -67,7 +67,7 @@ export class LlmClient {
       return this.mock.response ?? '';
     }
 
-    const maxRetries = 3;
+    const maxRetries = 5;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         await this.respectRateLimit();
@@ -79,9 +79,11 @@ export class LlmClient {
         const message = error instanceof Error ? error.message : String(error);
         const isRateLimit = message.includes('429') || message.includes('Too many requests');
         if (!isRateLimit || attempt === maxRetries) {
-          throw new Error(`[LlmClient:${this.provider}] ${message}`);
+          const prefix = `[LlmClient:${this.provider}]`;
+          const cleanMessage = message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+          throw new Error(`${prefix} ${cleanMessage}`);
         }
-        const delay = Math.min(2000 * 2 ** attempt, 30000);
+        const delay = Math.min(2000 * 2 ** attempt, 60000);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
