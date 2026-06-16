@@ -58,9 +58,17 @@ ${contentSnippet}
 }
 
 export function parseSuggestResponse(text: string) {
+  // 先尝试从 markdown 代码块或文本中提取第一个 JSON 对象
+  const cleaned = text
+    .replace(/```json\s*/gi, '')
+    .replace(/\s*```/g, '')
+    .trim();
+
+  const match = cleaned.match(/\{[\s\S]*?\}/);
+  if (!match) return null;
+
   try {
-    const json = text.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-    const parsed = JSON.parse(json);
+    const parsed = JSON.parse(match[0]);
     if (
       ['move', 'merge', 'create', 'ignore', 'flag'].includes(parsed.type) &&
       typeof parsed.reason === 'string' &&

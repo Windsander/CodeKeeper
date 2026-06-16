@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { LlmClient } from '../llm/client';
 import { buildSuggestPrompt, parseSuggestResponse } from '../llm/prompts/suggest-prompt';
 import type { ArchiveAction, ClassificationResult } from '../types';
+import { logger } from '../../core/logger';
 
 export interface SuggestContext {
   dedupRelation?: 'duplicate' | 'conflict' | 'related' | 'unrelated';
@@ -43,6 +44,8 @@ export class SuggestionEngine {
         createdAt: Date.now(),
       };
     }
+
+    logger.warn({ filePath, response: text.slice(0, 500) }, 'LLM 建议解析失败');
 
     // 解析失败时回退为人工 review
     return {
