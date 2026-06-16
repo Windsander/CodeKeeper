@@ -125,7 +125,6 @@ export function Settings() {
 
     await window.electronAPI.invoke('daemon.config.update', payload);
     setSaved(true);
-    setApiKey('');
     refresh();
   };
 
