@@ -15,6 +15,14 @@ export interface DaemonOptions {
   store: MetadataStore;
   /** LLM API Key */
   apiKey?: string;
+  /** 自定义 LLM API Base URL */
+  apiUrl?: string;
+  /** LLM 服务提供商 */
+  provider?: 'anthropic' | 'openai';
+  /** LLM 模型名称 */
+  model?: string;
+  /** 自定义 LLM 请求头（JSON 对象） */
+  headers?: Record<string, string>;
   /** 全量扫描的 cron 表达式，默认每 5 分钟 */
   scanCron?: string;
   /** 每次扫描最多处理事件数 */
@@ -29,13 +37,21 @@ export class Daemon {
   private handlerContext: HandlerContext;
 
   constructor(private options: DaemonOptions) {
+    const llmOptions = {
+      apiKey: this.options.apiKey ?? '',
+      baseURL: this.options.apiUrl,
+      provider: this.options.provider,
+      model: this.options.model,
+      headers: this.options.headers,
+    };
+
     this.handlerContext = {
       store: options.store,
       registry: options.registry,
-      getClient: () => (this.options.apiKey ? new LlmClient({ apiKey: this.options.apiKey }) : null),
+      getClient: () => (this.options.apiKey ? new LlmClient(llmOptions) : null),
       getPipeline: () => new ArchivePipeline({
         store: this.options.store,
-        client: new LlmClient({ apiKey: this.options.apiKey ?? '' }),
+        client: new LlmClient(llmOptions),
         maxEvents: this.options.maxEventsPerScan ?? 50,
       }),
       updateDaemonConfig: (config) => this.updateConfig(config),
@@ -80,9 +96,21 @@ export class Daemon {
     return this.running;
   }
 
-  updateConfig(config: { apiKey?: string; scanCron?: string }): void {
+  updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string }): void {
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
+    }
+    if (config.apiUrl !== undefined) {
+      this.options.apiUrl = config.apiUrl;
+    }
+    if (config.provider !== undefined) {
+      this.options.provider = config.provider;
+    }
+    if (config.model !== undefined) {
+      this.options.model = config.model;
+    }
+    if (config.headers !== undefined) {
+      this.options.headers = config.headers;
     }
     if (config.scanCron !== undefined) {
       this.options.scanCron = config.scanCron;
@@ -128,7 +156,13 @@ export class Daemon {
       return;
     }
 
-    const client = new LlmClient({ apiKey });
+    const client = new LlmClient({
+      apiKey,
+      baseURL: this.options.apiUrl,
+      provider: this.options.provider,
+      model: this.options.model,
+      headers: this.options.headers,
+    });
     const pipeline = new ArchivePipeline({
       store: this.options.store,
       client,

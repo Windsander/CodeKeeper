@@ -1,10 +1,18 @@
 import Anthropic from '@anthropic-ai/sdk';
 
+export type LlmProvider = 'anthropic' | 'openai';
+
 export interface LlmClientOptions {
-  /** API Key；mock 模式下可为任意字符串 */
+  /** API Key */
   apiKey: string;
+  /** 服务提供商：anthropic 或 openai 兼容 */
+  provider?: LlmProvider;
+  /** 自定义 API Base URL */
+  baseURL?: string;
   /** 模型名称 */
   model?: string;
+  /** 自定义请求头（JSON 对象） */
+  headers?: Record<string, string>;
   /** 最大 token */
   maxTokens?: number;
   /** mock 模式配置，用于测试；responses 支持按调用顺序返回不同结果 */
@@ -12,21 +20,29 @@ export interface LlmClientOptions {
 }
 
 /**
- * LLM 调用封装，支持真实 Anthropic API 与 mock 模式
+ * LLM 调用封装，支持 Anthropic API 与 OpenAI 兼容 API
  */
 export class LlmClient {
+  private apiKey: string;
   private anthropic?: Anthropic;
+  private provider: LlmProvider;
+  private baseURL?: string;
   private model: string;
+  private headers: Record<string, string>;
   private maxTokens: number;
   private mock?: LlmClientOptions['mock'];
   private mockCallIndex = 0;
 
   constructor(options: LlmClientOptions) {
-    this.model = options.model ?? 'claude-3-5-sonnet-20241022';
+    this.apiKey = options.apiKey;
+    this.provider = options.provider ?? this.inferProvider(options.baseURL);
+    this.baseURL = options.baseURL;
+    this.model = options.model ?? this.defaultModel();
+    this.headers = options.headers ?? {};
     this.maxTokens = options.maxTokens ?? 1024;
     this.mock = options.mock;
-    if (!this.mock) {
-      this.anthropic = new Anthropic({ apiKey: options.apiKey });
+    if (!this.mock && this.provider === 'anthropic') {
+      this.anthropic = new Anthropic({ apiKey: options.apiKey, baseURL: options.baseURL });
     }
   }
 
@@ -46,8 +62,29 @@ export class LlmClient {
       return this.mock.response ?? '';
     }
 
+    if (this.provider === 'openai') {
+      return this.completeOpenAI(prompt, system);
+    }
+
+    return this.completeAnthropic(prompt, system);
+  }
+
+  private inferProvider(baseURL?: string): LlmProvider {
+    if (baseURL && baseURL.includes('/chat/completions')) {
+      return 'openai';
+    }
+    return 'anthropic';
+  }
+
+  private defaultModel(): string {
+    return this.provider === 'openai'
+      ? 'gpt-4o-mini'
+      : 'claude-3-5-sonnet-20241022';
+  }
+
+  private async completeAnthropic(prompt: string, system?: string): Promise<string> {
     if (!this.anthropic) {
-      throw new Error('LLM client 未初始化');
+      throw new Error('Anthropic client 未初始化');
     }
 
     try {
@@ -67,7 +104,47 @@ export class LlmClient {
       return text;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`[LlmClient] ${message}`);
+      throw new Error(`[LlmClient:anthropic] ${message}`);
+    }
+  }
+
+  private async completeOpenAI(prompt: string, system?: string): Promise<string> {
+    const url = this.baseURL ?? 'https://api.openai.com/v1/chat/completions';
+    const messages: Array<{ role: string; content: string }> = [];
+    if (system) {
+      messages.push({ role: 'system', content: system });
+    }
+    messages.push({ role: 'user', content: prompt });
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          ...this.headers,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages,
+          max_tokens: this.maxTokens,
+          stream: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status}: ${text}`);
+      }
+
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+      const content = data.choices?.[0]?.message?.content ?? '';
+      return String(content).trim();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`[LlmClient:openai] ${message}`);
     }
   }
 }

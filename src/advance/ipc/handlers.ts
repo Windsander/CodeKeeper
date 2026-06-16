@@ -116,6 +116,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'daemon.config': async (ctx) => {
     return {
       apiKeyConfigured: ctx.getClient() !== null,
+      apiUrl: '',
+      provider: 'anthropic',
+      model: '',
+      headers: '',
       scanCron: '*/5 * * * *',
     };
   },
@@ -131,7 +135,35 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'daemon.config.update': async (ctx, params) => {
-    ctx.updateDaemonConfig?.(params);
+    const config: {
+      apiKey?: string;
+      apiUrl?: string;
+      provider?: 'anthropic' | 'openai';
+      model?: string;
+      headers?: Record<string, string>;
+      scanCron?: string;
+    } = {};
+
+    if (params.apiKey !== undefined) config.apiKey = params.apiKey || undefined;
+    if (params.apiUrl !== undefined) config.apiUrl = params.apiUrl || undefined;
+    if (params.scanCron !== undefined) config.scanCron = params.scanCron;
+    if (params.model !== undefined) config.model = params.model || undefined;
+
+    if (params.provider === 'anthropic' || params.provider === 'openai') {
+      config.provider = params.provider;
+    }
+
+    if (params.headers) {
+      try {
+        config.headers = JSON.parse(params.headers);
+      } catch {
+        throw new Error('自定义 Headers 不是合法 JSON');
+      }
+    } else if (params.headers === '') {
+      config.headers = {};
+    }
+
+    ctx.updateDaemonConfig?.(config);
     return { success: true };
   },
 };
