@@ -11,12 +11,14 @@ describe('ArchivePipeline', () => {
   let tmp: string;
   let dbPath: string;
   let projectRoot: string;
+  let archiveRoot: string;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'cka-pipe-'));
     dbPath = join(tmp, 'metadata.db');
     projectRoot = join(tmp, 'project');
-    mkdirSync(join(projectRoot, '.codekeeper'), { recursive: true });
+    archiveRoot = join(tmp, 'archive');
+    mkdirSync(archiveRoot, { recursive: true });
   });
 
   afterEach(() => {
@@ -28,6 +30,7 @@ describe('ArchivePipeline', () => {
     const project: Project = {
       id: 'p1',
       rootPath: projectRoot,
+      archiveRoot,
       name: '测试',
       registeredAt: 1,
       lastScannedAt: null,
@@ -46,11 +49,12 @@ describe('ArchivePipeline', () => {
       confidence: 0.9,
     });
     const suggestResponse = JSON.stringify({
-      type: 'move',
-      reason: '归档到 docs',
-      targetPath: join(projectRoot, 'docs', 'memory-spec.md'),
+      type: 'copy',
+      rationale: '归档到 docs',
+      targetPath: join(archiveRoot, 'memory', 'spec', '2024-01', 'note.md'),
       risk: 'low',
       confidence: 0.9,
+      needsReview: false,
     });
 
     const client = new LlmClient({
@@ -63,17 +67,17 @@ describe('ArchivePipeline', () => {
     const pipeline = new ArchivePipeline({ store, client });
     await pipeline.run(project);
 
-    // move 动作应已执行
-    expect(existsSync(filePath)).toBe(false);
-    expect(existsSync(join(projectRoot, 'docs', 'memory-spec.md'))).toBe(true);
+    // copy 动作应保留原文件
+    expect(existsSync(filePath)).toBe(true);
+    expect(existsSync(join(archiveRoot, 'memory', 'spec', '2024-01', 'note.md'))).toBe(true);
 
     // status.json 应已生成
-    const status = JSON.parse(readFileSync(join(projectRoot, '.codekeeper', 'status.json'), 'utf-8'));
+    const status = JSON.parse(readFileSync(join(archiveRoot, 'status.json'), 'utf-8'));
     expect(status.projectId).toBe('p1');
     expect(status.archivedCount).toBe(1);
 
     // context.md 应已生成
-    const context = readFileSync(join(projectRoot, '.codekeeper', 'context.md'), 'utf-8');
+    const context = readFileSync(join(archiveRoot, 'context.md'), 'utf-8');
     expect(context).toContain('memory');
 
     store.close();
@@ -84,6 +88,7 @@ describe('ArchivePipeline', () => {
     const project: Project = {
       id: 'p1',
       rootPath: projectRoot,
+      archiveRoot,
       name: '测试',
       registeredAt: 1,
       lastScannedAt: null,
@@ -97,7 +102,6 @@ describe('ArchivePipeline', () => {
     store.insertEvent({ projectId: project.id, type: 'add', filePath: failPath, timestamp: Date.now() });
     store.insertEvent({ projectId: project.id, type: 'add', filePath: okPath, timestamp: Date.now() + 1 });
 
-    // 第一个事件 classify 抛异常，第二个事件 classify + suggest 正常
     const classifyOkResponse = JSON.stringify({
       category: 'sync',
       docType: 'spec',
@@ -106,14 +110,14 @@ describe('ArchivePipeline', () => {
       confidence: 0.9,
     });
     const suggestOkResponse = JSON.stringify({
-      type: 'move',
-      reason: '归档到 docs',
-      targetPath: join(projectRoot, 'docs', 'sync-spec.md'),
+      type: 'copy',
+      rationale: '归档',
+      targetPath: join(archiveRoot, 'sync', 'spec', '2024-01', 'ok.md'),
       risk: 'low',
       confidence: 0.9,
+      needsReview: false,
     });
 
-    // 使用自定义 LlmClient 子类：第一次调用抛异常，后续正常
     let callCount = 0;
     const client = new LlmClient({
       apiKey: 'x',
@@ -137,7 +141,7 @@ describe('ArchivePipeline', () => {
     await pipeline.run(project);
 
     // 第二个事件应成功归档
-    expect(existsSync(join(projectRoot, 'docs', 'sync-spec.md'))).toBe(true);
+    expect(existsSync(join(archiveRoot, 'sync', 'spec', '2024-01', 'ok.md'))).toBe(true);
 
     // 失败事件仍应留在 watch_events 中
     const pendingEvents = store.listPendingEvents();
@@ -152,6 +156,7 @@ describe('ArchivePipeline', () => {
     const project: Project = {
       id: 'p1',
       rootPath: projectRoot,
+      archiveRoot,
       name: '测试',
       registeredAt: 1,
       lastScannedAt: null,
@@ -170,11 +175,12 @@ describe('ArchivePipeline', () => {
       confidence: 0.9,
     });
     const suggestResponse = JSON.stringify({
-      type: 'move',
-      reason: '归档到 docs',
-      targetPath: join(projectRoot, 'docs', 'memory-spec.md'),
+      type: 'copy',
+      rationale: '归档到 docs',
+      targetPath: join(archiveRoot, 'memory', 'spec', '2024-01', 'note.md'),
       risk: 'low',
       confidence: 0.9,
+      needsReview: false,
     });
 
     const client = new LlmClient({
@@ -187,7 +193,7 @@ describe('ArchivePipeline', () => {
     const pipeline = new ArchivePipeline({ store, client });
     await pipeline.run(project);
 
-    expect(existsSync(join(projectRoot, '.codekeeper', 'suggestions.md'))).toBe(true);
+    expect(existsSync(join(archiveRoot, 'suggestions.md'))).toBe(true);
 
     store.close();
   });

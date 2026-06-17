@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 
 export interface ContextEntry {
   filePath: string;
+  archivePath?: string;
   category: string;
   docType: string;
   summary: string;
@@ -10,7 +11,7 @@ export interface ContextEntry {
   /** 分节摘要 */
   sections?: Array<{ heading: string; summary: string; confidence: number }>;
   /** 条目状态 */
-  status?: 'pending' | 'archived' | 'ignored';
+  status?: 'pending' | 'archived' | 'ignored' | 'orphaned';
   /** 更新时间戳 */
   updatedAt?: number;
 }
@@ -36,16 +37,18 @@ export function generateContext(options: ContextGeneratorOptions): void {
     byCategory.set(entry.category, list);
   }
 
-  // 稳定排序：category 按字母序，条目按 filePath 字母序
+  // 稳定排序：category 按字母序，条目按 archivePath / filePath 字母序
   const sortedCategories = Array.from(byCategory.entries()).sort(([a], [b]) => a.localeCompare(b));
   for (const [, items] of sortedCategories) {
-    items.sort((a, b) => a.filePath.localeCompare(b.filePath));
+    items.sort((a, b) => (a.archivePath ?? a.filePath).localeCompare(b.archivePath ?? b.filePath));
   }
 
   const lines: string[] = [
     `# ${options.projectName} 知识上下文`,
     '',
     `> 自动生成于 ${new Date().toISOString()}`,
+    `> 原始文件位置：${options.projectRoot}`,
+    `> 归档位置：${options.archiveRoot}`,
     '',
   ];
 
@@ -64,9 +67,11 @@ export function generateContext(options: ContextGeneratorOptions): void {
       lines.push(`## ${category}`);
       lines.push('');
       for (const item of items) {
-        const relPath = relative(options.projectRoot, item.filePath).replace(/\\/g, '/');
+        const linkPath = item.archivePath
+          ? relative(options.archiveRoot, item.archivePath).replace(/\\/g, '/')
+          : relative(options.projectRoot, item.filePath).replace(/\\/g, '/');
         const statusBadge = item.status ? ` (${statusLabel(item.status)})` : '';
-        lines.push(`- **${item.docType}** [${relPath}](${encodePath(relPath)})${statusBadge} — ${item.summary}`);
+        lines.push(`- **${item.docType}** [${linkPath}](${encodePath(linkPath)})${statusBadge} — ${item.summary}`);
         if (item.tags.length > 0) {
           lines.push(`  - 标签：${item.tags.join(', ')}`);
         }
@@ -95,7 +100,7 @@ function encodePath(filePath: string): string {
   return filePath.split('/').map(encodeURIComponent).join('/');
 }
 
-function statusLabel(status: 'pending' | 'archived' | 'ignored'): string {
-  const map = { pending: '待处理', archived: '已归档', ignored: '已忽略' };
+function statusLabel(status: 'pending' | 'archived' | 'ignored' | 'orphaned'): string {
+  const map = { pending: '待处理', archived: '已归档', ignored: '已忽略', orphaned: '已孤儿' };
   return map[status];
 }

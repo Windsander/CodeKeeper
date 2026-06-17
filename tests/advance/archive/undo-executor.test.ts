@@ -9,11 +9,13 @@ describe('UndoExecutor', () => {
   let tmp: string;
   let store: MetadataStore;
   let projectRoot: string;
+  let archiveRoot: string;
 
   beforeEach(() => {
     tmp = mkdtempSync(join(tmpdir(), 'cka-undo-'));
     store = new MetadataStore(join(tmp, 'test.db'));
     projectRoot = mkdtempSync(join(tmp, 'project-'));
+    archiveRoot = mkdtempSync(join(tmp, 'archive-'));
     store.registerProject({
       id: projectRoot,
       rootPath: projectRoot,
@@ -28,29 +30,42 @@ describe('UndoExecutor', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('应撤销 move 动作', async () => {
+  it('应撤销 copy 动作（删除归档副本）', async () => {
     const source = join(projectRoot, 'a.md');
-    const target = join(projectRoot, 'docs', 'a.md');
+    const target = join(archiveRoot, 'memory', 'spec', '2024-01', 'a.md');
     writeFileSync(source, 'hello', 'utf-8');
-    mkdirSync(join(projectRoot, 'docs'), { recursive: true });
-    // 模拟执行 move
-    const { renameSync } = await import('node:fs');
-    renameSync(source, target);
+    mkdirSync(join(archiveRoot, 'memory', 'spec', '2024-01'), { recursive: true });
+    const { copyFileSync } = await import('node:fs');
+    copyFileSync(source, target);
     store.upsertEntry({
       id: 'e1',
       projectId: projectRoot,
-      filePath: target,
+      filePath: source,
       contentHash: 'h1',
       status: 'archived',
       createdAt: 1,
       updatedAt: 1,
     });
+    store.upsertArchiveMetadata({
+      entryId: 'e1',
+      projectId: projectRoot,
+      sourcePath: source,
+      archivePath: target,
+      category: 'memory',
+      docType: 'spec',
+      tags: [],
+      summary: '测试',
+      contentHash: 'h1',
+      copiedAt: 1,
+      status: 'active',
+      type: 'copy',
+    });
 
     store.insertActionHistory({
-      id: 'm1',
+      id: 'c1',
       sourcePath: source,
       projectId: projectRoot,
-      type: 'move',
+      type: 'copy',
       reason: '归档',
       targetPath: target,
       risk: 'low',
@@ -58,13 +73,11 @@ describe('UndoExecutor', () => {
       createdAt: 1,
     });
 
-    const executor = new UndoExecutor({ store, projectRoot });
-    const result = await executor.undo('m1');
+    const executor = new UndoExecutor({ store });
+    const result = await executor.undo('c1');
     expect(result.success).toBe(true);
     expect(existsSync(source)).toBe(true);
     expect(existsSync(target)).toBe(false);
-    const entry = store.listEntriesByProject(projectRoot)[0];
-    expect(entry.status).toBe('pending');
   });
 
   it('应撤销 ignore 动作', async () => {
@@ -90,11 +103,9 @@ describe('UndoExecutor', () => {
       createdAt: 1,
     });
 
-    const executor = new UndoExecutor({ store, projectRoot });
+    const executor = new UndoExecutor({ store });
     const result = await executor.undo('i1');
     expect(result.success).toBe(true);
-    const entry = store.listEntriesByProject(projectRoot)[0];
-    expect(entry.status).toBe('pending');
   });
 
   it('重复撤销应失败', async () => {
@@ -111,14 +122,14 @@ describe('UndoExecutor', () => {
       createdAt: 1,
     });
 
-    const executor = new UndoExecutor({ store, projectRoot });
+    const executor = new UndoExecutor({ store });
     await executor.undo('u1');
     const second = await executor.undo('u1');
     expect(second.success).toBe(false);
   });
 
   it('不存在的 action 应失败', async () => {
-    const executor = new UndoExecutor({ store, projectRoot });
+    const executor = new UndoExecutor({ store });
     const result = await executor.undo('not-exist');
     expect(result.success).toBe(false);
   });

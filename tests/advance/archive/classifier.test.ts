@@ -1,8 +1,27 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DocumentClassifier } from '../../../src/advance/archive/classifier';
 import { LlmClient } from '../../../src/advance/llm/client';
 
 describe('DocumentClassifier', () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'cka-cls-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function makeFile(name: string, content: string): string {
+    const path = join(tmp, name);
+    writeFileSync(path, content, 'utf-8');
+    return path;
+  }
+
   it('应解析 mock LLM 返回的 JSON 分类结果', async () => {
     const response = JSON.stringify({
       category: 'memory',
@@ -13,8 +32,12 @@ describe('DocumentClassifier', () => {
       confidence: 0.92,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
-    const classifier = new DocumentClassifier(client, { categories: ['memory', 'sync', 'skill'] });
-    const result = await classifier.classify('/a.md', '# 记忆模块 schema\n...');
+    const classifier = new DocumentClassifier(client, {
+      categories: ['memory', 'sync', 'skill'],
+      heuristicThreshold: 1.1, // 强制走 LLM
+    });
+    const filePath = makeFile('a.md', '# 记忆模块 schema\n...');
+    const result = await classifier.classify(filePath, '# 记忆模块 schema\n...');
     expect(result.category).toBe('memory');
     expect(result.docType).toBe('spec');
     expect(result.confidence).toBe(0.92);
@@ -34,8 +57,9 @@ describe('DocumentClassifier', () => {
       confidence: 0.88,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
-    const classifier = new DocumentClassifier(client);
-    const result = await classifier.classify('/auth.md', '# 认证设计\n...');
+    const classifier = new DocumentClassifier(client, { heuristicThreshold: 1.1 });
+    const filePath = makeFile('auth.md', '# 认证设计\n...');
+    const result = await classifier.classify(filePath, '# 认证设计\n...');
     expect(result.sections).toHaveLength(2);
     expect(result.sections[0].heading).toBe('背景');
     expect(result.sections[1].confidence).toBe(1);
@@ -50,15 +74,20 @@ describe('DocumentClassifier', () => {
       confidence: 0.8,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
-    const classifier = new DocumentClassifier(client);
-    const result = await classifier.classify('/x.md', '内容');
+    const classifier = new DocumentClassifier(client, { heuristicThreshold: 1.1 });
+    const filePath = makeFile('x.md', '内容');
+    const result = await classifier.classify(filePath, '内容');
     expect(result.sections).toEqual([]);
   });
 
   it('LLM 返回无效 JSON 时应使用 fallback', async () => {
     const client = new LlmClient({ apiKey: 'x', mock: { response: '不是 JSON' } });
-    const classifier = new DocumentClassifier(client, { categories: ['memory', 'sync'] });
-    const result = await classifier.classify('/x.md', '内容');
+    const classifier = new DocumentClassifier(client, {
+      categories: ['memory', 'sync'],
+      heuristicThreshold: 1.1,
+    });
+    const filePath = makeFile('x.md', '内容');
+    const result = await classifier.classify(filePath, '内容');
     expect(result.category).toBe('other');
     expect(result.confidence).toBeLessThan(1);
   });
@@ -73,8 +102,12 @@ describe('DocumentClassifier', () => {
       confidence: 0.8,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
-    const classifier = new DocumentClassifier(client, { categories: ['memory', 'sync', 'skill'] });
-    const result = await classifier.classify('/x.md', '内容');
+    const classifier = new DocumentClassifier(client, {
+      categories: ['memory', 'sync', 'skill'],
+      heuristicThreshold: 1.1,
+    });
+    const filePath = makeFile('x.md', '内容');
+    const result = await classifier.classify(filePath, '内容');
     expect(result.category).toBe('other');
   });
 
@@ -91,8 +124,10 @@ describe('DocumentClassifier', () => {
     const classifier = new DocumentClassifier(client, {
       categories: ['memory'],
       docTypes: ['spec', 'weekly'],
+      heuristicThreshold: 1.1,
     });
-    const result = await classifier.classify('/x.md', '内容');
+    const filePath = makeFile('x.md', '内容');
+    const result = await classifier.classify(filePath, '内容');
     expect(result.docType).toBe('other');
   });
 
@@ -106,8 +141,12 @@ describe('DocumentClassifier', () => {
       confidence: 1.5,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
-    const classifier = new DocumentClassifier(client, { categories: ['memory', 'sync'] });
-    const result = await classifier.classify('/x.md', '内容');
+    const classifier = new DocumentClassifier(client, {
+      categories: ['memory', 'sync'],
+      heuristicThreshold: 1.1,
+    });
+    const filePath = makeFile('x.md', '内容');
+    const result = await classifier.classify(filePath, '内容');
     expect(result.confidence).toBe(1);
   });
 
@@ -121,8 +160,9 @@ describe('DocumentClassifier', () => {
       confidence: 0.8,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
-    const classifier = new DocumentClassifier(client);
-    const result = await classifier.classify('/x.md', '内容');
+    const classifier = new DocumentClassifier(client, { heuristicThreshold: 1.1 });
+    const filePath = makeFile('x.md', '内容');
+    const result = await classifier.classify(filePath, '内容');
     expect(result.category).toBe('memory');
   });
 
@@ -136,8 +176,18 @@ describe('DocumentClassifier', () => {
       confidence: 0.8,
     });
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
+    const classifier = new DocumentClassifier(client, { heuristicThreshold: 1.1 });
+    const filePath = makeFile('x.md', '内容');
+    const result = await classifier.classify(filePath, '内容');
+    expect(result.docType).toBe('weekly');
+  });
+
+  it('启发置信度足够高时应跳过 LLM', async () => {
+    const client = new LlmClient({ apiKey: 'x', mock: { response: '不是 JSON' } });
     const classifier = new DocumentClassifier(client);
-    const result = await classifier.classify('/x.md', '内容');
+    const filePath = makeFile('weekly-2024-01.md', '# 周报');
+    const result = await classifier.classify(filePath, '# 周报');
+    expect(result.category).toBe('weekly');
     expect(result.docType).toBe('weekly');
   });
 });

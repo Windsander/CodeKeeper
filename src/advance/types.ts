@@ -43,7 +43,7 @@ export interface WatchedEvent {
 /**
  * 知识条目处理状态
  */
-export type KnowledgeStatus = 'pending' | 'archived' | 'ignored';
+export type KnowledgeStatus = 'pending' | 'archived' | 'ignored' | 'orphaned';
 
 /**
  * 知识条目元数据；实际内容存储在文件系统中，此处只保存路径与内容哈希
@@ -98,7 +98,7 @@ export interface ClassificationResult {
 /**
  * 归档动作类型
  */
-export type ArchiveActionType = 'move' | 'merge' | 'create' | 'ignore' | 'flag';
+export type ArchiveActionType = 'copy' | 'organize' | 'ignore' | 'flag';
 
 /**
  * 单条归档建议/动作
@@ -110,13 +110,13 @@ export interface ArchiveAction {
   sourcePath: string;
   /** 动作类型 */
   type: ArchiveActionType;
-  /** 建议说明 */
+  /** 决策说明 / 理由 */
   reason: string;
-  /** 目标路径（move/create 时使用） */
+  /** 目标路径（copy/organize/flag 时使用） */
   targetPath?: string;
-  /** 关联的已有条目 ID（merge 时使用） */
+  /** 关联的已有条目 ID（organize 时使用） */
   relatedEntryId?: string;
-  /** 风险等级：low 自动执行，medium/high 写入 suggestions.md */
+  /** 风险等级：仅用于日志和展示，不影响自动执行 */
   risk: 'low' | 'medium' | 'high';
   /** 置信度 0-1 */
   confidence: number;
@@ -146,10 +146,16 @@ export interface ProjectStatus {
   archivedCount: number;
   /** 忽略数量 */
   ignoredCount: number;
+  /** 源文件已删除但归档副本保留的数量 */
+  orphanedCount: number;
+  /** 已复制到归档的数量 */
+  copiedCount: number;
+  /** 已在归档内重新组织的数量 */
+  organizedCount: number;
+  /** 标记为需要关注的数量 */
+  flaggedCount: number;
   /** 健康度 0-1 */
   healthScore: number;
   /** 健康度计算说明 */
   healthScoreDefinition: string;
-  /** 当前建议数量 */
-  suggestionCount: number;
 }

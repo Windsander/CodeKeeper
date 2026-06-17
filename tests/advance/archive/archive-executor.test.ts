@@ -16,7 +16,7 @@ describe('ArchiveExecutor', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('应自动执行 low risk 的 move 动作', async () => {
+  it('应执行 low risk 的 copy 动作并保留原文件', async () => {
     const source = join(tmp, 'draft.md');
     const target = join(tmp, 'docs', 'specs', 'a.md');
     mkdirSync(dirname(target), { recursive: true });
@@ -25,7 +25,7 @@ describe('ArchiveExecutor', () => {
     const action: ArchiveAction = {
       id: 'a1',
       sourcePath: source,
-      type: 'move',
+      type: 'copy',
       reason: '归档',
       targetPath: target,
       risk: 'low',
@@ -33,30 +33,29 @@ describe('ArchiveExecutor', () => {
       createdAt: Date.now(),
     };
 
-    const executor = new ArchiveExecutor({ projectRoot: tmp });
+    const executor = new ArchiveExecutor({ archiveRoot: tmp });
     const result = await executor.execute(action);
     expect(result.success).toBe(true);
-    expect(existsSync(source)).toBe(false);
+    expect(existsSync(source)).toBe(true);
     expect(readFileSync(target, 'utf-8')).toBe('# 测试');
   });
 
-  it('应跳过 medium/high risk 动作', async () => {
+  it('目标路径越界时应失败', async () => {
     const source = join(tmp, 'draft.md');
     writeFileSync(source, 'x', 'utf-8');
     const action: ArchiveAction = {
       id: 'a2',
       sourcePath: source,
-      type: 'move',
-      reason: '需要确认',
-      targetPath: join(tmp, 'b.md'),
+      type: 'copy',
+      reason: '越界',
+      targetPath: join(tmp, '..', 'b.md'),
       risk: 'medium',
       confidence: 0.6,
       createdAt: Date.now(),
     };
-    const executor = new ArchiveExecutor({ projectRoot: tmp });
+    const executor = new ArchiveExecutor({ archiveRoot: tmp });
     const result = await executor.execute(action);
     expect(result.success).toBe(false);
-    expect(result.skipped).toBe(true);
-    expect(existsSync(source)).toBe(true);
+    expect(result.error).toContain('归档根目录');
   });
 });

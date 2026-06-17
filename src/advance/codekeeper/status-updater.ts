@@ -30,12 +30,16 @@ export function buildProjectStatus(params: {
   pendingCount: number;
   archivedCount: number;
   ignoredCount: number;
-  suggestionCount: number;
+  orphanedCount: number;
+  copiedCount: number;
+  organizedCount: number;
+  flaggedCount: number;
 }): ProjectStatus {
-  const total = params.pendingCount + params.archivedCount + params.ignoredCount;
-  const healthScore = total === 0 ? 1 : Math.round(((params.archivedCount + params.ignoredCount) / total) * 100) / 100;
+  const total = params.pendingCount + params.archivedCount + params.ignoredCount + params.orphanedCount;
+  const resolved = params.archivedCount + params.ignoredCount + params.orphanedCount;
+  const healthScore = total === 0 ? 1 : Math.round((resolved / total) * 100) / 100;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     projectId: params.projectId,
     lastScannedAt: params.lastScannedAt,
     lastScannedAtIso: new Date(params.lastScannedAt).toISOString(),
@@ -44,8 +48,11 @@ export function buildProjectStatus(params: {
     pendingCount: params.pendingCount,
     archivedCount: params.archivedCount,
     ignoredCount: params.ignoredCount,
+    orphanedCount: params.orphanedCount,
+    copiedCount: params.copiedCount,
+    organizedCount: params.organizedCount,
+    flaggedCount: params.flaggedCount,
     healthScore,
-    healthScoreDefinition: '已归档与已忽略条目占总条目数的比例，1.0 表示全部处理完毕',
-    suggestionCount: params.suggestionCount,
+    healthScoreDefinition: '已归档、已忽略、已孤儿条目占总条目数的比例，1.0 表示全部处理完毕',
   };
 }

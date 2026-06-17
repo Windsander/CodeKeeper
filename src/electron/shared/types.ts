@@ -36,7 +36,7 @@ export function isIpcPushEvent(msg: IpcMessage): msg is IpcPushEvent {
   return 'type' in msg && msg.type === 'push';
 }
 
-export type ArchiveActionType = 'move' | 'merge' | 'create' | 'ignore' | 'flag';
+export type ArchiveActionType = 'copy' | 'organize' | 'ignore' | 'flag';
 
 export interface ArchiveAction {
   id: string;
@@ -60,7 +60,10 @@ export interface ProjectStatus {
   pendingCount: number;
   archivedCount: number;
   ignoredCount: number;
+  orphanedCount: number;
+  copiedCount: number;
+  organizedCount: number;
+  flaggedCount: number;
   healthScore: number;
   healthScoreDefinition: string;
-  suggestionCount: number;
 }

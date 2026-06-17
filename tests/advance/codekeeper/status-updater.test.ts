@@ -23,7 +23,10 @@ describe('updateStatus', () => {
       pendingCount: 2,
       archivedCount: 5,
       ignoredCount: 1,
-      suggestionCount: 1,
+      orphanedCount: 0,
+      copiedCount: 5,
+      organizedCount: 0,
+      flaggedCount: 0,
     });
     updateStatus({ archiveRoot: join(tmp, '.codekeeper'), status });
     const content = readFileSync(join(tmp, '.codekeeper', 'status.json'), 'utf-8');
@@ -43,7 +46,10 @@ describe('updateStatus', () => {
       pendingCount: 0,
       archivedCount: 0,
       ignoredCount: 0,
-      suggestionCount: 0,
+      orphanedCount: 0,
+      copiedCount: 0,
+      organizedCount: 0,
+      flaggedCount: 0,
     });
     updateStatus({ archiveRoot: join(tmp, '.codekeeper'), status });
     expect(existsSync(join(tmp, '.codekeeper', 'status.json'))).toBe(true);
@@ -60,7 +66,10 @@ describe('buildProjectStatus', () => {
       pendingCount: 0,
       archivedCount: 0,
       ignoredCount: 0,
-      suggestionCount: 0,
+      orphanedCount: 0,
+      copiedCount: 0,
+      organizedCount: 0,
+      flaggedCount: 0,
     });
     expect(status.healthScore).toBe(1);
     expect(status.totalCount).toBe(0);
@@ -74,10 +83,13 @@ describe('buildProjectStatus', () => {
       pendingCount: 1,
       archivedCount: 3,
       ignoredCount: 0,
-      suggestionCount: 2,
+      orphanedCount: 0,
+      copiedCount: 3,
+      organizedCount: 0,
+      flaggedCount: 0,
     });
     expect(status.healthScore).toBe(0.75);
-    expect(status.schemaVersion).toBe(1);
+    expect(status.schemaVersion).toBe(2);
     expect(status.scanStatus).toBe('partial');
   });
 });

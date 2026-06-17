@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useIpc } from '../hooks/useIpc';
 import { ContextView } from '../components/ContextView';
@@ -6,7 +7,9 @@ import { SuggestionList } from '../components/SuggestionList';
 import { invoke } from '../api/electron-api';
 import type { ProjectStatus } from '../../shared/types';
 
-type Tab = 'context' | 'suggestions' | 'status';
+import { ArchiveTree } from '../components/ArchiveTree';
+
+type Tab = 'context' | 'activity' | 'archive' | 'status';
 
 export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -16,14 +19,24 @@ export function ProjectDetail() {
   const { data: project } = useIpc<{ name: string; rootPath: string; archiveRoot?: string }>('project.get', { projectId: id });
   const { data: context, refresh: refreshContext } = useIpc<{ content: string }>('project.context', { projectId: id });
   const { data: suggestions, refresh: refreshSuggestions } = useIpc<{ content: string }>('project.suggestions', { projectId: id });
+  const { data: archiveTree, refresh: refreshArchiveTree } = useIpc<{ tree: { name: string; path: string; relPath: string; type: 'file' | 'directory'; children?: unknown[] } | null }>('project.archive.tree', { projectId: id });
   const { data: status, refresh: refreshStatus } = useIpc<ProjectStatus>('project.status', { projectId: id });
+
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onPush((event) => {
+      if (event.event === 'archive-tree-changed' && (event.payload as { projectId?: string }).projectId === id) {
+        refreshArchiveTree();
+      }
+    });
+    return unsubscribe;
+  }, [id, refreshArchiveTree]);
 
   const scan = async () => {
     setScanning(true);
     setScanError(null);
     try {
       await invoke('project.scan', { projectId: id });
-      await Promise.all([refreshContext(), refreshSuggestions(), refreshStatus()]);
+      await Promise.all([refreshContext(), refreshSuggestions(), refreshArchiveTree(), refreshStatus()]);
     } catch (err) {
       setScanError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -61,10 +74,16 @@ export function ProjectDetail() {
           Context
         </button>
         <button
-          className={`tab-btn${tab === 'suggestions' ? ' active' : ''}`}
-          onClick={() => setTab('suggestions')}
+          className={`tab-btn${tab === 'activity' ? ' active' : ''}`}
+          onClick={() => setTab('activity')}
         >
-          Suggestions
+          Activity Log
+        </button>
+        <button
+          className={`tab-btn${tab === 'archive' ? ' active' : ''}`}
+          onClick={() => setTab('archive')}
+        >
+          Archive
         </button>
         <button
           className={`tab-btn${tab === 'status' ? ' active' : ''}`}
@@ -75,7 +94,8 @@ export function ProjectDetail() {
       </div>
       <div className="card">
         {tab === 'context' && context && <ContextView content={context.content} />}
-        {tab === 'suggestions' && suggestions && <SuggestionList content={suggestions.content} />}
+        {tab === 'activity' && suggestions && <SuggestionList content={suggestions.content} />}
+        {tab === 'archive' && <ArchiveTree tree={archiveTree?.tree ?? null} />}
         {tab === 'status' && status && (
           <pre className="log-viewer">{JSON.stringify(status, null, 2)}</pre>
         )}

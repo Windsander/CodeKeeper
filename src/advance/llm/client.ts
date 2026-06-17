@@ -44,7 +44,7 @@ export class LlmClient {
     this.baseURL = options.baseURL;
     this.model = options.model ?? this.defaultModel();
     this.headers = options.headers ?? {};
-    this.maxTokens = options.maxTokens ?? 1024;
+    this.maxTokens = options.maxTokens ?? 2048;
     this.mock = options.mock;
     this.minRequestInterval = options.minRequestInterval ?? 6000;
     if (!this.mock && this.provider === 'anthropic') {
@@ -172,9 +172,12 @@ export class LlmClient {
       }
 
       const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{
+          message?: { content?: string; reasoning_content?: string };
+        }>;
       };
-      const content = data.choices?.[0]?.message?.content ?? '';
+      const message = data.choices?.[0]?.message;
+      const content = message?.content ?? message?.reasoning_content ?? '';
       logger.debug({ status: response.status, model: this.model, contentLength: content.length }, 'OpenAI 响应');
 
       if (content) {
@@ -221,6 +224,7 @@ export class LlmClient {
     const decoder = new TextDecoder();
     let buffer = '';
     let content = '';
+    let rawPreview = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -234,13 +238,20 @@ export class LlmClient {
         if (!trimmed.startsWith('data:')) continue;
         const data = trimmed.slice(5).trim();
         if (data === '[DONE]') continue;
+        if (rawPreview.length < 2000) {
+          rawPreview += data + '\n';
+        }
         try {
           const chunk = JSON.parse(data) as {
-            choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
+            choices?: Array<{
+              delta?: { content?: string; reasoning_content?: string; role?: string };
+              finish_reason?: string | null;
+            }>;
           };
-          const delta = chunk.choices?.[0]?.delta?.content;
-          if (delta) {
-            content += delta;
+          const delta = chunk.choices?.[0]?.delta;
+          const text = delta?.content ?? delta?.reasoning_content;
+          if (text) {
+            content += text;
           }
         } catch {
           // 忽略无法解析的 SSE 行
@@ -248,8 +259,15 @@ export class LlmClient {
       }
     }
 
-    logger.debug({ model: this.model, contentLength: content.length }, 'OpenAI 流式响应');
+    logger.debug(
+      { model: this.model, contentLength: content.length, rawPreview: rawPreview.slice(0, 500) },
+      'OpenAI 流式响应'
+    );
     if (!content) {
+      logger.warn(
+        { model: this.model, rawPreview: rawPreview.slice(0, 2000) },
+        'OpenAI 流式响应内容为空，原始内容前 2000 字符'
+      );
       throw new Error('流式响应内容为空');
     }
     return content.trim();

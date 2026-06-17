@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS knowledge_entries (
   project_id TEXT NOT NULL,
   file_path TEXT NOT NULL,
   content_hash TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'archived', 'ignored')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'archived', 'ignored', 'orphaned')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -48,8 +48,10 @@ CREATE TABLE IF NOT EXISTS archive_actions (
   id TEXT PRIMARY KEY,
   entry_id TEXT NOT NULL,
   project_id TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(type IN ('move', 'merge', 'create', 'ignore', 'flag')),
+  type TEXT NOT NULL CHECK(type IN ('copy', 'organize', 'ignore', 'flag')),
   reason TEXT NOT NULL,
+  source_path TEXT,
+  archive_path TEXT,
   target_path TEXT,
   related_entry_id TEXT,
   risk TEXT NOT NULL CHECK(risk IN ('low', 'medium', 'high')),
@@ -67,8 +69,9 @@ CREATE TABLE IF NOT EXISTS action_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   action_id TEXT NOT NULL,
   project_id TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(type IN ('move', 'merge', 'create', 'ignore', 'flag')),
+  type TEXT NOT NULL CHECK(type IN ('copy', 'organize', 'ignore', 'flag')),
   source_path TEXT NOT NULL,
+  archive_path TEXT,
   target_path TEXT,
   status TEXT NOT NULL DEFAULT 'applied' CHECK(status IN ('applied', 'undone')),
   applied_at INTEGER NOT NULL,
@@ -78,3 +81,26 @@ CREATE TABLE IF NOT EXISTS action_history (
 CREATE INDEX IF NOT EXISTS idx_history_project ON action_history(project_id);
 CREATE INDEX IF NOT EXISTS idx_history_action ON action_history(action_id);
 CREATE INDEX IF NOT EXISTS idx_history_status ON action_history(status);
+
+-- 归档文件元数据（图书管理员模式）
+CREATE TABLE IF NOT EXISTS archive_metadata (
+  entry_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  archive_path TEXT NOT NULL,
+  category TEXT NOT NULL,
+  doc_type TEXT NOT NULL,
+  tags TEXT NOT NULL DEFAULT '[]',
+  summary TEXT,
+  content_hash TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'copy',
+  copied_at INTEGER NOT NULL,
+  organized_at INTEGER,
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'orphaned', 'superseded')),
+  FOREIGN KEY (entry_id) REFERENCES knowledge_entries(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_metadata_project ON archive_metadata(project_id);
+CREATE INDEX IF NOT EXISTS idx_metadata_category ON archive_metadata(category);
+CREATE INDEX IF NOT EXISTS idx_metadata_doc_type ON archive_metadata(doc_type);
+CREATE INDEX IF NOT EXISTS idx_metadata_status ON archive_metadata(status);

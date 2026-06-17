@@ -12,6 +12,8 @@ import { loadProjectConfig } from '../config/project-config';
 import { scanExistingFiles } from '../project-scanner';
 import { UndoExecutor } from '../archive/undo-executor';
 
+import { readDirectoryTree } from '../utils/file-tree';
+
 export interface HandlerContext {
   store: MetadataStore;
   registry: ProjectRegistry;
@@ -120,6 +122,16 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!project) throw new Error('项目未注册');
     const path = join(getArchiveRoot(project), 'status.json');
     return JSON.parse(readFileSync(path, 'utf-8'));
+  },
+
+  'project.archive.tree': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    const archiveRoot = getArchiveRoot(project);
+    if (!existsSync(archiveRoot)) {
+      return { tree: null };
+    }
+    return { tree: readDirectoryTree(archiveRoot) };
   },
 
   'project.config': async (ctx, params) => {

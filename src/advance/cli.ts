@@ -198,7 +198,7 @@ export async function main(): Promise<void> {
         console.error('项目未注册');
         process.exit(1);
       }
-      const executor = new UndoExecutor({ store, projectRoot: project.rootPath });
+      const executor = new UndoExecutor({ store });
       const result = await executor.undo(actionId);
       console.log(result.message);
       if (!result.success) process.exit(1);

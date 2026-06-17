@@ -3,6 +3,7 @@ import type { ProjectRegistry } from './project-registry';
 import { FileWatcher } from './file-watcher';
 import type { MetadataStore } from './store/metadata-store';
 import type { Project, WatchedEvent } from './types';
+import { getArchiveRoot } from './types';
 import { loadProjectConfig } from './config/project-config';
 import { saveDaemonConfig } from './config/daemon-config';
 import { scanExistingFiles } from './project-scanner';
@@ -35,7 +36,7 @@ export interface DaemonOptions {
 }
 
 export class Daemon {
-  private watchers = new Map<string, FileWatcher>();
+  private watchers = new Map<string, FileWatcher[]>();
   private scanJob: ReturnType<typeof schedule> | null = null;
   private running = false;
   private ipcServer: IpcServer | null = null;
@@ -88,16 +89,16 @@ export class Daemon {
     if (this.running) return;
     this.running = true;
 
-    const projects = this.options.registry.list();
-    for (const project of projects) {
-      this.watchProject(project);
-    }
-
     this.ipcServer = new IpcServer({
       socketPath: getIpcSocketPath(),
       handler: (method, params) => this.handleIpc(method, params),
     });
     await this.ipcServer.start();
+
+    const projects = this.options.registry.list();
+    for (const project of projects) {
+      this.watchProject(project);
+    }
 
     const cron = this.options.scanCron ?? '*/5 * * * *';
     this.scanJob = schedule(cron, () => this.scanAll());
@@ -108,8 +109,10 @@ export class Daemon {
     this.running = false;
     this.scanJob?.stop();
     this.scanJob = null;
-    for (const watcher of this.watchers.values()) {
-      watcher.stop();
+    for (const watchers of this.watchers.values()) {
+      for (const watcher of watchers) {
+        watcher.stop();
+      }
     }
     this.watchers.clear();
     await this.ipcServer?.stop();
@@ -173,9 +176,13 @@ export class Daemon {
 
   watchProject(project: Project): void {
     if (this.watchers.has(project.id)) return;
+
     const config = loadProjectConfig(project.rootPath, project.archiveRoot);
-    const watcher = new FileWatcher();
-    watcher.start({
+    const watchers: FileWatcher[] = [];
+
+    // 监听原项目文件
+    const sourceWatcher = new FileWatcher();
+    sourceWatcher.start({
       projectRoot: project.rootPath,
       config,
       onEvent: (event: WatchedEvent) => {
@@ -189,13 +196,38 @@ export class Daemon {
         logger.warn({ projectId: project.id, err }, '文件监控错误');
       },
     });
-    this.watchers.set(project.id, watcher);
+    watchers.push(sourceWatcher);
+
+    // 监听归档目录，实时通知 UI 刷新文件树
+    const archiveRoot = getArchiveRoot(project);
+    if (archiveRoot !== project.rootPath) {
+      const archiveWatcher = new FileWatcher();
+      archiveWatcher.start({
+        projectRoot: archiveRoot,
+        config: { include: [], exclude: [], categories: config.categories, docTypes: config.docTypes },
+        onEvent: (event: WatchedEvent) => {
+          this.ipcServer?.broadcast('archive-tree-changed', {
+            projectId: project.id,
+            type: event.type,
+            filePath: event.filePath,
+          });
+        },
+        onError: (err) => {
+          logger.warn({ projectId: project.id, archiveRoot, err }, '归档目录监控错误');
+        },
+      });
+      watchers.push(archiveWatcher);
+    }
+
+    this.watchers.set(project.id, watchers);
   }
 
   unwatchProject(projectId: string): void {
-    const watcher = this.watchers.get(projectId);
-    if (!watcher) return;
-    watcher.stop();
+    const watchers = this.watchers.get(projectId);
+    if (!watchers) return;
+    for (const watcher of watchers) {
+      watcher.stop();
+    }
     this.watchers.delete(projectId);
   }
 

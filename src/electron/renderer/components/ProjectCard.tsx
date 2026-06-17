@@ -7,7 +7,10 @@ export interface ProjectSummary {
   pending: number;
   archived: number;
   ignored: number;
-  suggestion: number;
+  orphaned: number;
+  copied: number;
+  organized: number;
+  flagged: number;
   lastScannedAt: number | null;
 }
 
@@ -30,20 +33,20 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
           <div className="project-stat-value"><span className={badgeClass}>{healthPercent}%</span></div>
         </div>
         <div className="project-stat">
-          <div className="project-stat-label">建议</div>
-          <div className="project-stat-value">{project.suggestion}</div>
+          <div className="project-stat-label">已复制</div>
+          <div className="project-stat-value">{project.copied}</div>
         </div>
         <div className="project-stat">
-          <div className="project-stat-label">待处理</div>
-          <div className="project-stat-value">{project.pending}</div>
+          <div className="project-stat-label">已整理</div>
+          <div className="project-stat-value">{project.organized}</div>
         </div>
         <div className="project-stat">
-          <div className="project-stat-label">已归档</div>
-          <div className="project-stat-value">{project.archived}</div>
+          <div className="project-stat-label">标记</div>
+          <div className="project-stat-value">{project.flagged}</div>
         </div>
       </div>
       <div className="project-meta">
-        已忽略: {project.ignored} · 最后扫描: {project.lastScannedAt ? new Date(project.lastScannedAt).toLocaleString() : '从未'}
+        待处理: {project.pending} · 已归档: {project.archived} · 已忽略: {project.ignored} · 已孤儿: {project.orphaned} · 最后扫描: {project.lastScannedAt ? new Date(project.lastScannedAt).toLocaleString() : '从未'}
       </div>
     </div>
   );

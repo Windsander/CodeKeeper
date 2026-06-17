@@ -1,15 +1,42 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useIpc } from '../hooks/useIpc';
-import { showOpenDialog } from '../api/electron-api';
+import { invoke, showOpenDialog } from '../api/electron-api';
 import { ProjectCard, type ProjectSummary } from '../components/ProjectCard';
 
 export function Dashboard() {
   const navigate = useNavigate();
-  const { data: projects, loading, error, refresh } = useIpc<ProjectSummary[]>('project.list');
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState('');
   const [archiveRoot, setArchiveRoot] = useState('');
   const [registerError, setRegisterError] = useState<string | null>(null);
+  const lastDataRef = useRef<string>('');
+
+  const refresh = async (silent = false) => {
+    if (!silent) setLoading(true);
+    setError(null);
+    try {
+      const data = await invoke<ProjectSummary[]>('project.list');
+      const serialized = JSON.stringify(data);
+      if (serialized !== lastDataRef.current) {
+        lastDataRef.current = serialized;
+        setProjects(data);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(() => {
+      refresh(true);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const pickRootPath = async () => {
     const result = await showOpenDialog({
@@ -41,7 +68,7 @@ export function Dashboard() {
       });
       setRootPath('');
       setArchiveRoot('');
-      refresh();
+      await refresh();
     } catch (err) {
       setRegisterError(err instanceof Error ? err.message : String(err));
     }
@@ -50,7 +77,7 @@ export function Dashboard() {
   const unregister = async (projectId: string) => {
     try {
       await window.electronAPI.invoke('project.unregister', { projectId });
-      refresh();
+      await refresh();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
