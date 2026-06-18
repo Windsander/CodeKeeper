@@ -79,6 +79,17 @@ const AGENT_ROLE_OPTIONS = [
   { value: 'reviewer+auto-fixer', label: 'Reviewer + Auto-Fixer（评论 + 自动修复）' },
 ];
 
+function getAgentRoleTip(role: MrReviewConfig['agentRole']): string {
+  switch (role) {
+    case 'reviewer':
+      return 'Reviewer：仅发表评论和总结，不会修改代码或 resolve discussion。';
+    case 'auto-fixer':
+      return 'Auto-Fixer：不发表评论，只扫描 HIGH/CRITICAL 问题并直接在 MR source branch 上提交修复、resolve discussion（包括他人创建的 discussions）。';
+    case 'reviewer+auto-fixer':
+      return 'Reviewer + Auto-Fixer：先发表评论总结，再对 HIGH/CRITICAL 问题自动修复并 resolve discussion（包括他人创建的 discussions）。';
+  }
+}
+
 const DEFAULT_SOUL_MD_TEMPLATE = `# MR Agent 个性配置
 
 ## 评审风格
@@ -301,7 +312,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             onChange={(value) => setAgentRole(value as MrReviewConfig['agentRole'])}
           />
           <div className="project-meta" style={{ marginTop: 6 }}>
-            Reviewer 会发表评论；Auto-Fixer 会尝试在 MR source branch 上自动修复并 resolve discussion（包括他人创建的 discussions）。
+            {getAgentRoleTip(agentRole)}
           </div>
         </div>
 
@@ -312,6 +323,9 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             options={LEARNING_OPTIONS}
             onChange={(value) => setLearningEnabled(value === 'on')}
           />
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            开启后，Agent 会从人工 review、resolve/comment 行为中学习并优化后续评审策略。
+          </div>
         </div>
 
         <div className="form-group">
@@ -321,6 +335,9 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             options={RISK_OPTIONS}
             onChange={(value) => setMaxAutoMergeRisk(value as 'LOW' | 'MEDIUM' | 'HIGH')}
           />
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            仅当 Agent 角色包含自动修复且风险等级不超过此阈值时，才会自动合并或修复。
+          </div>
         </div>
 
         <div className="form-group">
@@ -348,11 +365,11 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
       <div className="config-section">
         <h5 className="config-section-title">Agent 个性配置（MR-Agent-SOUL.md）</h5>
         <div className="form-group">
-          <div className="form-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="form-row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <label style={{ marginBottom: 0 }}>SOUL.md 内容</label>
             <button
               type="button"
-              className="btn btn-sm"
+              className="btn btn-primary btn-sm"
               onClick={applySoulTemplate}
               disabled={soulLoading}
             >
@@ -361,7 +378,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
           </div>
           <textarea
             className="input"
-            style={{ minHeight: 240, fontFamily: 'monospace', lineHeight: 1.5 }}
+            style={{ minHeight: 240, fontFamily: 'monospace', lineHeight: 1.5, resize: 'vertical' }}
             value={soulContent}
             placeholder="# MR Agent 个性配置&#10;## 评审风格&#10;..."
             onChange={(e) => setSoulContent(e.target.value)}
