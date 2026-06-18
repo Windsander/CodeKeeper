@@ -28,7 +28,7 @@ export function ActionHistory() {
     <div>
       <div className="page-header">
         <h1 className="page-title">动作历史</h1>
-        <button className="btn btn-primary" onClick={refresh}>刷新</button>
+        <button className="btn btn-primary" onClick={() => refresh()}>刷新</button>
       </div>
 
       <div className="card">

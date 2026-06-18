@@ -16,7 +16,7 @@ export function Logs() {
     <div>
       <div className="page-header">
         <h1 className="page-title">日志</h1>
-        <button className="btn btn-primary" onClick={refresh}>刷新</button>
+        <button className="btn btn-primary" onClick={() => refresh()}>刷新</button>
       </div>
 
       <div className="card">
