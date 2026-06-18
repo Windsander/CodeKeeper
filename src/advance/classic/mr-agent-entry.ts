@@ -491,7 +491,7 @@ async function reviewProject(
     saveState(project, state);
 
     // 处理他人 discussions
-    if (config.agentRole.includes('auto-fixer') && (config.resolveOthersDiscussions ?? true)) {
+    if (config.agentRole.includes('auto-fixer')) {
       await handleOthersDiscussions(mr, provider, diffs, shaInfo, fixAgent);
     }
   }

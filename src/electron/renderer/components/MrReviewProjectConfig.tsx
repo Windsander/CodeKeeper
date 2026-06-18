@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '../api/electron-api';
 import { Dropdown } from '../components/Dropdown';
-import { Toggle } from '../components/Toggle';
 
 interface GitlabConfig {
   baseUrl: string;
@@ -132,9 +131,6 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const [customSchedule, setCustomSchedule] = useState(mrReview.reviewSchedule);
   const [learningEnabled, setLearningEnabled] = useState(mrReview.learningEnabled);
   const [maxAutoMergeRisk, setMaxAutoMergeRisk] = useState(mrReview.maxAutoMergeRisk);
-  const [resolveOthersDiscussions, setResolveOthersDiscussions] = useState(
-    mrReview.resolveOthersDiscussions ?? DEFAULT_MR_REVIEW.resolveOthersDiscussions
-  );
 
   const [soulContent, setSoulContent] = useState('');
   const [soulSourcePath, setSoulSourcePath] = useState('');
@@ -236,7 +232,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
           learningEnabled,
           maxAutoMergeRisk,
           autoFixEnabled: isAutoFixer,
-          resolveOthersDiscussions: isAutoFixer ? resolveOthersDiscussions : false,
+          resolveOthersDiscussions: isAutoFixer,
         },
       });
       await invoke('project.soul.update', {
@@ -305,23 +301,9 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             onChange={(value) => setAgentRole(value as MrReviewConfig['agentRole'])}
           />
           <div className="project-meta" style={{ marginTop: 6 }}>
-            Reviewer 会发表评论；Auto-Fixer 会尝试在 MR source branch 上自动修复并 resolve discussion。
+            Reviewer 会发表评论；Auto-Fixer 会尝试在 MR source branch 上自动修复并 resolve discussion（包括他人创建的 discussions）。
           </div>
         </div>
-
-        {isAutoFixer && (
-          <div className="form-group">
-            <Toggle
-              checked={resolveOthersDiscussions}
-              onChange={(checked) => setResolveOthersDiscussions(checked)}
-            >
-              处理他人创建的 discussions
-            </Toggle>
-            <div className="project-meta" style={{ marginTop: 6, marginLeft: 56 }}>
-              开启后，Agent 也会查看其他 reviewer 提出的 discussion，决定是否自动修复并 resolve。
-            </div>
-          </div>
-        )}
       </div>
 
       <div className="config-section">
