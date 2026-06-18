@@ -11,12 +11,14 @@ import { getArchiveRoot } from '../types';
 import { loadProjectConfig } from '../config/project-config';
 import { scanExistingFiles } from '../project-scanner';
 import { UndoExecutor } from '../archive/undo-executor';
+import type { ClassicService } from '../classic/classic-service';
 
 import { readDirectoryTree } from '../utils/file-tree';
 
 export interface HandlerContext {
   store: MetadataStore;
   registry: ProjectRegistry;
+  classicService?: ClassicService;
   getClient: () => LlmClient | null;
   getPipeline: () => ArchivePipeline;
   updateDaemonConfig?: (config: {
@@ -226,5 +228,31 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
     ctx.updateDaemonConfig?.(config);
     return { success: true };
+  },
+
+  'classic.start': async (ctx) => {
+    ctx.classicService?.start();
+    return { running: ctx.classicService?.isRunning() ?? false };
+  },
+
+  'classic.stop': async (ctx) => {
+    ctx.classicService?.stop();
+    return { running: ctx.classicService?.isRunning() ?? false };
+  },
+
+  'classic.restart': async (ctx) => {
+    ctx.classicService?.restart();
+    return { running: ctx.classicService?.isRunning() ?? false };
+  },
+
+  'classic.status': async (ctx) => {
+    const projects = ctx.registry.list();
+    const enabledProjects = projects.filter(
+      (p) => p.mrReview?.enabled && p.gitlab
+    ).length;
+    return {
+      running: ctx.classicService?.isRunning() ?? false,
+      enabledProjects,
+    };
   },
 };

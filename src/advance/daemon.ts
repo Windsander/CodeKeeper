@@ -13,6 +13,7 @@ import { IpcServer } from './ipc/server';
 import { getIpcSocketPath } from './ipc/paths';
 import { handlers, type HandlerContext } from './ipc/handlers';
 import { logger } from '../core/logger';
+import { ClassicService } from './classic/classic-service';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -41,11 +42,25 @@ export class Daemon {
   private running = false;
   private ipcServer: IpcServer | null = null;
   private handlerContext: HandlerContext;
+  private classicService: ClassicService;
 
   constructor(private options: DaemonOptions) {
+    this.classicService = new ClassicService({
+      store: options.store,
+      registry: options.registry,
+      getDaemonConfig: () => ({
+        apiKey: this.options.apiKey ?? '',
+        provider: this.options.provider ?? 'anthropic',
+        model: this.options.model ?? '',
+        apiUrl: this.options.apiUrl ?? '',
+        headers: this.options.headers,
+      }),
+    });
+
     this.handlerContext = {
       store: options.store,
       registry: options.registry,
+      classicService: this.classicService,
       getClient: () =>
         this.options.apiKey
           ? new LlmClient({
@@ -95,6 +110,8 @@ export class Daemon {
     });
     await this.ipcServer.start();
 
+    this.classicService.start();
+
     const projects = this.options.registry.list();
     for (const project of projects) {
       this.watchProject(project);
@@ -107,6 +124,7 @@ export class Daemon {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
+    this.classicService.stop();
     this.scanJob?.stop();
     this.scanJob = null;
     for (const watchers of this.watchers.values()) {
