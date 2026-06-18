@@ -54,16 +54,30 @@ describe('formatReviewComment', () => {
     expect(comment).toContain('> 发现 2 个问题，建议优先处理 HIGH 级别项。');
   });
 
+  it('把总结中的数字列表转换为 Markdown 列表', () => {
+    const result: ReviewResult = {
+      findings: [],
+      summary: '存在两处改进点：1) 第一点 2) 第二点',
+      autoFixable: [],
+    };
+    const comment = formatReviewComment(mockMR, result);
+    expect(comment).toContain('> 存在两处改进点：');
+    expect(comment).toContain('> 1. 第一点');
+    expect(comment).toContain('> 2. 第二点');
+  });
+
   it('按 severity 分组并以紧凑列表展示发现项', () => {
     const comment = formatReviewComment(mockMR, mockResult);
     expect(comment).toContain('**发现项**: 2 个');
     expect(comment).toContain('### ⚠️ 发现项');
     expect(comment).toContain('- 🔴 **高** (1)');
     expect(comment).toContain('- 🟡 **低** (1)');
-    expect(comment).toContain('  - `src/auth.ts:42` · 规则 `AUTH-001` 密码以明文形式传输');
-    expect(comment).toContain('  - **建议**：使用 HTTPS 并对敏感字段加密');
-    expect(comment).toContain('  - `src/utils.ts:7` 缺少空值检查');
-    expect(comment).toContain('  - **建议**：添加可选链或默认值');
+    expect(comment).toContain(
+      '  - `src/auth.ts:42` · 规则 `AUTH-001` 密码以明文形式传输<br>**建议**：使用 HTTPS 并对敏感字段加密'
+    );
+    expect(comment).toContain(
+      '  - `src/utils.ts:7` 缺少空值检查<br>**建议**：添加可选链或默认值'
+    );
   });
 
   it('包含生成时间签名', () => {

@@ -88,6 +88,17 @@ function groupFindingsBySeverity(
 }
 
 /**
+ * 把 LLM 生成的总结文本格式化为 Markdown 引用块行
+ *
+ * 例如将 "存在两处改进点：1) ... 2) ..." 转换为真正的列表，增强可读性。
+ */
+function formatSummary(summary: string): string[] {
+  let formatted = summary.replace(/(\d+)\)\s*/g, '$1. ');
+  formatted = formatted.replace(/([：:])(\d+\.\s)/g, '$1\n$2');
+  return formatted.split('\n').map((line) => `> ${line}`);
+}
+
+/**
  * 为指定 MR 生成评审评论正文
  *
  * 将 ReviewResult 格式化为按 severity 分组的 Markdown 评论，便于在 GitLab MR 中快速浏览。
@@ -105,7 +116,7 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
     `**分支**: \`${mr.sourceBranch}\` → \`${mr.targetBranch}\``,
     `**发现项**: ${total > 0 ? `${total} 个` : '✅ 无'}`,
     ``,
-    `> ${result.summary}`,
+    ...formatSummary(result.summary),
     ``,
   ];
 
@@ -119,8 +130,7 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
       for (const finding of items) {
         const ruleTag = finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : '';
         lines.push(
-          `  - \`${finding.file}:${finding.line}\`${ruleTag} ${finding.message}`,
-          `  - **建议**：${finding.suggestion}`
+          `  - \`${finding.file}:${finding.line}\`${ruleTag} ${finding.message}<br>**建议**：${finding.suggestion}`
         );
       }
       lines.push(``);
