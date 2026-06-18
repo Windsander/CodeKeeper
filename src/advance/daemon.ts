@@ -261,7 +261,7 @@ export class Daemon {
     // 1. 先对每个项目做全量扫描，补全漏掉的新文件
     for (const project of projects) {
       const config = loadProjectConfig(project.rootPath, project.archiveRoot);
-      const addedCount = scanExistingFiles(this.options.store, project, config);
+      const addedCount = await scanExistingFiles(this.options.store, project, config);
       logger.info({ projectId: project.id, addedCount }, '定时全量扫描完成');
     }
 

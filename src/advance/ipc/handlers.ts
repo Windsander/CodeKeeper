@@ -47,16 +47,17 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.register': async (ctx, params) => {
     const project = ctx.registry.register(params.rootPath, params.archiveRoot);
     ctx.watchProject?.(project);
-    // 全量扫描可能耗时较长，放到后台执行，避免阻塞注册返回
-    setImmediate(() => {
+    // 全量扫描可能耗时较长，异步执行不阻塞注册返回；
+    // scanExistingFiles 内部会在目录间让出事件循环，避免卡住 daemon。
+    (async () => {
       try {
         const config = loadProjectConfig(project.rootPath, project.archiveRoot);
-        const scannedCount = scanExistingFiles(ctx.store, project, config);
+        const scannedCount = await scanExistingFiles(ctx.store, project, config);
         logger.info({ projectId: project.id, scannedCount }, '注册项目时全量扫描完成');
       } catch (err) {
         logger.warn({ err, projectId: project.id }, '注册项目时全量扫描失败');
       }
-    });
+    })();
     return project;
   },
 
