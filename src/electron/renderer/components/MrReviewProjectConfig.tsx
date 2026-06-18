@@ -179,7 +179,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         <h5 className="config-section-title">Git 仓库</h5>
         <div className="form-group">
           <label>GitLab 项目 URL</label>
-          <div className="input-group">
+          <div className="form-row">
             <input
               className="input"
               value={gitlabUrl}
@@ -188,7 +188,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             />
             <button
               type="button"
-              className="input-group-btn"
+              className="btn btn-primary"
               onClick={detectGit}
               disabled={detecting}
             >
