@@ -70,7 +70,7 @@ export function Dashboard() {
       });
       setRootPath('');
       setArchiveRoot('');
-      await refresh();
+      await refresh(true);
     } catch (err) {
       setRegisterError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -81,7 +81,7 @@ export function Dashboard() {
   const unregister = async (projectId: string) => {
     try {
       await window.electronAPI.invoke('project.unregister', { projectId });
-      await refresh();
+      await refresh(true);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
