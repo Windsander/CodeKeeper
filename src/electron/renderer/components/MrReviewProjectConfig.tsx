@@ -44,6 +44,17 @@ const DEFAULT_MR_REVIEW: MrReviewConfig = {
   maxAutoMergeRisk: 'MEDIUM',
 };
 
+const REVIEW_INTERVALS = [
+  { label: '每 1 分钟', cron: '*/1 * * * *' },
+  { label: '每 5 分钟', cron: '*/5 * * * *' },
+  { label: '每 10 分钟', cron: '*/10 * * * *' },
+  { label: '每 15 分钟', cron: '*/15 * * * *' },
+  { label: '每 30 分钟', cron: '*/30 * * * *' },
+  { label: '每小时', cron: '0 * * * *' },
+  { label: '每天', cron: '0 9 * * *' },
+  { label: '自定义', cron: 'custom' },
+];
+
 /**
  * MR 评审项目级配置面板
  *
@@ -60,12 +71,50 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const [enabled, setEnabled] = useState(mrReview.enabled);
   const [autoMergeMode, setAutoMergeMode] = useState(mrReview.autoMergeMode);
   const [reviewSchedule, setReviewSchedule] = useState(mrReview.reviewSchedule);
+  const [customSchedule, setCustomSchedule] = useState(mrReview.reviewSchedule);
   const [learningEnabled, setLearningEnabled] = useState(mrReview.learningEnabled);
   const [maxAutoMergeRisk, setMaxAutoMergeRisk] = useState(mrReview.maxAutoMergeRisk);
 
   const [saving, setSaving] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+
+  const isCustom = !REVIEW_INTERVALS.some((i) => i.cron === reviewSchedule && i.cron !== 'custom');
+
+  const handleIntervalChange = (value: string) => {
+    if (value === 'custom') {
+      setReviewSchedule(customSchedule);
+    } else {
+      setReviewSchedule(value);
+      setCustomSchedule(value);
+    }
+  };
+
+  const handleCustomScheduleChange = (value: string) => {
+    setCustomSchedule(value);
+    setReviewSchedule(value);
+  };
+
+  const detectGit = async () => {
+    setDetecting(true);
+    setError(null);
+    try {
+      const info = (await invoke('project.git.detect', { projectId: project.id })) as {
+        baseUrl?: string;
+        projectPath?: string;
+        defaultBranch?: string;
+        branches?: string[];
+      };
+      if (info.baseUrl) setBaseUrl(info.baseUrl);
+      if (info.projectPath) setProjectPath(info.projectPath);
+      if (info.defaultBranch) setDefaultBranch(info.defaultBranch);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -142,6 +191,19 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
       </div>
 
       <div className="form-group">
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={detectGit}
+          disabled={detecting}
+        >
+          {detecting ? '检测中...' : '从本地 Git 自动检测'}
+        </button>
+        <div className="project-meta" style={{ marginTop: 6 }}>
+          自动读取项目 git remote 与默认分支，只需再填写 Access Token
+        </div>
+      </div>
+
+      <div className="form-group">
         <label>Access Token</label>
         <input
           type="password"
@@ -178,13 +240,30 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
       </div>
 
       <div className="form-group">
-        <label>评审调度 Cron</label>
-        <input
+        <label>评审调度间隔</label>
+        <select
           className="input"
-          value={reviewSchedule}
-          placeholder="*/10 * * * *"
-          onChange={(e) => setReviewSchedule(e.target.value)}
-        />
+          value={isCustom ? 'custom' : reviewSchedule}
+          onChange={(e) => handleIntervalChange(e.target.value)}
+        >
+          {REVIEW_INTERVALS.map((item) => (
+            <option key={item.cron} value={item.cron}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+        {isCustom && (
+          <input
+            className="input"
+            style={{ marginTop: 8 }}
+            value={customSchedule}
+            placeholder="*/10 * * * *"
+            onChange={(e) => handleCustomScheduleChange(e.target.value)}
+          />
+        )}
+        <div className="project-meta" style={{ marginTop: 6 }}>
+          当前 cron: {reviewSchedule}
+        </div>
       </div>
 
       <div className="form-group">

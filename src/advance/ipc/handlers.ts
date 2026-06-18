@@ -11,6 +11,7 @@ import { getArchiveRoot } from '../types';
 import { loadProjectConfig } from '../config/project-config';
 import { scanExistingFiles } from '../project-scanner';
 import { UndoExecutor } from '../archive/undo-executor';
+import { detectGitInfo } from '../utils/git-info';
 import type { ClassicService } from '../classic/classic-service';
 
 import { readDirectoryTree } from '../utils/file-tree';
@@ -332,5 +333,11 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     };
     ctx.store.updateMrReviewConfig(params.projectId, updated);
     return { success: true };
+  },
+
+  'project.git.detect': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    return detectGitInfo(project.rootPath);
   },
 };
