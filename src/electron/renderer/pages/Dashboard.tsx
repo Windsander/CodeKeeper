@@ -11,6 +11,7 @@ export function Dashboard() {
   const [rootPath, setRootPath] = useState('');
   const [archiveRoot, setArchiveRoot] = useState('');
   const [registerError, setRegisterError] = useState<string | null>(null);
+  const [registering, setRegistering] = useState(false);
   const lastDataRef = useRef<string>('');
 
   const refresh = async (silent = false) => {
@@ -59,7 +60,8 @@ export function Dashboard() {
   };
 
   const register = async () => {
-    if (!rootPath.trim()) return;
+    if (!rootPath.trim() || registering) return;
+    setRegistering(true);
     setRegisterError(null);
     try {
       await window.electronAPI.invoke('project.register', {
@@ -71,6 +73,8 @@ export function Dashboard() {
       await refresh();
     } catch (err) {
       setRegisterError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRegistering(false);
     }
   };
 
@@ -122,7 +126,13 @@ export function Dashboard() {
           </div>
         </div>
 
-        <button className="btn btn-primary" onClick={register}>注册</button>
+        <button
+          className="btn btn-primary"
+          onClick={register}
+          disabled={registering || !rootPath.trim()}
+        >
+          {registering ? '注册中...' : '注册'}
+        </button>
         {registerError && <div className="error-message">{registerError}</div>}
       </div>
 

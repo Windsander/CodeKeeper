@@ -46,10 +46,17 @@ export interface HandlerContext {
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
   'project.register': async (ctx, params) => {
     const project = ctx.registry.register(params.rootPath, params.archiveRoot);
-    const config = loadProjectConfig(project.rootPath, project.archiveRoot);
-    const scannedCount = scanExistingFiles(ctx.store, project, config);
-    logger.info({ projectId: project.id, scannedCount }, '注册项目时全量扫描完成');
     ctx.watchProject?.(project);
+    // 全量扫描可能耗时较长，放到后台执行，避免阻塞注册返回
+    setImmediate(() => {
+      try {
+        const config = loadProjectConfig(project.rootPath, project.archiveRoot);
+        const scannedCount = scanExistingFiles(ctx.store, project, config);
+        logger.info({ projectId: project.id, scannedCount }, '注册项目时全量扫描完成');
+      } catch (err) {
+        logger.warn({ err, projectId: project.id }, '注册项目时全量扫描失败');
+      }
+    });
     return project;
   },
 
