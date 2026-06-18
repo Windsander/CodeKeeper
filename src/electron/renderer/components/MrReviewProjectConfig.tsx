@@ -304,10 +304,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             Reviewer 会发表评论；Auto-Fixer 会尝试在 MR source branch 上自动修复并 resolve discussion（包括他人创建的 discussions）。
           </div>
         </div>
-      </div>
 
-      <div className="config-section">
-        <h5 className="config-section-title">MR 评审行为</h5>
         <div className="form-group">
           <label>自动学习模式</label>
           <Dropdown
