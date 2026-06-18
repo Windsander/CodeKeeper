@@ -47,8 +47,13 @@ export function useIpc<T>(method: string, params?: unknown) {
   );
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    // 有缓存时直接展示旧数据并后台静默刷新，避免页面切换出现 loading
+    if (data) {
+      refresh(true);
+    } else {
+      refresh();
+    }
+  }, [refresh, data]);
 
   const mutate = useCallback(
     (value: T | ((prev: T | null) => T | null)) => {
