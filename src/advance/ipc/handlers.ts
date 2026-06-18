@@ -59,6 +59,28 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         logger.warn({ err, projectId: project.id }, '注册项目时全量扫描失败');
       }
     })();
+
+    // 自动从本地 git 检测 GitLab 配置，作为默认配置保存（token 留空待用户填写）
+    (async () => {
+      try {
+        const gitInfo = await detectGitInfo(project.rootPath);
+        if (gitInfo.baseUrl && gitInfo.projectPath) {
+          ctx.store.updateProjectGitlabConfig(project.id, {
+            baseUrl: gitInfo.baseUrl,
+            projectPath: gitInfo.projectPath,
+            token: '',
+            defaultBranch: gitInfo.defaultBranch ?? 'main',
+          });
+          logger.info(
+            { projectId: project.id, baseUrl: gitInfo.baseUrl, projectPath: gitInfo.projectPath },
+            '注册项目时自动从 git 配置 GitLab'
+          );
+        }
+      } catch (err) {
+        logger.warn({ err, projectId: project.id }, '注册项目时自动检测 git 信息失败');
+      }
+    })();
+
     return project;
   },
 
