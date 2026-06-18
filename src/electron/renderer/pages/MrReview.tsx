@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
 import { invoke } from '../api/electron-api';
+import { Toggle } from '../components/Toggle';
 import {
   MrReviewProjectConfig,
   type ProjectWithMrConfig,
+  DEFAULT_MR_REVIEW,
 } from '../components/MrReviewProjectConfig';
 
 /**
@@ -35,6 +37,31 @@ export function MrReview() {
 
   const toggleConfig = (projectId: string) => {
     setExpandedId((prev) => (prev === projectId ? null : projectId));
+  };
+
+  const toggleMrReview = async (project: ProjectWithMrConfig) => {
+    const nextEnabled = !project.mrReview?.enabled;
+    const gitlab = project.gitlab;
+    const missingConfig =
+      nextEnabled &&
+      (!gitlab?.baseUrl || !gitlab?.projectPath || !gitlab?.token);
+    if (missingConfig) {
+      setExpandedId(project.id);
+      return;
+    }
+    try {
+      await invoke('project.mrreview.config.update', {
+        projectId: project.id,
+        mrReview: {
+          ...(project.mrReview ?? DEFAULT_MR_REVIEW),
+          enabled: nextEnabled,
+        },
+      });
+      await refreshProjects();
+      await refreshStatus();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
   };
 
   return (
@@ -111,12 +138,20 @@ export function MrReview() {
                         )}
                       </div>
                     </div>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => toggleConfig(project.id)}
-                    >
-                      {expandedId === project.id ? '收起' : '配置'}
-                    </button>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <Toggle
+                        checked={enabled}
+                        onChange={() => toggleMrReview(project)}
+                      >
+                        {enabled ? '已启用' : '未启用'}
+                      </Toggle>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => toggleConfig(project.id)}
+                      >
+                        {expandedId === project.id ? '收起' : '配置'}
+                      </button>
+                    </div>
                   </div>
                   {expandedId === project.id && (
                     <MrReviewProjectConfig

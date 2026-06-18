@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { invoke } from '../api/electron-api';
+import { Toggle } from './Toggle';
 
 interface GitlabConfig {
   baseUrl: string;
@@ -29,14 +30,14 @@ interface MrReviewProjectConfigProps {
   onSaved: () => void;
 }
 
-const DEFAULT_GITLAB: GitlabConfig = {
+export const DEFAULT_GITLAB: GitlabConfig = {
   baseUrl: 'https://gitlab.com',
   projectPath: '',
   token: '',
   defaultBranch: 'main',
 };
 
-const DEFAULT_MR_REVIEW: MrReviewConfig = {
+export const DEFAULT_MR_REVIEW: MrReviewConfig = {
   enabled: false,
   autoMergeMode: 'audit',
   reviewSchedule: '*/10 * * * *',
@@ -54,29 +55,6 @@ const REVIEW_INTERVALS = [
   { label: '每天', cron: '0 9 * * *' },
   { label: '自定义', cron: 'custom' },
 ];
-
-interface ToggleProps {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  children: React.ReactNode;
-}
-
-function Toggle({ checked, onChange, children }: ToggleProps) {
-  return (
-    <label className="toggle">
-      <input
-        type="checkbox"
-        className="toggle-input"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span className="toggle-track">
-        <span className="toggle-thumb" />
-      </span>
-      <span className="toggle-label">{children}</span>
-    </label>
-  );
-}
 
 /**
  * MR 评审项目级配置面板
@@ -177,6 +155,16 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   return (
     <div className="card" style={{ marginTop: 16, background: 'var(--main-bg)' }}>
       {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
+
+      <div className="config-section">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>启用 MR 自动评审</div>
+            <div className="project-meta">开启后 MR Agent 会定时轮询该项目的 open MRs 并自动生成评审意见</div>
+          </div>
+          <Toggle checked={enabled} onChange={setEnabled} />
+        </div>
+      </div>
 
       <div className="config-section">
         <h5 className="config-section-title">Git 仓库</h5>
@@ -291,17 +279,14 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             <option value="HIGH">HIGH</option>
           </select>
         </div>
-      </div>
 
-      <div className="config-section">
-        <h5 className="config-section-title">选项</h5>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24 }}>
-          <Toggle checked={enabled} onChange={setEnabled}>
-            启用 MR 自动评审
-          </Toggle>
+        <div className="form-group">
           <Toggle checked={learningEnabled} onChange={setLearningEnabled}>
             启用学习模式
           </Toggle>
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            从人工 review 中持续优化评审规则
+          </div>
         </div>
       </div>
 
