@@ -73,11 +73,33 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       const archiveRoot = getArchiveRoot(p);
       const statusPath = join(archiveRoot, 'status.json');
       let healthScore = 1;
+      const statusCounts: Partial<typeof counts> = {};
       if (existsSync(statusPath)) {
         try {
-          const status = JSON.parse(readFileSync(statusPath, 'utf-8')) as { healthScore?: number };
+          const status = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
+            healthScore?: number;
+            pendingCount?: number;
+            archivedCount?: number;
+            ignoredCount?: number;
+            orphanedCount?: number;
+            copiedCount?: number;
+            organizedCount?: number;
+            flaggedCount?: number;
+          };
           if (typeof status.healthScore === 'number') {
             healthScore = status.healthScore;
+          }
+          // 当数据库统计被清空（如注销后重新注册）但归档目录仍有 status.json 时，
+          // 用 status.json 中的统计作为回退，避免卡片只显示健康度。
+          const allZero = Object.values(counts).every((v) => v === 0);
+          if (allZero) {
+            statusCounts.pending = status.pendingCount;
+            statusCounts.archived = status.archivedCount;
+            statusCounts.ignored = status.ignoredCount;
+            statusCounts.orphaned = status.orphanedCount;
+            statusCounts.copied = status.copiedCount;
+            statusCounts.organized = status.organizedCount;
+            statusCounts.flagged = status.flaggedCount;
           }
         } catch {
           // 状态文件读取失败时回退到默认值
@@ -86,6 +108,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       return {
         ...p,
         ...counts,
+        ...statusCounts,
         healthScore,
         lastScannedAt: p.lastScannedAt,
       };
