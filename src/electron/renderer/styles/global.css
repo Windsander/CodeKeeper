@@ -291,6 +291,71 @@ input[type='number']:focus {
   color: var(--text-primary);
 }
 
+.config-section {
+  margin-bottom: 24px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.config-section:last-of-type {
+  border-bottom: none;
+}
+
+.config-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.toggle-input {
+  display: none;
+}
+
+.toggle-track {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--border-color);
+  position: relative;
+  transition: background 0.2s ease;
+  flex-shrink: 0;
+}
+
+.toggle-input:checked + .toggle-track {
+  background: var(--success);
+}
+
+.toggle-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(20px);
+}
+
+.toggle-label {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
 .form-row .input {
   flex: 1;
 }

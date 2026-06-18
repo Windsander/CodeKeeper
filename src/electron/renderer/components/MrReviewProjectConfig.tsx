@@ -40,7 +40,7 @@ const DEFAULT_MR_REVIEW: MrReviewConfig = {
   enabled: false,
   autoMergeMode: 'audit',
   reviewSchedule: '*/10 * * * *',
-  learningEnabled: false,
+  learningEnabled: true,
   maxAutoMergeRisk: 'MEDIUM',
 };
 
@@ -54,6 +54,29 @@ const REVIEW_INTERVALS = [
   { label: '每天', cron: '0 9 * * *' },
   { label: '自定义', cron: 'custom' },
 ];
+
+interface ToggleProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: React.ReactNode;
+}
+
+function Toggle({ checked, onChange, children }: ToggleProps) {
+  return (
+    <label className="toggle">
+      <input
+        type="checkbox"
+        className="toggle-input"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="toggle-track">
+        <span className="toggle-thumb" />
+      </span>
+      <span className="toggle-label">{children}</span>
+    </label>
+  );
+}
 
 /**
  * MR 评审项目级配置面板
@@ -159,135 +182,134 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
 
       {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
 
-      <div className="form-group">
-        <label className="form-checkbox">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          <span>启用 MR 自动评审</span>
-        </label>
-      </div>
-
-      <div className="form-group">
-        <label>GitLab 地址</label>
-        <input
-          className="input"
-          value={baseUrl}
-          placeholder="https://gitlab.com"
-          onChange={(e) => setBaseUrl(e.target.value)}
-        />
-      </div>
-
-      <div className="form-group">
-        <label>项目路径（group/project）</label>
-        <input
-          className="input"
-          value={projectPath}
-          placeholder="my-group/my-project"
-          onChange={(e) => setProjectPath(e.target.value)}
-        />
-      </div>
-
-      <div className="form-group">
-        <button
-          className="btn btn-primary btn-sm"
-          onClick={detectGit}
-          disabled={detecting}
-        >
-          {detecting ? '检测中...' : '从本地 Git 自动检测'}
-        </button>
-        <div className="project-meta" style={{ marginTop: 6 }}>
-          自动读取项目 git remote 与默认分支，只需再填写 Access Token
-        </div>
-      </div>
-
-      <div className="form-group">
-        <label>Access Token</label>
-        <input
-          type="password"
-          className="input"
-          value={token}
-          placeholder="请输入 GitLab Access Token"
-          onChange={(e) => setToken(e.target.value)}
-        />
-        <div className="project-meta" style={{ marginTop: 6 }}>
-          需要 api、read_repository、write_repository 权限以读取 MR 并发表评论
-        </div>
-      </div>
-
-      <div className="form-group">
-        <label>默认分支</label>
-        <input
-          className="input"
-          value={defaultBranch}
-          placeholder="main"
-          onChange={(e) => setDefaultBranch(e.target.value)}
-        />
-      </div>
-
-      <div className="form-group">
-        <label>自动合并模式</label>
-        <select
-          className="input"
-          value={autoMergeMode}
-          onChange={(e) => setAutoMergeMode(e.target.value as 'full' | 'audit')}
-        >
-          <option value="audit">仅审计（只评论不合并）</option>
-          <option value="full">全自动（低风险投资可合并）</option>
-        </select>
-      </div>
-
-      <div className="form-group">
-        <label>评审调度间隔</label>
-        <select
-          className="input"
-          value={isCustom ? 'custom' : reviewSchedule}
-          onChange={(e) => handleIntervalChange(e.target.value)}
-        >
-          {REVIEW_INTERVALS.map((item) => (
-            <option key={item.cron} value={item.cron}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-        {isCustom && (
+      <div className="config-section">
+        <h5 className="config-section-title">Git 仓库</h5>
+        <div className="form-group">
+          <label>GitLab 地址</label>
           <input
             className="input"
-            style={{ marginTop: 8 }}
-            value={customSchedule}
-            placeholder="*/10 * * * *"
-            onChange={(e) => handleCustomScheduleChange(e.target.value)}
+            value={baseUrl}
+            placeholder="https://gitlab.com"
+            onChange={(e) => setBaseUrl(e.target.value)}
           />
-        )}
-        <div className="project-meta" style={{ marginTop: 6 }}>
-          当前 cron: {reviewSchedule}
+        </div>
+
+        <div className="form-group">
+          <label>项目路径（group/project）</label>
+          <input
+            className="input"
+            value={projectPath}
+            placeholder="my-group/my-project"
+            onChange={(e) => setProjectPath(e.target.value)}
+          />
+        </div>
+
+        <div className="form-group">
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={detectGit}
+            disabled={detecting}
+          >
+            {detecting ? '检测中...' : '从本地 Git 自动检测'}
+          </button>
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            自动读取项目 git remote 与默认分支，只需再填写 Access Token
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label>Access Token</label>
+          <input
+            type="password"
+            className="input"
+            value={token}
+            placeholder="请输入 GitLab Access Token"
+            onChange={(e) => setToken(e.target.value)}
+          />
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            需要 api、read_repository、write_repository 权限以读取 MR 并发表评论
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label>默认分支</label>
+          <input
+            className="input"
+            value={defaultBranch}
+            placeholder="main"
+            onChange={(e) => setDefaultBranch(e.target.value)}
+          />
         </div>
       </div>
 
-      <div className="form-group">
-        <label>允许自动合并的最大风险</label>
-        <select
-          className="input"
-          value={maxAutoMergeRisk}
-          onChange={(e) => setMaxAutoMergeRisk(e.target.value as 'LOW' | 'MEDIUM' | 'HIGH')}
-        >
-          <option value="LOW">LOW</option>
-          <option value="MEDIUM">MEDIUM</option>
-          <option value="HIGH">HIGH</option>
-        </select>
+      <div className="config-section">
+        <h5 className="config-section-title">MR 评审行为</h5>
+        <div className="form-group">
+          <label>自动合并模式</label>
+          <select
+            className="input"
+            value={autoMergeMode}
+            onChange={(e) => setAutoMergeMode(e.target.value as 'full' | 'audit')}
+          >
+            <option value="audit">仅审计（只评论不合并）</option>
+            <option value="full">全自动（低风险投资可合并）</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>评审调度间隔</label>
+          <select
+            className="input"
+            value={isCustom ? 'custom' : reviewSchedule}
+            onChange={(e) => handleIntervalChange(e.target.value)}
+          >
+            {REVIEW_INTERVALS.map((item) => (
+              <option key={item.cron} value={item.cron}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+          {isCustom && (
+            <input
+              className="input"
+              style={{ marginTop: 8 }}
+              value={customSchedule}
+              placeholder="*/10 * * * *"
+              onChange={(e) => handleCustomScheduleChange(e.target.value)}
+            />
+          )}
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            当前 cron: {reviewSchedule}
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label>允许自动合并的最大风险</label>
+          <select
+            className="input"
+            value={maxAutoMergeRisk}
+            onChange={(e) => setMaxAutoMergeRisk(e.target.value as 'LOW' | 'MEDIUM' | 'HIGH')}
+          >
+            <option value="LOW">LOW</option>
+            <option value="MEDIUM">MEDIUM</option>
+            <option value="HIGH">HIGH</option>
+          </select>
+        </div>
       </div>
 
-      <div className="form-group">
-        <label className="form-checkbox">
-          <input
-            type="checkbox"
-            checked={learningEnabled}
-            onChange={(e) => setLearningEnabled(e.target.checked)}
-          />
-          <span>启用学习模式（从人工 review 中持续优化）</span>
-        </label>
+      <div className="config-section">
+        <h5 className="config-section-title">选项</h5>
+        <div className="form-group">
+          <Toggle checked={enabled} onChange={setEnabled}>
+            启用 MR 自动评审
+          </Toggle>
+        </div>
+
+        <div className="form-group">
+          <Toggle checked={learningEnabled} onChange={setLearningEnabled}>
+            启用学习模式（从人工 review 中持续优化）
+          </Toggle>
+        </div>
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
