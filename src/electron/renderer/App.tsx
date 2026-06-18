@@ -5,6 +5,7 @@ import { ProjectDetail } from './pages/ProjectDetail';
 import { ActionHistory } from './pages/ActionHistory';
 import { Logs } from './pages/Logs';
 import { Settings } from './pages/Settings';
+import { MrReview } from './pages/MrReview';
 
 export function App() {
   return (
@@ -16,6 +17,9 @@ export function App() {
             <h2 className="sidebar-title">CodeKeeper</h2>
             <NavLink to="/" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
               仪表盘
+            </NavLink>
+            <NavLink to="/mr-review" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
+              MR 评审
             </NavLink>
             <NavLink to="/history" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
               动作历史
@@ -34,6 +38,7 @@ export function App() {
               <Route path="/history" element={<ActionHistory />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/mr-review" element={<MrReview />} />
             </Routes>
           </main>
         </div>

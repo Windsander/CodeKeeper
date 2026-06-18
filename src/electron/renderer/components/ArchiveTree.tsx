@@ -1,4 +1,4 @@
-interface FileTreeNode {
+export interface FileTreeNode {
   name: string;
   path: string;
   relPath: string;

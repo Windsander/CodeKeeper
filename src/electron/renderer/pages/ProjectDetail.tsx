@@ -8,6 +8,7 @@ import { invoke } from '../api/electron-api';
 import type { ProjectStatus } from '../../shared/types';
 
 import { ArchiveTree } from '../components/ArchiveTree';
+import type { FileTreeNode } from '../components/ArchiveTree';
 
 type Tab = 'context' | 'activity' | 'archive' | 'status';
 
@@ -19,7 +20,7 @@ export function ProjectDetail() {
   const { data: project } = useIpc<{ name: string; rootPath: string; archiveRoot?: string }>('project.get', { projectId: id });
   const { data: context, refresh: refreshContext } = useIpc<{ content: string }>('project.context', { projectId: id });
   const { data: suggestions, refresh: refreshSuggestions } = useIpc<{ content: string }>('project.suggestions', { projectId: id });
-  const { data: archiveTree, refresh: refreshArchiveTree } = useIpc<{ tree: { name: string; path: string; relPath: string; type: 'file' | 'directory'; children?: unknown[] } | null }>('project.archive.tree', { projectId: id });
+  const { data: archiveTree, refresh: refreshArchiveTree } = useIpc<{ tree: FileTreeNode | null }>('project.archive.tree', { projectId: id });
   const { data: status, refresh: refreshStatus } = useIpc<ProjectStatus>('project.status', { projectId: id });
 
   useEffect(() => {
