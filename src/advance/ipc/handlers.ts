@@ -71,11 +71,13 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.list': async (ctx) => {
     const projects = ctx.registry.list();
     return projects.map((p) => {
-      const counts = ctx.store.getProjectCounts(p.id);
+      const dbCounts = ctx.store.getProjectCounts(p.id);
       const archiveRoot = getArchiveRoot(p);
       const statusPath = join(archiveRoot, 'status.json');
       let healthScore = 1;
-      const statusCounts: Partial<typeof counts> = {};
+      // status.json 是归档目录的权威状态快照，只要存在就优先使用其统计；
+      // 数据库 counts 仅作为 status.json 缺失或字段缺失时的回退。
+      let counts = dbCounts;
       if (existsSync(statusPath)) {
         try {
           const status = JSON.parse(readFileSync(statusPath, 'utf-8')) as {
@@ -91,26 +93,22 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
           if (typeof status.healthScore === 'number') {
             healthScore = status.healthScore;
           }
-          // 当数据库统计被清空（如注销后重新注册）但归档目录仍有 status.json 时，
-          // 用 status.json 中的统计作为回退，避免卡片只显示健康度。
-          const allZero = Object.values(counts).every((v) => v === 0);
-          if (allZero) {
-            statusCounts.pending = status.pendingCount;
-            statusCounts.archived = status.archivedCount;
-            statusCounts.ignored = status.ignoredCount;
-            statusCounts.orphaned = status.orphanedCount;
-            statusCounts.copied = status.copiedCount;
-            statusCounts.organized = status.organizedCount;
-            statusCounts.flagged = status.flaggedCount;
-          }
+          counts = {
+            pending: status.pendingCount ?? dbCounts.pending,
+            archived: status.archivedCount ?? dbCounts.archived,
+            ignored: status.ignoredCount ?? dbCounts.ignored,
+            orphaned: status.orphanedCount ?? dbCounts.orphaned,
+            copied: status.copiedCount ?? dbCounts.copied,
+            organized: status.organizedCount ?? dbCounts.organized,
+            flagged: status.flaggedCount ?? dbCounts.flagged,
+          };
         } catch {
-          // 状态文件读取失败时回退到默认值
+          // 状态文件读取失败时回退到数据库统计
         }
       }
       return {
         ...p,
         ...counts,
-        ...statusCounts,
         healthScore,
         lastScannedAt: p.lastScannedAt,
       };
