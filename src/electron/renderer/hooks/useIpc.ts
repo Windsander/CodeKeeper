@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { invoke } from '../api/electron-api';
 
 const cache = new Map<string, unknown>();
@@ -28,6 +28,7 @@ export function useIpc<T>(method: string, params?: unknown) {
   const [data, setData] = useState<T | null>(cached ?? null);
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
+  const initializedRef = useRef(false);
 
   const refresh = useCallback(
     (silent = false) => {
@@ -47,13 +48,15 @@ export function useIpc<T>(method: string, params?: unknown) {
   );
 
   useEffect(() => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
     // 有缓存时直接展示旧数据并后台静默刷新，避免页面切换出现 loading
-    if (data) {
+    if (cached) {
       refresh(true);
     } else {
       refresh();
     }
-  }, [refresh, data]);
+  }, [refresh, cached]);
 
   const mutate = useCallback(
     (value: T | ((prev: T | null) => T | null)) => {
