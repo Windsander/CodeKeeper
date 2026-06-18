@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 /**
  * 已注册项目的运行时元数据（区别于 ProjectConfig 项目配置）
  */
@@ -12,10 +14,17 @@ export interface Project {
   registeredAt: number;
   /** 最后扫描时间戳；null 表示从未扫描 */
   lastScannedAt: number | null;
+  /** 归档位置；未设置时默认使用 <rootPath>/.codekeeper */
+  archiveRoot?: string;
   /** GitLab 配置（可选） */
   gitlab?: GitlabConfig;
   /** MR 评审配置（可选） */
   mrReview?: MrReviewConfig;
+}
+
+/** 获取项目归档目录 */
+export function getArchiveRoot(project: Pick<Project, 'rootPath' | 'archiveRoot'>): string {
+  return project.archiveRoot ?? join(project.rootPath, '.codekeeper');
 }
 
 /**
@@ -108,7 +117,102 @@ export interface WatchedEvent {
 /**
  * 知识条目处理状态
  */
-export type KnowledgeStatus = 'pending' | 'archived' | 'ignored';
+export type KnowledgeStatus = 'pending' | 'archived' | 'ignored' | 'orphaned';
+
+/**
+ * 文档分节摘要
+ */
+export interface DocumentSection {
+  /** 节标题或关键句 */
+  heading: string;
+  /** 该节摘要 */
+  summary: string;
+  /** 置信度 0-1 */
+  confidence: number;
+}
+
+/**
+ * 文档分类结果
+ */
+export interface ClassificationResult {
+  /** 领域分类，如 memory / sync / skill / review */
+  category: string;
+  /** 文档类型，如 design / spec / weekly / note */
+  docType: string;
+  /** 关键词标签 */
+  tags: string[];
+  /** 一句话摘要 */
+  summary: string;
+  /** 分节摘要；短文档可能为空 */
+  sections: DocumentSection[];
+  /** 置信度 0-1 */
+  confidence: number;
+}
+
+/**
+ * 归档动作类型
+ */
+export type ArchiveActionType = 'copy' | 'organize' | 'ignore' | 'flag';
+
+/**
+ * 单条归档建议/动作
+ */
+export interface ArchiveAction {
+  /** 动作 ID */
+  id: string;
+  /** 源文件绝对路径 */
+  sourcePath: string;
+  /** 动作类型 */
+  type: ArchiveActionType;
+  /** 决策说明 / 理由 */
+  reason: string;
+  /** 目标路径（copy/organize/flag 时使用） */
+  targetPath?: string;
+  /** 关联的已有条目 ID（organize 时使用） */
+  relatedEntryId?: string;
+  /** 风险等级：仅用于日志和展示，不影响自动执行 */
+  risk: 'low' | 'medium' | 'high';
+  /** 置信度 0-1 */
+  confidence: number;
+  /** 创建时间戳 */
+  createdAt: number;
+}
+
+/**
+ * 项目实时状态（写入 status.json）
+ */
+export interface ProjectStatus {
+  /** schema 版本 */
+  schemaVersion: number;
+  /** 项目 ID */
+  projectId: string;
+  /** 最后扫描时间戳 */
+  lastScannedAt: number;
+  /** 最后扫描时间的 ISO 8601 表示 */
+  lastScannedAtIso: string;
+  /** 扫描结果状态：success / partial / failed */
+  scanStatus: 'success' | 'partial' | 'failed';
+  /** 总条目数 */
+  totalCount: number;
+  /** 未归档/待处理数量 */
+  pendingCount: number;
+  /** 已归档数量 */
+  archivedCount: number;
+  /** 忽略数量 */
+  ignoredCount: number;
+  /** 源文件已删除但归档副本保留的数量 */
+  orphanedCount: number;
+  /** 已复制到归档的数量 */
+  copiedCount: number;
+  /** 已在归档内重新组织的数量 */
+  organizedCount: number;
+  /** 标记为需要关注的数量 */
+  flaggedCount: number;
+  /** 健康度 0-1 */
+  healthScore: number;
+  /** 健康度计算说明 */
+  healthScoreDefinition: string;
+}
 
 /**
  * 知识条目元数据；实际内容存储在文件系统中，此处只保存路径与内容哈希
