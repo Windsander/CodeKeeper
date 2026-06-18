@@ -112,8 +112,8 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
   const lines: string[] = [
     `## 🤖 CodeKeeper 自动评审`,
     ``,
-    `**MR**: ${mr.title}`,
-    `**分支**: \`${mr.sourceBranch}\` → \`${mr.targetBranch}\``,
+    `**MR**: ${mr.title}<br>`,
+    `**分支**: \`${mr.sourceBranch}\` → \`${mr.targetBranch}\`<br>`,
     `**发现项**: ${total > 0 ? `${total} 个` : '✅ 无'}`,
     ``,
     ...formatSummary(result.summary),

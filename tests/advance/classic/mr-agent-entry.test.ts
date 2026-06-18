@@ -44,8 +44,8 @@ describe('formatReviewComment', () => {
   it('包含精简的 MR 元信息', () => {
     const comment = formatReviewComment(mockMR, { ...mockResult, findings: [] });
     expect(comment).toContain('## 🤖 CodeKeeper 自动评审');
-    expect(comment).toContain('**MR**: Add login feature');
-    expect(comment).toContain('**分支**: `feature/login` → `main`');
+    expect(comment).toContain('**MR**: Add login feature<br>');
+    expect(comment).toContain('**分支**: `feature/login` → `main`<br>');
     expect(comment).toContain('**发现项**: ✅ 无');
   });
 
