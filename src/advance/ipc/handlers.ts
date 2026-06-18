@@ -346,10 +346,13 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     }
     const updated: NonNullable<typeof project.mrReview> = {
       enabled: mrReview.enabled ?? false,
+      agentRole: mrReview.agentRole ?? 'reviewer+auto-fixer',
       autoMergeMode: mrReview.autoMergeMode ?? 'audit',
       reviewSchedule: mrReview.reviewSchedule ?? '*/10 * * * *',
       learningEnabled: mrReview.learningEnabled ?? false,
       maxAutoMergeRisk: mrReview.maxAutoMergeRisk ?? 'MEDIUM',
+      autoFixEnabled: mrReview.autoFixEnabled ?? true,
+      resolveOthersDiscussions: mrReview.resolveOthersDiscussions ?? true,
     };
     ctx.store.updateMrReviewConfig(params.projectId, updated);
     return { success: true };

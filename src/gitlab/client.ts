@@ -129,6 +129,36 @@ export class GitLabClient {
   }
 
   /**
+   * Resolve or unresolve a discussion on MR
+   */
+  async resolveDiscussion(
+    iid: number,
+    discussionId: string,
+    resolved: boolean
+  ): Promise<GitLabDiscussion> {
+    return this.request<GitLabDiscussion>(
+      'PUT',
+      `/projects/${this.projectId}/merge_requests/${iid}/discussions/${encodeURIComponent(discussionId)}`,
+      { resolved }
+    );
+  }
+
+  /**
+   * Add a note to an existing discussion on MR
+   */
+  async addDiscussionNote(
+    iid: number,
+    discussionId: string,
+    body: string
+  ): Promise<GitLabNote> {
+    return this.request<GitLabNote>(
+      'POST',
+      `/projects/${this.projectId}/merge_requests/${iid}/discussions/${encodeURIComponent(discussionId)}/notes`,
+      { body }
+    );
+  }
+
+  /**
    * Create a discussion on MR
    */
   async createDiscussion(

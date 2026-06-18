@@ -47,6 +47,8 @@ export interface GitlabConfig {
 export interface MrReviewConfig {
   /** 是否启用 MR 自动评审 */
   enabled: boolean;
+  /** Agent 角色：reviewer / auto-fixer / reviewer+auto-fixer */
+  agentRole: 'reviewer' | 'auto-fixer' | 'reviewer+auto-fixer';
   /** 自动合并模式：full 全自动 / audit 仅审计 */
   autoMergeMode: 'full' | 'audit';
   /** 评审调度 Cron 表达式 */
@@ -55,6 +57,10 @@ export interface MrReviewConfig {
   learningEnabled: boolean;
   /** 允许自动合并的最大风险等级 */
   maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+  /** 是否启用自动修复（角色含 auto-fixer 时生效） */
+  autoFixEnabled?: boolean;
+  /** 是否处理他人 discussion（角色含 auto-fixer 时生效） */
+  resolveOthersDiscussions?: boolean;
 }
 
 /**

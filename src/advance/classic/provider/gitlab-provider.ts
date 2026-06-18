@@ -11,6 +11,7 @@ import {
   type MrDiff,
   type ReviewerComment,
   type MergeOptions,
+  type GitLabDiffPosition,
 } from './types.js';
 import { GitLabClient } from '../../../gitlab/client.js';
 import type { ProjectConfig } from '../../../types.js';
@@ -124,6 +125,22 @@ export class GitLabProvider implements IGitProvider {
   }
 
   /**
+   * 获取指定 MR 的 SHA 信息（base / head / start）
+   */
+  async getMRShaInfo(iid: number): Promise<{ baseSha: string; headSha: string; startSha: string }> {
+    const mr = await this.client.getMergeRequest(iid);
+    const refs = (mr as unknown as { diff_refs?: { base_sha: string; head_sha: string; start_sha: string } }).diff_refs;
+    if (!refs) {
+      throw new Error(`[GitLabProvider] MR !${iid} 未返回 diff_refs`);
+    }
+    return {
+      baseSha: refs.base_sha,
+      headSha: refs.head_sha,
+      startSha: refs.start_sha,
+    };
+  }
+
+  /**
    * 获取指定 MR 的 diff 列表
    */
   async getMRDiff(iid: number): Promise<MrDiff[]> {
@@ -143,6 +160,77 @@ export class GitLabProvider implements IGitProvider {
         deletions,
       };
     });
+  }
+
+  /**
+   * 在指定 MR 下创建 discussion thread
+   *
+   * 返回新创建 discussion 的 id。
+   */
+  async createDiscussion(
+    iid: number,
+    body: string,
+    position?: GitLabDiffPosition
+  ): Promise<string> {
+    const gitlabPosition = position
+      ? {
+          base_sha: position.baseSha,
+          head_sha: position.headSha,
+          start_sha: position.startSha,
+          position_type: position.positionType,
+          old_path: position.oldPath,
+          new_path: position.newPath,
+          new_line: position.newLine,
+          old_line: position.oldLine,
+        }
+      : undefined;
+    const discussion = await this.client.createDiscussion(iid, body, gitlabPosition);
+    return discussion.id;
+  }
+
+  /**
+   * 获取指定 MR 的所有 discussions
+   *
+   * 过滤掉 system notes 和 bot 用户创建的 discussion。
+   */
+  async getDiscussions(
+    iid: number
+  ): Promise<
+    Array<{ id: string; resolvable: boolean; resolved: boolean; notes: ReviewerComment[] }>
+  > {
+    const discussions = await this.client.getMergeRequestDiscussions(iid);
+    return discussions
+      .filter(
+        (d) =>
+          d.notes.length > 0 &&
+          !d.notes[0].system &&
+          !isBot(d.notes[0].author.username)
+      )
+      .map((d) => ({
+        id: d.id,
+        resolvable: d.resolvable,
+        resolved: d.resolved,
+        notes: d.notes.map((note) => ({
+          author: note.author.username,
+          body: note.body,
+          createdAt: note.created_at,
+          resolved: note.resolved ?? false,
+        })),
+      }));
+  }
+
+  /**
+   * Resolve 或 unresolve 指定 discussion
+   */
+  async resolveDiscussion(iid: number, discussionId: string, resolved = true): Promise<void> {
+    await this.client.resolveDiscussion(iid, discussionId, resolved);
+  }
+
+  /**
+   * 在指定 discussion 下追加 note
+   */
+  async addDiscussionNote(iid: number, discussionId: string, body: string): Promise<void> {
+    await this.client.addDiscussionNote(iid, discussionId, body);
   }
 
   /**

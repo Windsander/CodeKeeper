@@ -7,11 +7,15 @@
  * 目前只做单次评审轮询，后续由 ClassicService 定时 spawn 该进程。
  */
 
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { LlmClient } from '../llm/client.js';
 import { GitLabProvider } from './provider/gitlab-provider.js';
 import { ClassicReviewer } from './review/reviewer.js';
-import type { Project, GitlabConfig } from '../types.js';
-import type { MergeRequest, ReviewResult, ReviewFinding } from './provider/types.js';
+import { buildDiffPosition, getFindingKey } from './provider/discussion-mapper.js';
+import type { Project, GitlabConfig, MrReviewConfig } from '../types.js';
+import { getArchiveRoot } from '../types.js';
+import type { MergeRequest, ReviewResult, ReviewFinding, MrDiff } from './provider/types.js';
 
 /**
  * 从环境变量解析 MR Agent 配置
@@ -94,14 +98,31 @@ function groupFindingsBySeverity(
  */
 function formatSummary(summary: string): string[] {
   let formatted = summary.replace(/(\d+)\)\s*/g, '$1. ');
-  formatted = formatted.replace(/([：:])(\d+\.\s)/g, '$1\n$2');
+  formatted = formatted.replace(/([^\n])(\d+\.\s)/g, '$1\n$2');
   return formatted.split('\n').map((line) => `> ${line}`);
 }
 
 /**
- * 为指定 MR 生成评审评论正文
+ * 生成单条 finding 的 discussion body
+ */
+function formatFindingDiscussionBody(finding: ReviewFinding): string {
+  const meta = SEVERITY_META[finding.severity];
+  const ruleTag = finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : '';
+  return [
+    `## ${meta.icon} ${meta.label}${ruleTag}`,
+    ``,
+    `**问题描述：**`,
+    finding.message,
+    ``,
+    `**修改建议：**`,
+    finding.suggestion,
+  ].join('\n');
+}
+
+/**
+ * 为指定 MR 生成 summary 评论正文
  *
- * 将 ReviewResult 格式化为按 severity 分组的 Markdown 评论，便于在 GitLab MR 中快速浏览。
+ * 仅用于 reviewer / reviewer+auto-fixer 角色，汇总所有 findings。
  */
 export function formatReviewComment(mr: MergeRequest, result: ReviewResult): string {
   const now = new Date().toLocaleString('zh-CN', { hour12: false });
@@ -143,14 +164,84 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
 }
 
 /**
+ * 已发布 discussion 的记录项
+ */
+interface PostedDiscussion {
+  findingKey: string;
+  discussionId: string;
+  file: string;
+  line: number;
+  severity: ReviewFinding['severity'];
+  resolved: boolean;
+}
+
+/**
+ * MR Agent 状态文件结构
+ */
+interface MrAgentState {
+  version: number;
+  discussions: Record<string, PostedDiscussion[]>;
+}
+
+function getStatePath(project: Project): string {
+  const archiveRoot = getArchiveRoot(project);
+  return join(archiveRoot, 'mr-agent-state.json');
+}
+
+function loadState(project: Project): MrAgentState {
+  const path = getStatePath(project);
+  if (!existsSync(path)) {
+    return { version: 1, discussions: {} };
+  }
+  try {
+    const raw = readFileSync(path, 'utf-8');
+    const parsed = JSON.parse(raw) as MrAgentState;
+    if (!parsed || typeof parsed !== 'object' || !parsed.discussions) {
+      return { version: 1, discussions: {} };
+    }
+    return parsed;
+  } catch {
+    return { version: 1, discussions: {} };
+  }
+}
+
+function saveState(project: Project, state: MrAgentState): void {
+  const path = getStatePath(project);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(state, null, 2), 'utf-8');
+}
+
+function getDiscussionStateKey(mr: MergeRequest): string {
+  return `${mr.sourceBranch}:${mr.targetBranch}`;
+}
+
+function getMrReviewConfig(project: Project): MrReviewConfig {
+  return (
+    project.mrReview ?? {
+      enabled: true,
+      agentRole: 'reviewer+auto-fixer',
+      autoMergeMode: 'audit',
+      reviewSchedule: '*/10 * * * *',
+      learningEnabled: false,
+      maxAutoMergeRisk: 'MEDIUM',
+      autoFixEnabled: true,
+      resolveOthersDiscussions: true,
+    }
+  );
+}
+
+/**
  * 对单个项目执行 MR 评审轮询
  *
  * 流程：
  * 1. 构造 GitLabProvider
  * 2. 列出所有 open MRs
  * 3. 跳过 draft MR
- * 4. 对每个非 draft MR 获取 diff，调用 ClassicReviewer.review()
- * 5. 如果有 findings，调用 postReviewComment 发表评论
+ * 4. 对每个非 draft MR 获取 diff 和 SHA 信息
+ * 5. 调用 ClassicReviewer.review() 生成 findings
+ * 6. 根据 agentRole 创建 summary note
+ * 7. 仅对 HIGH/CRITICAL 创建 discussion thread（带代码行定位）
+ * 8. 记录 finding-discussion 映射
  */
 async function reviewProject(
   project: Project,
@@ -158,6 +249,12 @@ async function reviewProject(
 ): Promise<void> {
   if (!project.gitlab) {
     console.log(`[MR Agent] 项目 ${project.name} 未配置 GitLab，跳过`);
+    return;
+  }
+
+  const config = getMrReviewConfig(project);
+  if (!config.enabled) {
+    console.log(`[MR Agent] 项目 ${project.name} 未启用 MR 评审，跳过`);
     return;
   }
 
@@ -169,6 +266,8 @@ async function reviewProject(
     tokenBudget: 4000,
     rules: '默认评审规则：检查代码质量、安全性、性能问题',
   });
+
+  const state = loadState(project);
 
   console.log(`[MR Agent] 扫描项目 ${project.name} 的 open MRs...`);
 
@@ -191,7 +290,7 @@ async function reviewProject(
 
     console.log(`[MR Agent] 评审 MR !${mr.iid}: ${mr.title}`);
 
-    let diffs;
+    let diffs: MrDiff[];
     try {
       diffs = await provider.getMRDiff(mr.iid);
     } catch (error) {
@@ -205,6 +304,15 @@ async function reviewProject(
       continue;
     }
 
+    let shaInfo;
+    try {
+      shaInfo = await provider.getMRShaInfo(mr.iid);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[MR Agent] 获取 MR !${mr.iid} SHA 信息失败: ${message}`);
+      continue;
+    }
+
     let result: ReviewResult;
     try {
       result = await reviewer.review(mr, diffs);
@@ -214,20 +322,65 @@ async function reviewProject(
       continue;
     }
 
-    if (result.findings.length > 0) {
+    if (result.findings.length === 0) {
+      console.log(`[MR Agent] MR !${mr.iid} 无发现问题`);
+      continue;
+    }
+
+    // reviewer / reviewer+auto-fixer 角色发送 summary note
+    if (config.agentRole === 'reviewer' || config.agentRole === 'reviewer+auto-fixer') {
       const comment = formatReviewComment(mr, result);
       try {
         await provider.postReviewComment(mr.iid, comment);
-        console.log(
-          `[MR Agent] 已在 MR !${mr.iid} 发表评论，${result.findings.length} 个发现项`
-        );
+        console.log(`[MR Agent] 已在 MR !${mr.iid} 发表 summary 评论`);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`[MR Agent] 在 MR !${mr.iid} 发表评论失败: ${message}`);
+        console.error(`[MR Agent] 在 MR !${mr.iid} 发表 summary 评论失败: ${message}`);
       }
-    } else {
-      console.log(`[MR Agent] MR !${mr.iid} 无发现问题`);
     }
+
+    // 仅对 HIGH/CRITICAL 创建 discussion thread
+    const stateKey = getDiscussionStateKey(mr);
+    const postedDiscussions = state.discussions[stateKey] ?? [];
+    const postedKeys = new Set(postedDiscussions.map((d) => d.findingKey));
+
+    for (const finding of result.findings) {
+      if (finding.severity !== 'HIGH' && finding.severity !== 'CRITICAL') {
+        continue;
+      }
+
+      const key = getFindingKey(finding);
+      if (postedKeys.has(key)) {
+        console.log(`[MR Agent] finding ${key} 已存在 discussion，跳过`);
+        continue;
+      }
+
+      const position = buildDiffPosition(finding, diffs, shaInfo);
+      if (!position) {
+        console.warn(`[MR Agent] 无法为 finding ${key} 构造 diff position，跳过`);
+        continue;
+      }
+
+      const body = formatFindingDiscussionBody(finding);
+      try {
+        const discussionId = await provider.createDiscussion(mr.iid, body, position);
+        postedDiscussions.push({
+          findingKey: key,
+          discussionId,
+          file: finding.file,
+          line: finding.line,
+          severity: finding.severity,
+          resolved: false,
+        });
+        console.log(`[MR Agent] 已为 finding ${key} 创建 discussion ${discussionId}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[MR Agent] 为 finding ${key} 创建 discussion 失败: ${message}`);
+      }
+    }
+
+    state.discussions[stateKey] = postedDiscussions;
+    saveState(project, state);
   }
 }
 

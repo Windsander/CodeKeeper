@@ -114,6 +114,29 @@ export interface MergeOptions {
 }
 
 /**
+ * Git diff position，用于把 discussion 定位到具体代码行
+ */
+export interface GitLabDiffPosition {
+  baseSha: string;
+  headSha: string;
+  startSha: string;
+  positionType: 'text';
+  oldPath: string;
+  newPath: string;
+  newLine: number;
+  oldLine?: number;
+}
+
+/**
+ * MR 的 SHA 信息，用于构造 diff position
+ */
+export interface MrShaInfo {
+  baseSha: string;
+  headSha: string;
+  startSha: string;
+}
+
+/**
  * Git 平台抽象接口
  *
  * 所有方法返回 Promise，便于统一错误处理和重试策略。
@@ -125,8 +148,23 @@ export interface IGitProvider {
   /** 获取指定 MR 的 diff 列表 */
   getMRDiff(iid: number): Promise<MrDiff[]>;
 
+  /** 获取指定 MR 的 SHA 信息 */
+  getMRShaInfo(iid: number): Promise<MrShaInfo>;
+
   /** 在指定 MR 下发布评论 */
   postReviewComment(iid: number, body: string): Promise<void>;
+
+  /** 在指定 MR 下创建 discussion thread（可选定位到代码行） */
+  createDiscussion(iid: number, body: string, position?: GitLabDiffPosition): Promise<string>;
+
+  /** 获取指定 MR 的所有 discussions */
+  getDiscussions(iid: number): Promise<Array<{ id: string; resolvable: boolean; resolved: boolean; notes: ReviewerComment[] }>>;
+
+  /** resolve 或 unresolve 指定 discussion */
+  resolveDiscussion(iid: number, discussionId: string, resolved?: boolean): Promise<void>;
+
+  /** 在指定 discussion 下追加 note */
+  addDiscussionNote(iid: number, discussionId: string, body: string): Promise<void>;
 
   /** 获取指定 MR 的评审评论（已过滤系统 note 和 bot） */
   getReviewerComments(iid: number): Promise<ReviewerComment[]>;

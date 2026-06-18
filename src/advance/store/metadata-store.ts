@@ -54,6 +54,16 @@ export class MetadataStore {
       CREATE INDEX IF NOT EXISTS idx_mr_state_project ON mr_review_states(project_id);
       CREATE INDEX IF NOT EXISTS idx_mr_state_state ON mr_review_states(state);
     `);
+
+    // mr_review_states 新增字段
+    const mrStateColumns = this.db.prepare("PRAGMA table_info(mr_review_states)").all() as Array<{ name: string }>;
+    if (!mrStateColumns.some((c) => c.name === 'posted_discussions_json')) {
+      this.db.exec('ALTER TABLE mr_review_states ADD COLUMN posted_discussions_json TEXT');
+    }
+    if (!mrStateColumns.some((c) => c.name === 'last_review_at')) {
+      this.db.exec('ALTER TABLE mr_review_states ADD COLUMN last_review_at INTEGER');
+    }
+
     this.rebuildActionTablesIfNeeded();
 
     // archive_actions 新增 source_path / archive_path
@@ -770,6 +780,8 @@ export class MetadataStore {
     unresolvedCommentsCount: number;
     ciStatus?: string;
     lastReviewerCommentAt?: number;
+    postedDiscussionsJson?: string;
+    lastReviewAt?: number;
     createdAt: number;
     updatedAt: number;
   }): void {
@@ -777,8 +789,8 @@ export class MetadataStore {
       `INSERT INTO mr_review_states (
         id, project_id, mr_iid, source_branch, target_branch, state, title, web_url,
         findings_json, fix_branch, risk_level, reviewer_comments_count, unresolved_comments_count,
-        ci_status, last_reviewer_comment_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ci_status, last_reviewer_comment_at, posted_discussions_json, last_review_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_id, mr_iid) DO UPDATE SET
         source_branch = excluded.source_branch,
         target_branch = excluded.target_branch,
@@ -792,6 +804,8 @@ export class MetadataStore {
         unresolved_comments_count = excluded.unresolved_comments_count,
         ci_status = excluded.ci_status,
         last_reviewer_comment_at = excluded.last_reviewer_comment_at,
+        posted_discussions_json = excluded.posted_discussions_json,
+        last_review_at = excluded.last_review_at,
         updated_at = excluded.updated_at`
     );
     stmt.run(
@@ -810,6 +824,8 @@ export class MetadataStore {
       state.unresolvedCommentsCount,
       state.ciStatus ?? null,
       state.lastReviewerCommentAt ?? null,
+      state.postedDiscussionsJson ?? null,
+      state.lastReviewAt ?? null,
       state.createdAt,
       state.updatedAt
     );
@@ -831,6 +847,8 @@ export class MetadataStore {
     unresolvedCommentsCount: number;
     ciStatus?: string;
     lastReviewerCommentAt?: number;
+    postedDiscussionsJson?: string;
+    lastReviewAt?: number;
     createdAt: number;
     updatedAt: number;
   } | undefined {
@@ -853,6 +871,8 @@ export class MetadataStore {
           unresolved_comments_count: number;
           ci_status: string | null;
           last_reviewer_comment_at: number | null;
+          posted_discussions_json: string | null;
+          last_review_at: number | null;
           created_at: number;
           updated_at: number;
         }
@@ -874,6 +894,8 @@ export class MetadataStore {
       unresolvedCommentsCount: r.unresolved_comments_count,
       ciStatus: r.ci_status ?? undefined,
       lastReviewerCommentAt: r.last_reviewer_comment_at ?? undefined,
+      postedDiscussionsJson: r.posted_discussions_json ?? undefined,
+      lastReviewAt: r.last_review_at ?? undefined,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
@@ -898,6 +920,8 @@ export class MetadataStore {
         unresolved_comments_count: number;
         ci_status: string | null;
         last_reviewer_comment_at: number | null;
+        posted_discussions_json: string | null;
+        last_review_at: number | null;
         created_at: number;
         updated_at: number;
       }>;
@@ -917,6 +941,8 @@ export class MetadataStore {
       unresolvedCommentsCount: r.unresolved_comments_count,
       ciStatus: r.ci_status ?? undefined,
       lastReviewerCommentAt: r.last_reviewer_comment_at ?? undefined,
+      postedDiscussionsJson: r.posted_discussions_json ?? undefined,
+      lastReviewAt: r.last_review_at ?? undefined,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
@@ -941,6 +967,8 @@ export class MetadataStore {
         unresolved_comments_count: number;
         ci_status: string | null;
         last_reviewer_comment_at: number | null;
+        posted_discussions_json: string | null;
+        last_review_at: number | null;
         created_at: number;
         updated_at: number;
       }>;
@@ -960,6 +988,8 @@ export class MetadataStore {
       unresolvedCommentsCount: r.unresolved_comments_count,
       ciStatus: r.ci_status ?? undefined,
       lastReviewerCommentAt: r.last_reviewer_comment_at ?? undefined,
+      postedDiscussionsJson: r.posted_discussions_json ?? undefined,
+      lastReviewAt: r.last_review_at ?? undefined,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
@@ -983,6 +1013,8 @@ export class MetadataStore {
       'unresolvedCommentsCount',
       'ciStatus',
       'lastReviewerCommentAt',
+      'postedDiscussionsJson',
+      'lastReviewAt',
       'updatedAt',
     ] as const;
     const columnMap: Record<string, string> = {
@@ -998,6 +1030,8 @@ export class MetadataStore {
       unresolvedCommentsCount: 'unresolved_comments_count',
       ciStatus: 'ci_status',
       lastReviewerCommentAt: 'last_reviewer_comment_at',
+      postedDiscussionsJson: 'posted_discussions_json',
+      lastReviewAt: 'last_review_at',
       updatedAt: 'updated_at',
     };
 

@@ -11,10 +11,13 @@ interface GitlabConfig {
 
 interface MrReviewConfig {
   enabled: boolean;
+  agentRole: 'reviewer' | 'auto-fixer' | 'reviewer+auto-fixer';
   autoMergeMode: 'full' | 'audit';
   reviewSchedule: string;
   learningEnabled: boolean;
   maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+  autoFixEnabled?: boolean;
+  resolveOthersDiscussions?: boolean;
 }
 
 export interface ProjectWithMrConfig {
@@ -39,10 +42,13 @@ export const DEFAULT_GITLAB: GitlabConfig = {
 
 export const DEFAULT_MR_REVIEW: MrReviewConfig = {
   enabled: false,
+  agentRole: 'reviewer+auto-fixer',
   autoMergeMode: 'audit',
   reviewSchedule: '*/10 * * * *',
   learningEnabled: true,
   maxAutoMergeRisk: 'MEDIUM',
+  autoFixEnabled: true,
+  resolveOthersDiscussions: true,
 };
 
 const REVIEW_INTERVALS = [
@@ -171,10 +177,13 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         projectId: project.id,
         mrReview: {
           enabled: project.mrReview?.enabled ?? DEFAULT_MR_REVIEW.enabled,
+          agentRole: project.mrReview?.agentRole ?? DEFAULT_MR_REVIEW.agentRole,
           autoMergeMode,
           reviewSchedule: reviewSchedule.trim(),
           learningEnabled,
           maxAutoMergeRisk,
+          autoFixEnabled: project.mrReview?.autoFixEnabled ?? DEFAULT_MR_REVIEW.autoFixEnabled,
+          resolveOthersDiscussions: project.mrReview?.resolveOthersDiscussions ?? DEFAULT_MR_REVIEW.resolveOthersDiscussions,
         },
       });
       setSaved(true);

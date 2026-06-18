@@ -124,6 +124,8 @@ CREATE TABLE IF NOT EXISTS mr_review_states (
   unresolved_comments_count INTEGER DEFAULT 0,
   ci_status TEXT,
   last_reviewer_comment_at INTEGER,
+  posted_discussions_json TEXT,
+  last_review_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(project_id, mr_iid)
