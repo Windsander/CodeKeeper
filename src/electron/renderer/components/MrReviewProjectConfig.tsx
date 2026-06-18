@@ -63,11 +63,6 @@ const REVIEW_INTERVALS = [
   { label: '自定义', cron: 'custom' },
 ];
 
-const AUTO_MERGE_OPTIONS = [
-  { value: 'audit', label: '仅审计（只评论不合并）' },
-  { value: 'full', label: '全自动（低风险投资可合并）' },
-];
-
 const LEARNING_OPTIONS = [
   { value: 'on', label: '开启（从人工 review 中持续优化）' },
   { value: 'off', label: '关闭' },
@@ -80,9 +75,9 @@ const RISK_OPTIONS = [
 ];
 
 const AGENT_ROLE_OPTIONS = [
-  { value: 'reviewer', label: 'Reviewer（仅评论）' },
-  { value: 'auto-fixer', label: 'Auto-Fixer（仅自动修复）' },
-  { value: 'reviewer+auto-fixer', label: 'Reviewer + Auto-Fixer' },
+  { value: 'reviewer', label: 'Reviewer（仅审计评论）' },
+  { value: 'auto-fixer', label: 'Auto-Fixer（仅自动修复代码）' },
+  { value: 'reviewer+auto-fixer', label: 'Reviewer + Auto-Fixer（评论 + 自动修复）' },
 ];
 
 const DEFAULT_SOUL_MD_TEMPLATE = `# MR Agent 个性配置
@@ -133,12 +128,10 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const [gitlabUrl, setGitlabUrl] = useState(buildGitlabUrl(gitlab));
   const [token, setToken] = useState(gitlab.token);
   const [agentRole, setAgentRole] = useState(mrReview.agentRole);
-  const [autoMergeMode, setAutoMergeMode] = useState(mrReview.autoMergeMode);
   const [reviewSchedule, setReviewSchedule] = useState(mrReview.reviewSchedule);
   const [customSchedule, setCustomSchedule] = useState(mrReview.reviewSchedule);
   const [learningEnabled, setLearningEnabled] = useState(mrReview.learningEnabled);
   const [maxAutoMergeRisk, setMaxAutoMergeRisk] = useState(mrReview.maxAutoMergeRisk);
-  const [autoFixEnabled, setAutoFixEnabled] = useState(mrReview.autoFixEnabled ?? DEFAULT_MR_REVIEW.autoFixEnabled);
   const [resolveOthersDiscussions, setResolveOthersDiscussions] = useState(
     mrReview.resolveOthersDiscussions ?? DEFAULT_MR_REVIEW.resolveOthersDiscussions
   );
@@ -238,11 +231,11 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         mrReview: {
           enabled: project.mrReview?.enabled ?? DEFAULT_MR_REVIEW.enabled,
           agentRole,
-          autoMergeMode,
+          autoMergeMode: agentRole === 'reviewer' ? 'audit' : 'full',
           reviewSchedule: reviewSchedule.trim(),
           learningEnabled,
           maxAutoMergeRisk,
-          autoFixEnabled: isAutoFixer ? autoFixEnabled : false,
+          autoFixEnabled: isAutoFixer,
           resolveOthersDiscussions: isAutoFixer ? resolveOthersDiscussions : false,
         },
       });
@@ -317,39 +310,22 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         </div>
 
         {isAutoFixer && (
-          <>
-            <div className="form-group">
-              <Toggle
-                checked={autoFixEnabled}
-                onChange={(checked) => setAutoFixEnabled(checked)}
-              >
-                启用自动修复
-              </Toggle>
+          <div className="form-group">
+            <Toggle
+              checked={resolveOthersDiscussions}
+              onChange={(checked) => setResolveOthersDiscussions(checked)}
+            >
+              处理他人创建的 discussions
+            </Toggle>
+            <div className="project-meta" style={{ marginTop: 6, marginLeft: 56 }}>
+              开启后，Agent 也会查看其他 reviewer 提出的 discussion，决定是否自动修复并 resolve。
             </div>
-
-            <div className="form-group">
-              <Toggle
-                checked={resolveOthersDiscussions}
-                onChange={(checked) => setResolveOthersDiscussions(checked)}
-              >
-                处理他人创建的 discussions
-              </Toggle>
-            </div>
-          </>
+          </div>
         )}
       </div>
 
       <div className="config-section">
         <h5 className="config-section-title">MR 评审行为</h5>
-        <div className="form-group">
-          <label>自动合并模式</label>
-          <Dropdown
-            value={autoMergeMode}
-            options={AUTO_MERGE_OPTIONS}
-            onChange={(value) => setAutoMergeMode(value as 'full' | 'audit')}
-          />
-        </div>
-
         <div className="form-group">
           <label>自动学习模式</label>
           <Dropdown
