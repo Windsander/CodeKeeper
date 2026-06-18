@@ -55,6 +55,25 @@ const REVIEW_INTERVALS = [
   { label: '自定义', cron: 'custom' },
 ];
 
+function buildGitlabUrl(gitlab?: GitlabConfig | null): string {
+  if (!gitlab || !gitlab.baseUrl) return '';
+  const base = gitlab.baseUrl.replace(/\/$/, '');
+  const path = (gitlab.projectPath || '').replace(/^\//, '');
+  return path ? `${base}/${path}` : base;
+}
+
+function parseGitlabUrl(url: string): { baseUrl: string; projectPath: string } | null {
+  try {
+    const u = new URL(url.trim());
+    const baseUrl = `${u.protocol}//${u.host}`;
+    const projectPath = u.pathname.replace(/^\/|\.git$/g, '').replace(/^\//, '');
+    if (!projectPath) return null;
+    return { baseUrl, projectPath };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * MR 评审项目级配置面板
  *
@@ -64,10 +83,8 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const gitlab = project.gitlab ?? DEFAULT_GITLAB;
   const mrReview = project.mrReview ?? DEFAULT_MR_REVIEW;
 
-  const [baseUrl, setBaseUrl] = useState(gitlab.baseUrl);
-  const [projectPath, setProjectPath] = useState(gitlab.projectPath);
+  const [gitlabUrl, setGitlabUrl] = useState(buildGitlabUrl(gitlab));
   const [token, setToken] = useState(gitlab.token);
-  const [defaultBranch, setDefaultBranch] = useState(gitlab.defaultBranch);
   const [autoMergeMode, setAutoMergeMode] = useState(mrReview.autoMergeMode);
   const [reviewSchedule, setReviewSchedule] = useState(mrReview.reviewSchedule);
   const [customSchedule, setCustomSchedule] = useState(mrReview.reviewSchedule);
@@ -105,9 +122,9 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         defaultBranch?: string;
         branches?: string[];
       };
-      if (info.baseUrl) setBaseUrl(info.baseUrl);
-      if (info.projectPath) setProjectPath(info.projectPath);
-      if (info.defaultBranch) setDefaultBranch(info.defaultBranch);
+      if (info.baseUrl && info.projectPath) {
+        setGitlabUrl(`${info.baseUrl.replace(/\/$/, '')}/${info.projectPath.replace(/^\//, '')}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -120,13 +137,17 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
     setError(null);
     setSaved(false);
     try {
+      const parsed = parseGitlabUrl(gitlabUrl);
+      if (!parsed) {
+        throw new Error('GitLab 项目 URL 格式不正确，示例：https://gitlab.com/group/project');
+      }
       await invoke('project.gitlab.config.update', {
         projectId: project.id,
         gitlab: {
-          baseUrl: baseUrl.trim(),
-          projectPath: projectPath.trim(),
+          baseUrl: parsed.baseUrl,
+          projectPath: parsed.projectPath,
           token: token.trim(),
-          defaultBranch: defaultBranch.trim() || 'main',
+          defaultBranch: 'main',
         },
       });
       await invoke('project.mrreview.config.update', {
@@ -148,7 +169,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
     }
   };
 
-  const isGitlabValid = baseUrl.trim() && projectPath.trim();
+  const isGitlabValid = Boolean(parseGitlabUrl(gitlabUrl));
 
   return (
     <div className="card" style={{ marginTop: 16, background: 'var(--main-bg)' }}>
@@ -157,35 +178,22 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
       <div className="config-section">
         <h5 className="config-section-title">Git 仓库</h5>
         <div className="form-group">
-          <label>GitLab 地址</label>
-          <input
-            className="input"
-            value={baseUrl}
-            placeholder="https://gitlab.com"
-            onChange={(e) => setBaseUrl(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group">
-          <label>项目路径（group/project）</label>
-          <input
-            className="input"
-            value={projectPath}
-            placeholder="my-group/my-project"
-            onChange={(e) => setProjectPath(e.target.value)}
-          />
-        </div>
-
-        <div className="form-group">
-          <button
-            className="btn btn-primary btn-sm"
-            onClick={detectGit}
-            disabled={detecting}
-          >
-            {detecting ? '检测中...' : '从本地 Git 自动检测'}
-          </button>
-          <div className="project-meta" style={{ marginTop: 6 }}>
-            自动读取项目 git remote 与默认分支，只需再填写 Access Token
+          <label>GitLab 项目 URL</label>
+          <div className="input-group">
+            <input
+              className="input"
+              value={gitlabUrl}
+              placeholder="https://gitlab.com/group/project"
+              onChange={(e) => setGitlabUrl(e.target.value)}
+            />
+            <button
+              type="button"
+              className="input-group-btn"
+              onClick={detectGit}
+              disabled={detecting}
+            >
+              {detecting ? '检测中...' : '自动检测'}
+            </button>
           </div>
         </div>
 
@@ -201,16 +209,6 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
           <div className="project-meta" style={{ marginTop: 6 }}>
             需要 api、read_repository、write_repository 权限以读取 MR 并发表评论
           </div>
-        </div>
-
-        <div className="form-group">
-          <label>默认分支</label>
-          <input
-            className="input"
-            value={defaultBranch}
-            placeholder="main"
-            onChange={(e) => setDefaultBranch(e.target.value)}
-          />
         </div>
       </div>
 
