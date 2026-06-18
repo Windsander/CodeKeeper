@@ -16,6 +16,8 @@ import { buildDiffPosition, getFindingKey } from './provider/discussion-mapper.j
 import { WorktreeManager } from './worktree/worktree-manager.js';
 import { MrFixAgent } from './fix/mr-fix-agent.js';
 import { FixDecisionEngine } from './fix/fix-decision-engine.js';
+import { loadSoulContent } from './soul/soul-loader.js';
+import { loadProjectContext } from './context/project-context-loader.js';
 import type { Project, GitlabConfig, MrReviewConfig } from '../types.js';
 import { getArchiveRoot } from '../types.js';
 import type {
@@ -311,10 +313,15 @@ async function reviewProject(
   const gitlabConfig: GitlabConfig = project.gitlab;
   const provider = new GitLabProvider(gitlabConfig);
 
+  const soul = loadSoulContent(project.rootPath, getArchiveRoot(project));
+  const projectContext = loadProjectContext(getArchiveRoot(project));
+
   const reviewer = new ClassicReviewer({
     client: llmClient,
     tokenBudget: 4000,
-    rules: '默认评审规则：检查代码质量、安全性、性能问题',
+    rules: soul?.content ?? '默认评审规则：检查代码质量、安全性、性能问题',
+    soulContent: soul?.content,
+    projectContext,
   });
 
   const state = loadState(project);

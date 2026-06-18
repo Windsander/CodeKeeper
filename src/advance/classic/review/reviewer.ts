@@ -11,6 +11,10 @@ export interface ClassicReviewerOptions {
   tokenBudget: number;
   /** 评审规则文本 */
   rules: string;
+  /** MR Agent 个性/策略配置（SOUL.md 内容） */
+  soulContent?: string;
+  /** 项目自动归纳的智库内容（context.md 摘要） */
+  projectContext?: string;
 }
 
 /**
@@ -74,6 +78,14 @@ export class ClassicReviewer {
       )
       .join('\n\n');
 
+    const soulSection = this.options.soulContent
+      ? `\n\nAgent 个性与策略（SOUL.md）：\n${this.options.soulContent}`
+      : '';
+
+    const contextSection = this.options.projectContext
+      ? `\n\n项目背景与智库：\n${this.options.projectContext}`
+      : '';
+
     return `请对以下 Merge Request 进行代码评审。
 
 MR 标题: ${mr.title}
@@ -81,7 +93,7 @@ MR 描述: ${mr.description}
 源分支: ${mr.sourceBranch} -> 目标分支: ${mr.targetBranch}
 
 评审规则:
-${this.options.rules}
+${this.options.rules}${soulSection}${contextSection}
 
 变更内容:
 \`\`\`diff
