@@ -70,6 +70,40 @@ export interface ReviewerComment {
 }
 
 /**
+ * 评审发现项
+ */
+export interface ReviewFinding {
+  /** 严重程度 */
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  /** 文件路径 */
+  file: string;
+  /** 行号 */
+  line: number;
+  /** 规则编号（可选） */
+  ruleId?: string;
+  /** 评审消息 */
+  message: string;
+  /** 修改建议 */
+  suggestion: string;
+  /** 是否可自动修复（可选） */
+  autoFixable?: boolean;
+}
+
+/**
+ * 评审结果
+ */
+export interface ReviewResult {
+  /** 发现项列表 */
+  findings: ReviewFinding[];
+  /** 评审总结 */
+  summary: string;
+  /** 可自动修复的索引列表 */
+  autoFixable: number[];
+  /** 原始 LLM 响应（可选） */
+  rawResponse?: string;
+}
+
+/**
  * 合并选项
  */
 export interface MergeOptions {
