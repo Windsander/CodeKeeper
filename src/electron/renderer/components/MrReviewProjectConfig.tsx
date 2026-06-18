@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { invoke } from '../api/electron-api';
+import { Dropdown } from '../components/Dropdown';
 
 interface GitlabConfig {
   baseUrl: string;
@@ -53,6 +54,22 @@ const REVIEW_INTERVALS = [
   { label: '每小时', cron: '0 * * * *' },
   { label: '每天', cron: '0 9 * * *' },
   { label: '自定义', cron: 'custom' },
+];
+
+const AUTO_MERGE_OPTIONS = [
+  { value: 'audit', label: '仅审计（只评论不合并）' },
+  { value: 'full', label: '全自动（低风险投资可合并）' },
+];
+
+const LEARNING_OPTIONS = [
+  { value: 'on', label: '开启（从人工 review 中持续优化）' },
+  { value: 'off', label: '关闭' },
+];
+
+const RISK_OPTIONS = [
+  { value: 'LOW', label: 'LOW' },
+  { value: 'MEDIUM', label: 'MEDIUM' },
+  { value: 'HIGH', label: 'HIGH' },
 ];
 
 function buildGitlabUrl(gitlab?: GitlabConfig | null): string {
@@ -216,54 +233,38 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         <h5 className="config-section-title">MR 评审行为</h5>
         <div className="form-group">
           <label>自动合并模式</label>
-          <select
-            className="input"
+          <Dropdown
             value={autoMergeMode}
-            onChange={(e) => setAutoMergeMode(e.target.value as 'full' | 'audit')}
-          >
-            <option value="audit">仅审计（只评论不合并）</option>
-            <option value="full">全自动（低风险投资可合并）</option>
-          </select>
+            options={AUTO_MERGE_OPTIONS}
+            onChange={(value) => setAutoMergeMode(value as 'full' | 'audit')}
+          />
         </div>
 
         <div className="form-group">
           <label>自动学习模式</label>
-          <select
-            className="input"
+          <Dropdown
             value={learningEnabled ? 'on' : 'off'}
-            onChange={(e) => setLearningEnabled(e.target.value === 'on')}
-          >
-            <option value="on">开启（从人工 review 中持续优化）</option>
-            <option value="off">关闭</option>
-          </select>
+            options={LEARNING_OPTIONS}
+            onChange={(value) => setLearningEnabled(value === 'on')}
+          />
         </div>
 
         <div className="form-group">
           <label>允许自动合并的最大风险</label>
-          <select
-            className="input"
+          <Dropdown
             value={maxAutoMergeRisk}
-            onChange={(e) => setMaxAutoMergeRisk(e.target.value as 'LOW' | 'MEDIUM' | 'HIGH')}
-          >
-            <option value="LOW">LOW</option>
-            <option value="MEDIUM">MEDIUM</option>
-            <option value="HIGH">HIGH</option>
-          </select>
+            options={RISK_OPTIONS}
+            onChange={(value) => setMaxAutoMergeRisk(value as 'LOW' | 'MEDIUM' | 'HIGH')}
+          />
         </div>
 
         <div className="form-group">
           <label>评审调度间隔</label>
-          <select
-            className="input"
+          <Dropdown
             value={isCustom ? 'custom' : reviewSchedule}
-            onChange={(e) => handleIntervalChange(e.target.value)}
-          >
-            {REVIEW_INTERVALS.map((item) => (
-              <option key={item.cron} value={item.cron}>
-                {item.label}
-              </option>
-            ))}
-          </select>
+            options={REVIEW_INTERVALS.map((i) => ({ value: i.cron, label: i.label }))}
+            onChange={(value) => handleIntervalChange(value)}
+          />
           {isCustom && (
             <input
               className="input"
