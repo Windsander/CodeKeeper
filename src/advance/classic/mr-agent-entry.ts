@@ -11,7 +11,7 @@ import { LlmClient } from '../llm/client.js';
 import { GitLabProvider } from './provider/gitlab-provider.js';
 import { ClassicReviewer } from './review/reviewer.js';
 import type { Project, GitlabConfig } from '../types.js';
-import type { MergeRequest, ReviewResult } from './provider/types.js';
+import type { MergeRequest, ReviewResult, ReviewFinding } from './provider/types.js';
 
 /**
  * 从环境变量解析 MR Agent 配置
@@ -57,37 +57,85 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): {
 }
 
 /**
+ * Severity 到图标和颜色标签的映射
+ */
+const SEVERITY_META: Record<
+  ReviewFinding['severity'],
+  { icon: string; label: string; color: string }
+> = {
+  CRITICAL: { icon: '🚨', label: '严重', color: '#dc2626' },
+  HIGH: { icon: '🔴', label: '高', color: '#ea580c' },
+  MEDIUM: { icon: '🟠', label: '中', color: '#d97706' },
+  LOW: { icon: '🟡', label: '低', color: '#ca8a04' },
+};
+
+/**
  * 为指定 MR 生成评审评论正文
  *
  * 将 ReviewResult 格式化为 Markdown 评论，便于在 GitLab MR 中展示。
  */
-function formatReviewComment(mr: MergeRequest, result: ReviewResult): string {
+export function formatReviewComment(mr: MergeRequest, result: ReviewResult): string {
+  const now = new Date().toLocaleString('zh-CN', { hour12: false });
+  const severityOrder: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+  const sortedFindings = [...result.findings].sort(
+    (a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity)
+  );
+
   const lines: string[] = [
-    `## CodeKeeper Advance 自动评审结果`,
+    `## 🤖 CodeKeeper Advance 自动评审`,
     ``,
-    `**MR**: ${mr.title}`,
-    `**分支**: ${mr.sourceBranch} → ${mr.targetBranch}`,
+    `| 项目 | 内容 |`,
+    `|------|------|`,
+    `| **MR** | ${mr.title} |`,
+    `| **源分支** | \`${mr.sourceBranch}\` |`,
+    `| **目标分支** | \`${mr.targetBranch}\` |`,
+    `| **作者** | @${mr.author} |`,
+    `| **变更文件数** | ${mr.changesCount} |`,
     ``,
-    `### 总结`,
+    `### 📋 评审总结`,
     ``,
-    result.summary,
+    `> ${result.summary}`,
     ``,
   ];
 
-  if (result.findings.length > 0) {
-    lines.push(`### 发现项 (${result.findings.length})`, ``);
-    for (const finding of result.findings) {
+  if (sortedFindings.length > 0) {
+    lines.push(
+      `### ⚠️ 发现项（${sortedFindings.length}）`,
+      ``,
+      `<details open>`,
+      `<summary>点击展开/收起详情</summary>`,
+      ``,
+      `---`,
+      ``
+    );
+
+    for (const finding of sortedFindings) {
+      const meta = SEVERITY_META[finding.severity];
+      const ruleTag = finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : '';
       lines.push(
-        `- **${finding.severity}** | \`${finding.file}:${finding.line}\``,
-        `  - ${finding.message}`,
-        `  - 建议：${finding.suggestion}`
+        `#### ${meta.icon} ${meta.label} · \`${finding.file}:${finding.line}\`${ruleTag}`,
+        ``,
+        `**问题描述：**`,
+        `${finding.message}`,
+        ``,
+        `**修改建议：**`,
+        `${finding.suggestion}`,
+        ``,
+        `---`,
+        ``
       );
-      if (finding.ruleId) {
-        lines[lines.length - 2] += ` (规则: ${finding.ruleId})`;
-      }
-      lines.push(``);
     }
+
+    lines.push(`</details>`, ``);
+  } else {
+    lines.push(`✅ 未发现明显问题。`, ``);
   }
+
+  lines.push(
+    `---`,
+    ``,
+    `*由 CodeKeeper Advance MR 评审 Agent 生成于 ${now}*`
+  );
 
   return lines.join('\n');
 }
