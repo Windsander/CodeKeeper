@@ -167,6 +167,22 @@ describe('GitLabProvider', () => {
           resolved: false,
           system: false,
         },
+        {
+          id: 6,
+          body: '依赖更新',
+          author: { username: 'dependabot', name: 'Dependabot' },
+          created_at: '2024-01-15T09:05:00Z',
+          resolved: false,
+          system: false,
+        },
+        {
+          id: 7,
+          body: '正常用户含 bot 子串',
+          author: { username: 'robert', name: 'Robert' },
+          created_at: '2024-01-15T09:06:00Z',
+          resolved: false,
+          system: false,
+        },
       ];
 
       mockGetMergeRequestNotes.mockResolvedValue(mockNotes);
@@ -174,14 +190,10 @@ describe('GitLabProvider', () => {
       const provider = new GitLabProvider(gitlabConfig);
       const result = await provider.getReviewerComments(42);
 
-      // 只保留 alice 的评论（非 system 且非 bot）
-      expect(result).toHaveLength(1);
-      expect(result[0]).toEqual({
-        author: 'alice',
-        body: '这里有个问题',
-        createdAt: '2024-01-15T09:02:00Z',
-        resolved: false,
-      });
+      // 只保留 alice 和 robert 的评论（非 system 且非 bot）
+      expect(result).toHaveLength(2);
+      expect(result.map((r) => r.author)).toContain('alice');
+      expect(result.map((r) => r.author)).toContain('robert');
     });
 
     it('bot 用户名匹配应忽略大小写', async () => {
@@ -313,17 +325,11 @@ describe('GitLabProvider', () => {
   });
 
   describe('mergeMR', () => {
-    it('应输出警告且不抛出错误（占位实现）', async () => {
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
+    it('应抛出未实现错误', async () => {
       const provider = new GitLabProvider(gitlabConfig);
-      await expect(provider.mergeMR(42, { shouldRemoveSourceBranch: true })).resolves.toBeUndefined();
-
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('mergeMR 尚未实现')
+      await expect(provider.mergeMR(42, { shouldRemoveSourceBranch: true })).rejects.toThrow(
+        'mergeMR 尚未实现'
       );
-
-      consoleSpy.mockRestore();
     });
   });
 });

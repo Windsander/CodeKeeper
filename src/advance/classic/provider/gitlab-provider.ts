@@ -14,27 +14,20 @@ import {
 } from './types.js';
 import { GitLabClient } from '../../../gitlab/client.js';
 import type { ProjectConfig } from '../../../types.js';
+import type { GitlabConfig } from '../../types.js';
 
 /**
- * 需要过滤的 bot / 系统账号用户名（小写匹配）
+ * 需要过滤的 bot / 系统账号用户名模式（词边界匹配）
  */
-const BOT_USERNAMES: readonly string[] = [
-  'bot',
-  'ci',
-  'codekeeper',
-  'gitlab',
-  'jenkins',
-  'github',
-];
+const BOT_PATTERN = /\b(bot|ci|codekeeper|gitlab|jenkins|github|renovate|dependabot)\b/i;
 
 /**
  * 判断用户名是否为 bot
  *
- * 支持精确匹配和子串匹配（如 "ci-bot" 包含 "ci" 或 "bot"）。
+ * 使用词边界匹配，避免 "abot"、"robert" 等正常用户名被误判。
  */
 function isBot(username: string): boolean {
-  const lower = username.toLowerCase();
-  return BOT_USERNAMES.some((bot) => lower === bot || lower.includes(bot));
+  return BOT_PATTERN.test(username);
 }
 
 /**
@@ -58,12 +51,6 @@ function countDiffLines(diffText: string): { additions: number; deletions: numbe
   }
 
   return { additions, deletions };
-}
-
-export interface GitlabConfig {
-  baseUrl: string;
-  projectPath: string;
-  token: string;
 }
 
 export class GitLabProvider implements IGitProvider {
@@ -197,11 +184,7 @@ export class GitLabProvider implements IGitProvider {
     const mr = await this.client.getMergeRequest(iid);
 
     // GitLab MR 对象中 head_pipeline 的 status 字段
-    const pipelineStatus = (mr as unknown as Record<string, unknown>).head_pipeline as
-      | { status?: string }
-      | undefined;
-
-    const status = pipelineStatus?.status ?? 'unknown';
+    const status = mr.head_pipeline?.status ?? 'unknown';
 
     switch (status) {
       case 'pending':
@@ -225,14 +208,11 @@ export class GitLabProvider implements IGitProvider {
    * 合并指定 MR
    *
    * TODO: GitLabClient 当前缺少 merge 方法，待后续补充。
-   * 暂时使用 console.warn 占位，不阻塞 Reviewer 流程。
+   * 暂时抛出 NotImplementedError，避免调用方误以为成功。
    */
   async mergeMR(iid: number, options?: MergeOptions): Promise<void> {
-    console.warn(
+    throw new Error(
       `[GitLabProvider] mergeMR 尚未实现 (iid=${iid}, options=${JSON.stringify(options)})`
     );
-    // TODO: 待 GitLabClient 增加 merge 方法后接入
-    void iid;
-    void options;
   }
 }

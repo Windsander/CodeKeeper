@@ -205,6 +205,7 @@ export interface GitLabMR {
   web_url: string;
   state: string;
   merge_status: string;
+  head_pipeline?: { status?: string };
 }
 
 export interface GitLabMRChanges {
