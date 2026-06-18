@@ -105,11 +105,25 @@ export class WorktreeManager {
   }
 
   /**
+   * 切换到指定分支（通常是 MR 的 source branch）
+   *
+   * 先从 origin 拉取最新状态，再 checkout。
+   */
+  async checkoutBranch(branchName: string): Promise<void> {
+    await this.git.fetch('origin', branchName);
+    await this.git.checkout(['-B', branchName, `origin/${branchName}`]);
+  }
+
+  /**
    * 提交并推送当前变更
    *
    * 若无变更则跳过提交。
    */
-  async commitAndPush(branchName: string, message: string): Promise<void> {
+  async commitAndPush(
+    branchName: string,
+    message: string,
+    options?: { setUpstream?: boolean }
+  ): Promise<void> {
     await this.git.add('.');
     const status = await this.git.status();
     if (status.files.length === 0) {
@@ -117,7 +131,11 @@ export class WorktreeManager {
       return;
     }
     await this.git.commit(message);
-    await this.git.push('origin', branchName, ['--set-upstream']);
+    if (options?.setUpstream ?? true) {
+      await this.git.push('origin', branchName, ['--set-upstream']);
+    } else {
+      await this.git.push('origin', branchName);
+    }
   }
 
   /** 强制删除本地分支 */
