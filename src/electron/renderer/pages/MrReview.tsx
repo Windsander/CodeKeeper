@@ -1,16 +1,22 @@
 import { useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
 import { invoke } from '../api/electron-api';
+import {
+  MrReviewProjectConfig,
+  type ProjectWithMrConfig,
+} from '../components/MrReviewProjectConfig';
 
 /**
  * MR 评审页面
  *
  * 展示 MR 自动评审 Agent 的服务状态、已启用项目数等宏观指标，
  * 并提供启动/停止/重启服务的控制按钮。
- * 不展示具体 MR 列表或文件 diff。
+ * 同时列出所有已注册项目，允许为每个项目配置 GitLab 与 MR 评审参数。
  */
 export function MrReview() {
-  const { data: status, refresh } = useIpc<{ running: boolean; enabledProjects: number }>('classic.status');
+  const { data: status, refresh: refreshStatus } = useIpc<{ running: boolean; enabledProjects: number }>('classic.status');
+  const { data: projects, refresh: refreshProjects } = useIpc<ProjectWithMrConfig[]>('project.list');
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,12 +25,16 @@ export function MrReview() {
     setError(null);
     try {
       await invoke(`classic.${action}`);
-      await refresh();
+      await refreshStatus();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleConfig = (projectId: string) => {
+    setExpandedId((prev) => (prev === projectId ? null : projectId));
   };
 
   return (
@@ -67,6 +77,61 @@ export function MrReview() {
           </span>
         </div>
         <div className="project-meta">已启用 MR 评审的项目数: {status?.enabledProjects ?? 0}</div>
+      </div>
+
+      <div className="card">
+        <h3 className="card-title">项目配置</h3>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 14, lineHeight: 1.6, marginBottom: 16 }}>
+          为项目配置 GitLab 仓库信息与 MR 评审开关后，MR 评审服务才会轮询该项目的 open MRs。
+        </p>
+
+        {!projects || projects.length === 0 ? (
+          <div className="empty-state">暂无注册项目，请先前往仪表盘注册项目。</div>
+        ) : (
+          <div>
+            {projects.map((project) => {
+              const hasGitlab = Boolean(project.gitlab?.baseUrl && project.gitlab?.projectPath);
+              const enabled = project.mrReview?.enabled ?? false;
+              return (
+                <div key={project.id} className="card" style={{ marginBottom: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontWeight: 600 }}>{project.name}</div>
+                      <div className="project-meta">{project.rootPath}</div>
+                      <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
+                        {enabled ? (
+                          <span className="badge badge-success">已启用</span>
+                        ) : (
+                          <span className="badge">未启用</span>
+                        )}
+                        {hasGitlab ? (
+                          <span className="badge badge-success">GitLab 已配置</span>
+                        ) : (
+                          <span className="badge badge-warning">GitLab 未配置</span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => toggleConfig(project.id)}
+                    >
+                      {expandedId === project.id ? '收起' : '配置'}
+                    </button>
+                  </div>
+                  {expandedId === project.id && (
+                    <MrReviewProjectConfig
+                      project={project}
+                      onSaved={() => {
+                        refreshProjects();
+                        refreshStatus();
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="card">

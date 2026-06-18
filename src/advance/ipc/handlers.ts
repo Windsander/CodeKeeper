@@ -255,4 +255,51 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       enabledProjects,
     };
   },
+
+  'project.gitlab.config.get': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    return { gitlab: project.gitlab ?? null };
+  },
+
+  'project.gitlab.config.update': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    const gitlab = params.gitlab;
+    if (!gitlab || !gitlab.baseUrl || !gitlab.projectPath) {
+      throw new Error('GitLab 配置缺少必要字段');
+    }
+    const updated: NonNullable<typeof project.gitlab> = {
+      baseUrl: gitlab.baseUrl,
+      projectPath: gitlab.projectPath,
+      token: gitlab.token ?? project.gitlab?.token ?? '',
+      defaultBranch: gitlab.defaultBranch ?? project.gitlab?.defaultBranch ?? 'main',
+    };
+    ctx.store.updateProjectGitlabConfig(params.projectId, updated);
+    return { success: true };
+  },
+
+  'project.mrreview.config.get': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    return { mrReview: project.mrReview ?? null };
+  },
+
+  'project.mrreview.config.update': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    const mrReview = params.mrReview;
+    if (!mrReview) {
+      throw new Error('MR 评审配置不能为空');
+    }
+    const updated: NonNullable<typeof project.mrReview> = {
+      enabled: mrReview.enabled ?? false,
+      autoMergeMode: mrReview.autoMergeMode ?? 'audit',
+      reviewSchedule: mrReview.reviewSchedule ?? '*/10 * * * *',
+      learningEnabled: mrReview.learningEnabled ?? false,
+      maxAutoMergeRisk: mrReview.maxAutoMergeRisk ?? 'MEDIUM',
+    };
+    ctx.store.updateMrReviewConfig(params.projectId, updated);
+    return { success: true };
+  },
 };

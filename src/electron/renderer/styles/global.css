@@ -273,6 +273,24 @@ input[type='number']:focus {
   align-items: flex-start;
 }
 
+.form-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.form-checkbox input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
+.form-checkbox span {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
 .form-row .input {
   flex: 1;
 }
