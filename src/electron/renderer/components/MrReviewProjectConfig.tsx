@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { invoke } from '../api/electron-api';
-import { Toggle } from './Toggle';
 
 interface GitlabConfig {
   baseUrl: string;
@@ -69,7 +68,6 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const [projectPath, setProjectPath] = useState(gitlab.projectPath);
   const [token, setToken] = useState(gitlab.token);
   const [defaultBranch, setDefaultBranch] = useState(gitlab.defaultBranch);
-  const [enabled, setEnabled] = useState(mrReview.enabled);
   const [autoMergeMode, setAutoMergeMode] = useState(mrReview.autoMergeMode);
   const [reviewSchedule, setReviewSchedule] = useState(mrReview.reviewSchedule);
   const [customSchedule, setCustomSchedule] = useState(mrReview.reviewSchedule);
@@ -134,7 +132,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
       await invoke('project.mrreview.config.update', {
         projectId: project.id,
         mrReview: {
-          enabled,
+          enabled: project.mrReview?.enabled ?? DEFAULT_MR_REVIEW.enabled,
           autoMergeMode,
           reviewSchedule: reviewSchedule.trim(),
           learningEnabled,
@@ -155,16 +153,6 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   return (
     <div className="card" style={{ marginTop: 16, background: 'var(--main-bg)' }}>
       {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
-
-      <div className="config-section">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>启用 MR 自动评审</div>
-            <div className="project-meta">开启后 MR Agent 会定时轮询该项目的 open MRs 并自动生成评审意见</div>
-          </div>
-          <Toggle checked={enabled} onChange={setEnabled} />
-        </div>
-      </div>
 
       <div className="config-section">
         <h5 className="config-section-title">Git 仓库</h5>
@@ -241,6 +229,31 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         </div>
 
         <div className="form-group">
+          <label>自动学习模式</label>
+          <select
+            className="input"
+            value={learningEnabled ? 'on' : 'off'}
+            onChange={(e) => setLearningEnabled(e.target.value === 'on')}
+          >
+            <option value="on">开启（从人工 review 中持续优化）</option>
+            <option value="off">关闭</option>
+          </select>
+        </div>
+
+        <div className="form-group">
+          <label>允许自动合并的最大风险</label>
+          <select
+            className="input"
+            value={maxAutoMergeRisk}
+            onChange={(e) => setMaxAutoMergeRisk(e.target.value as 'LOW' | 'MEDIUM' | 'HIGH')}
+          >
+            <option value="LOW">LOW</option>
+            <option value="MEDIUM">MEDIUM</option>
+            <option value="HIGH">HIGH</option>
+          </select>
+        </div>
+
+        <div className="form-group">
           <label>评审调度间隔</label>
           <select
             className="input"
@@ -264,28 +277,6 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
           )}
           <div className="project-meta" style={{ marginTop: 6 }}>
             当前 cron: {reviewSchedule}
-          </div>
-        </div>
-
-        <div className="form-group">
-          <label>允许自动合并的最大风险</label>
-          <select
-            className="input"
-            value={maxAutoMergeRisk}
-            onChange={(e) => setMaxAutoMergeRisk(e.target.value as 'LOW' | 'MEDIUM' | 'HIGH')}
-          >
-            <option value="LOW">LOW</option>
-            <option value="MEDIUM">MEDIUM</option>
-            <option value="HIGH">HIGH</option>
-          </select>
-        </div>
-
-        <div className="form-group">
-          <Toggle checked={learningEnabled} onChange={setLearningEnabled}>
-            启用学习模式
-          </Toggle>
-          <div className="project-meta" style={{ marginTop: 6 }}>
-            从人工 review 中持续优化评审规则
           </div>
         </div>
       </div>

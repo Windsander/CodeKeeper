@@ -126,11 +126,6 @@ export function MrReview() {
                       <div style={{ fontWeight: 600 }}>{project.name}</div>
                       <div className="project-meta">{project.rootPath}</div>
                       <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
-                        {enabled ? (
-                          <span className="badge badge-success">已启用</span>
-                        ) : (
-                          <span className="badge">未启用</span>
-                        )}
                         {hasGitlab ? (
                           <span className="badge badge-success">GitLab 已配置</span>
                         ) : (
