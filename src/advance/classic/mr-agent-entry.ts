@@ -70,65 +70,61 @@ const SEVERITY_META: Record<
 };
 
 /**
- * 统计各 severity 的数量摘要
+ * 按 severity 对 findings 分组
  */
-function buildSeveritySummary(findings: ReviewFinding[]): string {
-  const counts: Record<ReviewFinding['severity'], number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+function groupFindingsBySeverity(
+  findings: ReviewFinding[]
+): Record<ReviewFinding['severity'], ReviewFinding[]> {
+  const groups: Record<ReviewFinding['severity'], ReviewFinding[]> = {
+    CRITICAL: [],
+    HIGH: [],
+    MEDIUM: [],
+    LOW: [],
+  };
   for (const f of findings) {
-    counts[f.severity]++;
+    groups[f.severity].push(f);
   }
-  const parts = [
-    counts.CRITICAL > 0 ? `🚨 ${counts.CRITICAL} 严重` : '',
-    counts.HIGH > 0 ? `🔴 ${counts.HIGH} 高` : '',
-    counts.MEDIUM > 0 ? `🟠 ${counts.MEDIUM} 中` : '',
-    counts.LOW > 0 ? `🟡 ${counts.LOW} 低` : '',
-  ].filter(Boolean);
-  return parts.join(' · ');
+  return groups;
 }
 
 /**
  * 为指定 MR 生成评审评论正文
  *
- * 将 ReviewResult 格式化为精简美观的 Markdown 评论，便于在 GitLab MR 中展示。
+ * 将 ReviewResult 格式化为按 severity 分组的 Markdown 评论，便于在 GitLab MR 中快速浏览。
  */
 export function formatReviewComment(mr: MergeRequest, result: ReviewResult): string {
   const now = new Date().toLocaleString('zh-CN', { hour12: false });
   const severityOrder: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
-  const sortedFindings = [...result.findings].sort(
-    (a, b) => severityOrder.indexOf(a.severity) - severityOrder.indexOf(b.severity)
-  );
+  const groups = groupFindingsBySeverity(result.findings);
+  const total = result.findings.length;
 
   const lines: string[] = [
     `## 🤖 CodeKeeper 自动评审`,
     ``,
     `**MR**: ${mr.title}`,
     `**分支**: \`${mr.sourceBranch}\` → \`${mr.targetBranch}\``,
-  ];
-
-  if (sortedFindings.length > 0) {
-    lines.push(`**发现项**: ${sortedFindings.length} 个（${buildSeveritySummary(sortedFindings)}）`);
-  } else {
-    lines.push(`**发现项**: ✅ 无`);
-  }
-
-  lines.push(
+    `**发现项**: ${total > 0 ? `${total} 个` : '✅ 无'}`,
     ``,
     `> ${result.summary}`,
-    ``
-  );
+    ``,
+  ];
 
-  if (sortedFindings.length > 0) {
+  if (total > 0) {
     lines.push(`### ⚠️ 发现项`, ``);
-    for (const finding of sortedFindings) {
-      const meta = SEVERITY_META[finding.severity];
-      const ruleTag = finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : '';
-      lines.push(
-        `- ${meta.icon} **${meta.label}** · \`${finding.file}:${finding.line}\`${ruleTag}`,
-        `  - ${finding.message}`,
-        `  - **建议**：${finding.suggestion}`
-      );
+    for (const severity of severityOrder) {
+      const items = groups[severity];
+      if (items.length === 0) continue;
+      const meta = SEVERITY_META[severity];
+      lines.push(`- ${meta.icon} **${meta.label}** (${items.length})`);
+      for (const finding of items) {
+        const ruleTag = finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : '';
+        lines.push(
+          `  - \`${finding.file}:${finding.line}\`${ruleTag} ${finding.message}`,
+          `  - **建议**：${finding.suggestion}`
+        );
+      }
+      lines.push(``);
     }
-    lines.push(``);
   }
 
   lines.push(`---`, ``, `*生成于 ${now} · CodeKeeper Advance MR 评审 Agent*`);

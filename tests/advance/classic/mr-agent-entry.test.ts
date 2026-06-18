@@ -54,14 +54,16 @@ describe('formatReviewComment', () => {
     expect(comment).toContain('> 发现 2 个问题，建议优先处理 HIGH 级别项。');
   });
 
-  it('按 severity 排序并以紧凑列表展示发现项', () => {
+  it('按 severity 分组并以紧凑列表展示发现项', () => {
     const comment = formatReviewComment(mockMR, mockResult);
-    expect(comment).toContain('**发现项**: 2 个（🔴 1 高 · 🟡 1 低）');
+    expect(comment).toContain('**发现项**: 2 个');
     expect(comment).toContain('### ⚠️ 发现项');
-    expect(comment).toContain('- 🔴 **高** · `src/auth.ts:42` · 规则 `AUTH-001`');
-    expect(comment).toContain('- 🟡 **低** · `src/utils.ts:7`');
-    expect(comment).toContain('  - 密码以明文形式传输');
+    expect(comment).toContain('- 🔴 **高** (1)');
+    expect(comment).toContain('- 🟡 **低** (1)');
+    expect(comment).toContain('  - `src/auth.ts:42` · 规则 `AUTH-001` 密码以明文形式传输');
     expect(comment).toContain('  - **建议**：使用 HTTPS 并对敏感字段加密');
+    expect(comment).toContain('  - `src/utils.ts:7` 缺少空值检查');
+    expect(comment).toContain('  - **建议**：添加可选链或默认值');
   });
 
   it('包含生成时间签名', () => {
