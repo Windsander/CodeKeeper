@@ -70,9 +70,26 @@ const SEVERITY_META: Record<
 };
 
 /**
+ * 统计各 severity 的数量摘要
+ */
+function buildSeveritySummary(findings: ReviewFinding[]): string {
+  const counts: Record<ReviewFinding['severity'], number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+  for (const f of findings) {
+    counts[f.severity]++;
+  }
+  const parts = [
+    counts.CRITICAL > 0 ? `🚨 ${counts.CRITICAL} 严重` : '',
+    counts.HIGH > 0 ? `🔴 ${counts.HIGH} 高` : '',
+    counts.MEDIUM > 0 ? `🟠 ${counts.MEDIUM} 中` : '',
+    counts.LOW > 0 ? `🟡 ${counts.LOW} 低` : '',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+/**
  * 为指定 MR 生成评审评论正文
  *
- * 将 ReviewResult 格式化为 Markdown 评论，便于在 GitLab MR 中展示。
+ * 将 ReviewResult 格式化为精简美观的 Markdown 评论，便于在 GitLab MR 中展示。
  */
 export function formatReviewComment(mr: MergeRequest, result: ReviewResult): string {
   const now = new Date().toLocaleString('zh-CN', { hour12: false });
@@ -82,60 +99,39 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
   );
 
   const lines: string[] = [
-    `## 🤖 CodeKeeper Advance 自动评审`,
+    `## 🤖 CodeKeeper 自动评审`,
     ``,
-    `| 项目 | 内容 |`,
-    `|------|------|`,
-    `| **MR** | ${mr.title} |`,
-    `| **源分支** | \`${mr.sourceBranch}\` |`,
-    `| **目标分支** | \`${mr.targetBranch}\` |`,
-    `| **作者** | @${mr.author} |`,
-    `| **变更文件数** | ${mr.changesCount} |`,
-    ``,
-    `### 📋 评审总结`,
-    ``,
-    `> ${result.summary}`,
-    ``,
+    `**MR**: ${mr.title}`,
+    `**分支**: \`${mr.sourceBranch}\` → \`${mr.targetBranch}\``,
   ];
 
   if (sortedFindings.length > 0) {
-    lines.push(
-      `### ⚠️ 发现项（${sortedFindings.length}）`,
-      ``,
-      `<details open>`,
-      `<summary>点击展开/收起详情</summary>`,
-      ``,
-      `---`,
-      ``
-    );
+    lines.push(`**发现项**: ${sortedFindings.length} 个（${buildSeveritySummary(sortedFindings)}）`);
+  } else {
+    lines.push(`**发现项**: ✅ 无`);
+  }
 
+  lines.push(
+    ``,
+    `> ${result.summary}`,
+    ``
+  );
+
+  if (sortedFindings.length > 0) {
+    lines.push(`### ⚠️ 发现项`, ``);
     for (const finding of sortedFindings) {
       const meta = SEVERITY_META[finding.severity];
       const ruleTag = finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : '';
       lines.push(
-        `#### ${meta.icon} ${meta.label} · \`${finding.file}:${finding.line}\`${ruleTag}`,
-        ``,
-        `**问题描述：**`,
-        `${finding.message}`,
-        ``,
-        `**修改建议：**`,
-        `${finding.suggestion}`,
-        ``,
-        `---`,
-        ``
+        `- ${meta.icon} **${meta.label}** · \`${finding.file}:${finding.line}\`${ruleTag}`,
+        `  - ${finding.message}`,
+        `  - **建议**：${finding.suggestion}`
       );
     }
-
-    lines.push(`</details>`, ``);
-  } else {
-    lines.push(`✅ 未发现明显问题。`, ``);
+    lines.push(``);
   }
 
-  lines.push(
-    `---`,
-    ``,
-    `*由 CodeKeeper Advance MR 评审 Agent 生成于 ${now}*`
-  );
+  lines.push(`---`, ``, `*生成于 ${now} · CodeKeeper Advance MR 评审 Agent*`);
 
   return lines.join('\n');
 }
