@@ -176,10 +176,6 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
 
   return (
     <div className="card" style={{ marginTop: 16, background: 'var(--main-bg)' }}>
-      <h4 className="card-title" style={{ marginBottom: 16 }}>
-        配置项目：{project.name}
-      </h4>
-
       {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
 
       <div className="config-section">
@@ -299,15 +295,12 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
 
       <div className="config-section">
         <h5 className="config-section-title">选项</h5>
-        <div className="form-group">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24 }}>
           <Toggle checked={enabled} onChange={setEnabled}>
             启用 MR 自动评审
           </Toggle>
-        </div>
-
-        <div className="form-group">
           <Toggle checked={learningEnabled} onChange={setLearningEnabled}>
-            启用学习模式（从人工 review 中持续优化）
+            启用学习模式
           </Toggle>
         </div>
       </div>
