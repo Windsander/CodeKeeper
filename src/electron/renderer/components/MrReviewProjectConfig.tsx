@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { invoke } from '../api/electron-api';
 import { Dropdown } from '../components/Dropdown';
+import { Toggle } from '../components/Toggle';
 
 interface GitlabConfig {
   baseUrl: string;
@@ -78,6 +79,29 @@ const RISK_OPTIONS = [
   { value: 'HIGH', label: 'HIGH' },
 ];
 
+const AGENT_ROLE_OPTIONS = [
+  { value: 'reviewer', label: 'Reviewer（仅评论）' },
+  { value: 'auto-fixer', label: 'Auto-Fixer（仅自动修复）' },
+  { value: 'reviewer+auto-fixer', label: 'Reviewer + Auto-Fixer' },
+];
+
+const DEFAULT_SOUL_MD_TEMPLATE = `# MR Agent 个性配置
+
+## 评审风格
+- 严格但友善，注重代码可读性和可维护性
+- 优先关注安全漏洞和性能问题
+- 对命名规范和代码风格保持适度宽容
+
+## 重点关注领域
+- 输入验证与注入防护
+- 异步代码竞态条件
+- 资源泄漏
+
+## 忽略项
+- 行尾空格
+- 非公共 API 的注释缺失
+`;
+
 function buildGitlabUrl(gitlab?: GitlabConfig | null): string {
   if (!gitlab || !gitlab.baseUrl) return '';
   const base = gitlab.baseUrl.replace(/\/$/, '');
@@ -100,7 +124,7 @@ function parseGitlabUrl(url: string): { baseUrl: string; projectPath: string } |
 /**
  * MR 评审项目级配置面板
  *
- * 允许为单个项目配置 GitLab 仓库信息与 MR 评审行为。
+ * 允许为单个项目配置 GitLab 仓库信息、MR 评审行为与 Agent 个性。
  */
 export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfigProps) {
   const gitlab = project.gitlab ?? DEFAULT_GITLAB;
@@ -108,11 +132,20 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
 
   const [gitlabUrl, setGitlabUrl] = useState(buildGitlabUrl(gitlab));
   const [token, setToken] = useState(gitlab.token);
+  const [agentRole, setAgentRole] = useState(mrReview.agentRole);
   const [autoMergeMode, setAutoMergeMode] = useState(mrReview.autoMergeMode);
   const [reviewSchedule, setReviewSchedule] = useState(mrReview.reviewSchedule);
   const [customSchedule, setCustomSchedule] = useState(mrReview.reviewSchedule);
   const [learningEnabled, setLearningEnabled] = useState(mrReview.learningEnabled);
   const [maxAutoMergeRisk, setMaxAutoMergeRisk] = useState(mrReview.maxAutoMergeRisk);
+  const [autoFixEnabled, setAutoFixEnabled] = useState(mrReview.autoFixEnabled ?? DEFAULT_MR_REVIEW.autoFixEnabled);
+  const [resolveOthersDiscussions, setResolveOthersDiscussions] = useState(
+    mrReview.resolveOthersDiscussions ?? DEFAULT_MR_REVIEW.resolveOthersDiscussions
+  );
+
+  const [soulContent, setSoulContent] = useState('');
+  const [soulSourcePath, setSoulSourcePath] = useState('');
+  const [soulLoading, setSoulLoading] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [detecting, setDetecting] = useState(false);
@@ -120,6 +153,29 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const [saved, setSaved] = useState(false);
 
   const isCustom = !REVIEW_INTERVALS.some((i) => i.cron === reviewSchedule && i.cron !== 'custom');
+  const isAutoFixer = agentRole.includes('auto-fixer');
+
+  useEffect(() => {
+    let cancelled = false;
+    setSoulLoading(true);
+    invoke('project.soul.get', { projectId: project.id })
+      .then((res) => {
+        if (cancelled) return;
+        const soul = (res as { soul: { content: string; sourcePath: string } }).soul;
+        setSoulContent(soul.content);
+        setSoulSourcePath(soul.sourcePath);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('加载 SOUL.md 失败:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setSoulLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
 
   const handleIntervalChange = (value: string) => {
     if (value === 'custom') {
@@ -155,6 +211,10 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
     }
   };
 
+  const applySoulTemplate = () => {
+    setSoulContent(DEFAULT_SOUL_MD_TEMPLATE);
+  };
+
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -177,14 +237,18 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         projectId: project.id,
         mrReview: {
           enabled: project.mrReview?.enabled ?? DEFAULT_MR_REVIEW.enabled,
-          agentRole: project.mrReview?.agentRole ?? DEFAULT_MR_REVIEW.agentRole,
+          agentRole,
           autoMergeMode,
           reviewSchedule: reviewSchedule.trim(),
           learningEnabled,
           maxAutoMergeRisk,
-          autoFixEnabled: project.mrReview?.autoFixEnabled ?? DEFAULT_MR_REVIEW.autoFixEnabled,
-          resolveOthersDiscussions: project.mrReview?.resolveOthersDiscussions ?? DEFAULT_MR_REVIEW.resolveOthersDiscussions,
+          autoFixEnabled: isAutoFixer ? autoFixEnabled : false,
+          resolveOthersDiscussions: isAutoFixer ? resolveOthersDiscussions : false,
         },
+      });
+      await invoke('project.soul.update', {
+        projectId: project.id,
+        content: soulContent,
       });
       setSaved(true);
       onSaved();
@@ -239,6 +303,43 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
       </div>
 
       <div className="config-section">
+        <h5 className="config-section-title">Agent 角色与策略</h5>
+        <div className="form-group">
+          <label>Agent 角色</label>
+          <Dropdown
+            value={agentRole}
+            options={AGENT_ROLE_OPTIONS}
+            onChange={(value) => setAgentRole(value as MrReviewConfig['agentRole'])}
+          />
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            Reviewer 会发表评论；Auto-Fixer 会尝试在 MR source branch 上自动修复并 resolve discussion。
+          </div>
+        </div>
+
+        {isAutoFixer && (
+          <>
+            <div className="form-group">
+              <Toggle
+                checked={autoFixEnabled}
+                onChange={(checked) => setAutoFixEnabled(checked)}
+              >
+                启用自动修复
+              </Toggle>
+            </div>
+
+            <div className="form-group">
+              <Toggle
+                checked={resolveOthersDiscussions}
+                onChange={(checked) => setResolveOthersDiscussions(checked)}
+              >
+                处理他人创建的 discussions
+              </Toggle>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="config-section">
         <h5 className="config-section-title">MR 评审行为</h5>
         <div className="form-group">
           <label>自动合并模式</label>
@@ -286,6 +387,35 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
           <div className="project-meta" style={{ marginTop: 6 }}>
             当前 cron: {reviewSchedule}
           </div>
+        </div>
+      </div>
+
+      <div className="config-section">
+        <h5 className="config-section-title">Agent 个性配置（MR-Agent-SOUL.md）</h5>
+        <div className="form-group">
+          <div className="form-row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+            <label style={{ marginBottom: 0 }}>SOUL.md 内容</label>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={applySoulTemplate}
+              disabled={soulLoading}
+            >
+              使用默认模板
+            </button>
+          </div>
+          <textarea
+            className="input"
+            style={{ minHeight: 240, fontFamily: 'monospace', lineHeight: 1.5 }}
+            value={soulContent}
+            placeholder="# MR Agent 个性配置&#10;## 评审风格&#10;..."
+            onChange={(e) => setSoulContent(e.target.value)}
+          />
+          {soulSourcePath && (
+            <div className="project-meta" style={{ marginTop: 6 }}>
+              保存位置: {soulSourcePath}
+            </div>
+          )}
         </div>
       </div>
 

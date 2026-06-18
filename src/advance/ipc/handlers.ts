@@ -12,6 +12,7 @@ import { loadProjectConfig } from '../config/project-config';
 import { scanExistingFiles } from '../project-scanner';
 import { UndoExecutor } from '../archive/undo-executor';
 import { detectGitInfo } from '../utils/git-info';
+import { loadSoulContent, saveSoulContent } from '../classic/soul/soul-loader.js';
 import type { ClassicService } from '../classic/classic-service';
 
 import { readDirectoryTree } from '../utils/file-tree';
@@ -362,5 +363,20 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
     return detectGitInfo(project.rootPath);
+  },
+
+  'project.soul.get': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    const soul = loadSoulContent(project.rootPath, getArchiveRoot(project));
+    return { soul: soul ?? { content: '', sourcePath: join(project.rootPath, 'MR-Agent-SOUL.md') } };
+  },
+
+  'project.soul.update': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    const content = params.content ?? '';
+    const sourcePath = saveSoulContent(project.rootPath, content);
+    return { success: true, sourcePath };
   },
 };

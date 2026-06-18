@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 export const DEFAULT_SOUL_MD_FILENAME = 'MR-Agent-SOUL.md';
 
@@ -35,4 +35,14 @@ export function loadSoulContent(
   }
 
   return null;
+}
+
+/**
+ * 保存 SOUL.md 内容到项目根目录
+ */
+export function saveSoulContent(projectRoot: string, content: string): string {
+  const path = join(projectRoot, DEFAULT_SOUL_MD_FILENAME);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content, 'utf-8');
+  return path;
 }
