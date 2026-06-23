@@ -26,6 +26,25 @@ interface MrReviewConfig {
   maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH';
   autoFixEnabled?: boolean;
   resolveOthersDiscussions?: boolean;
+  filter?: MrReviewFilter;
+}
+
+type MrReviewFilterField =
+  | 'author'
+  | 'assignee'
+  | 'reviewer'
+  | 'label'
+  | 'sourceBranch'
+  | 'targetBranch'
+  | 'draft';
+
+interface MrReviewFilterCondition {
+  field: MrReviewFilterField;
+  values: string[];
+}
+
+interface MrReviewFilter {
+  conditions: MrReviewFilterCondition[];
 }
 
 export interface ProjectWithMrConfig {
