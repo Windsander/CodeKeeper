@@ -429,6 +429,26 @@ select.input:focus {
   align-items: flex-start;
 }
 
+.filter-condition-row {
+  align-items: center;
+}
+
+.filter-condition-row .dropdown,
+.filter-condition-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.filter-condition-row .dropdown-trigger,
+.filter-condition-row .input {
+  height: 40px;
+  box-sizing: border-box;
+}
+
+.filter-condition-row .btn {
+  flex-shrink: 0;
+}
+
 .form-checkbox {
   display: flex;
   align-items: center;
@@ -497,7 +517,6 @@ select.input:focus {
 }
 
 .config-section-body {
-  overflow: hidden;
   transition: max-height 0.25s ease, opacity 0.2s ease, margin-top 0.2s ease;
   max-height: 2000px;
   opacity: 1;
@@ -505,6 +524,7 @@ select.input:focus {
 }
 
 .config-section.collapsed .config-section-body {
+  overflow: hidden;
   max-height: 0;
   opacity: 0;
   margin-top: 0;

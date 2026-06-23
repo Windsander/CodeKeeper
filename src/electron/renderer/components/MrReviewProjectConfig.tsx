@@ -418,7 +418,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
         {filterConditions.map((condition, index) => (
           <div
             key={index}
-            className="form-row"
+            className="form-row filter-condition-row"
             style={{ marginBottom: 8, alignItems: 'center' }}
           >
             <Dropdown
