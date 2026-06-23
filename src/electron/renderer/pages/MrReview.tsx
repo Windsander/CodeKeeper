@@ -132,7 +132,7 @@ function ProjectCard({
   const { data: agentStatus } = useIpc<MrAgentProjectStatus>(
     'project.mrreview.status.get',
     { projectId: project.id },
-    { pollInterval: 2000 }
+    { pollInterval: 5000 }
   );
 
   const badges = getStatusBadges(project, runningProjects, agentStatus, serviceRunning);
@@ -183,7 +183,7 @@ function ProjectCard({
  * 同时列出所有已注册项目，允许为每个项目配置 GitLab 与 MR 评审参数。
  */
 export function MrReview() {
-  const { data: status, refresh: refreshStatus } = useIpc<ClassicStatus>('classic.status', undefined, { pollInterval: 2000 });
+  const { data: status, refresh: refreshStatus } = useIpc<ClassicStatus>('classic.status', undefined, { pollInterval: 5000 });
   const { data: projects, refresh: refreshProjects } = useIpc<ProjectWithMrConfig[]>('project.list');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

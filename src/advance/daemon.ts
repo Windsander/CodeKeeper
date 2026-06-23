@@ -116,9 +116,10 @@ export class Daemon {
       this.classicService.start();
 
       const projects = this.options.registry.list();
-      for (const project of projects) {
-        this.watchProject(project);
-      }
+      // 错开每个项目 watcher 的启动时间，避免多个 chokidar 同时扫描目录阻塞事件循环
+      projects.forEach((project, index) => {
+        setTimeout(() => this.watchProject(project), index * 500);
+      });
     });
 
     const cron = this.options.scanCron ?? '*/5 * * * *';

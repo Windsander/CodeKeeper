@@ -25,6 +25,9 @@ function isWsl(): boolean {
 
 /**
  * 基于 chokidar 的文件监听器
+ *
+ * WSL 环境下默认启用 polling 模式（因为跨文件系统挂载时 inotify 不可靠），
+ * 但 interval 设置得较大，避免初始化扫描时阻塞 daemon 的事件循环。
  */
 export class FileWatcher {
   private watcher: FSWatcher | null = null;
@@ -37,13 +40,19 @@ export class FileWatcher {
       return config.exclude.some((pattern) => minimatch(normalized, pattern, { dot: true }));
     };
 
+    const usePolling = isWsl();
     this.watcher = watch(projectRoot, {
       cwd: projectRoot,
       ignored: (filePath: string) => isExcluded(filePath),
       ignoreInitial: true,
       persistent: true,
-      usePolling: isWsl(),
-      interval: isWsl() ? 100 : undefined,
+      usePolling,
+      interval: usePolling ? 2000 : undefined,
+      binaryInterval: usePolling ? 2000 : undefined,
+      awaitWriteFinish: {
+        stabilityThreshold: 300,
+        pollInterval: usePolling ? 2000 : 100,
+      },
     });
 
     logger.info({ projectRoot }, '文件监控已启动');

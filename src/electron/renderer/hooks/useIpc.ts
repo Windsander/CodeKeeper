@@ -62,27 +62,29 @@ export function useIpc<T>(method: string, params?: unknown, options?: { pollInte
   useEffect(() => {
     if (!pollInterval || pollInterval <= 0) return;
 
-    let id: ReturnType<typeof setInterval> | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
 
-    const startPolling = () => {
-      if (id) return;
-      id = setInterval(() => refresh(true), pollInterval);
-    };
-
-    const stopPolling = () => {
-      if (id) {
-        clearInterval(id);
-        id = null;
-      }
+    const scheduleNext = () => {
+      if (disposed) return;
+      timeoutId = setTimeout(() => {
+        refresh(true).finally(() => {
+          // 上一次请求完成后再排下一次，避免 IPC 请求堆积
+          scheduleNext();
+        });
+      }, pollInterval);
     };
 
     // 页面可见时才轮询；切回前台时立即刷新一次，避免后台节流导致状态 stale
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        stopPolling();
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
       } else {
         refresh(true);
-        startPolling();
+        scheduleNext();
       }
     };
 
@@ -90,8 +92,11 @@ export function useIpc<T>(method: string, params?: unknown, options?: { pollInte
     handleVisibilityChange();
 
     return () => {
+      disposed = true;
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      stopPolling();
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
   }, [refresh, pollInterval]);
 
