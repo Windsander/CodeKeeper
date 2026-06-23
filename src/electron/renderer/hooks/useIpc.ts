@@ -61,8 +61,38 @@ export function useIpc<T>(method: string, params?: unknown, options?: { pollInte
 
   useEffect(() => {
     if (!pollInterval || pollInterval <= 0) return;
-    const id = setInterval(() => refresh(true), pollInterval);
-    return () => clearInterval(id);
+
+    let id: ReturnType<typeof setInterval> | null = null;
+
+    const startPolling = () => {
+      if (id) return;
+      id = setInterval(() => refresh(true), pollInterval);
+    };
+
+    const stopPolling = () => {
+      if (id) {
+        clearInterval(id);
+        id = null;
+      }
+    };
+
+    // 页面可见时才轮询；切回前台时立即刷新一次，避免后台节流导致状态 stale
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        refresh(true);
+        startPolling();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    handleVisibilityChange();
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopPolling();
+    };
   }, [refresh, pollInterval]);
 
   const mutate = useCallback(

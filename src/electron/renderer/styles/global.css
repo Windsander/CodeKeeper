@@ -715,7 +715,7 @@ select.input:focus {
 }
 
 .badge-secondary {
-  background: var(--bg-secondary);
+  background: #f3f4f6;
   color: var(--text-secondary);
 }
 
