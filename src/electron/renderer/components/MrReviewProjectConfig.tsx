@@ -3,6 +3,7 @@ import { invoke } from '../api/electron-api';
 import { useIpc } from '../hooks/useIpc';
 import { Dropdown } from '../components/Dropdown';
 import { CollapsibleSection } from '../components/CollapsibleSection';
+import { AutocompleteInput } from '../components/AutocompleteInput';
 
 interface ClassicStatus {
   running: boolean;
@@ -173,6 +174,23 @@ function parseGitlabUrl(url: string): { baseUrl: string; projectPath: string } |
  *
  * 允许为单个项目配置 GitLab 仓库信息、MR 评审行为与 Agent 个性。
  */
+function getAutocompleteOptions(
+  field: MrReviewFilterField,
+  members: Array<{ username: string; name?: string }>,
+  labels: string[]
+): string[] {
+  switch (field) {
+    case 'author':
+    case 'assignee':
+    case 'reviewer':
+      return members.map((m) => (m.name ? `${m.username} (${m.name})` : m.username));
+    case 'label':
+      return labels;
+    default:
+      return [];
+  }
+}
+
 export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfigProps) {
   const gitlab = project.gitlab ?? DEFAULT_GITLAB;
   const mrReview = project.mrReview ?? DEFAULT_MR_REVIEW;
@@ -191,6 +209,11 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const [filterConditions, setFilterConditions] = useState<MrReviewFilterCondition[]>(
     mrReview.filter?.conditions ?? []
   );
+
+  const [members, setMembers] = useState<Array<{ username: string; name?: string }>>([]);
+  const [labels, setLabels] = useState<string[]>([]);
+  const [protectedBranches, setProtectedBranches] = useState<string[]>([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
 
   const [soulContent, setSoulContent] = useState('');
   const [soulSourcePath, setSoulSourcePath] = useState('');
@@ -220,6 +243,32 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
       })
       .finally(() => {
         if (!cancelled) setSoulLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSuggestLoading(true);
+    Promise.all([
+      invoke('project.members', { projectId: project.id }),
+      invoke('project.labels', { projectId: project.id }),
+      invoke('project.protected-branches', { projectId: project.id }),
+    ])
+      .then(([membersRes, labelsRes, branchesRes]) => {
+        if (cancelled) return;
+        setMembers((membersRes as { members: Array<{ username: string; name?: string }> }).members);
+        setLabels((labelsRes as { labels: string[] }).labels);
+        setProtectedBranches((branchesRes as { branches: string[] }).branches);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('加载过滤提示数据失败:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setSuggestLoading(false);
       });
     return () => {
       cancelled = true;
@@ -283,7 +332,19 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const updateFilterValues = (index: number, raw: string) => {
     setFilterConditions((prev) => {
       const next = [...prev];
-      next[index] = { ...next[index], values: raw.split(',').map((v) => v.trim()).filter(Boolean) };
+      const field = next[index].field;
+      const values = raw
+        .split(',')
+        .map((v) => {
+          const trimmed = v.trim();
+          if (field === 'author' || field === 'assignee' || field === 'reviewer') {
+            const match = trimmed.match(/^(.+?)\s*\(/);
+            return match ? match[1] : trimmed;
+          }
+          return trimmed;
+        })
+        .filter(Boolean);
+      next[index] = { ...next[index], values };
       return next;
     });
   };
@@ -432,12 +493,23 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
                 options={DRAFT_OPTIONS}
                 onChange={(value) => updateDraftValue(index, value)}
               />
+            ) : condition.field === 'sourceBranch' || condition.field === 'targetBranch' ? (
+              <Dropdown
+                value={condition.values[0] ?? ''}
+                options={protectedBranches.map((b) => ({ value: b, label: b }))}
+                onChange={(value) => updateFilterValues(index, value)}
+              />
             ) : (
-              <input
-                className="input"
-                placeholder="多个值用英文逗号分隔"
+              <AutocompleteInput
                 value={condition.values.join(', ')}
-                onChange={(e) => updateFilterValues(index, e.target.value)}
+                options={getAutocompleteOptions(condition.field, members, labels)}
+                placeholder={
+                  condition.field === 'label'
+                    ? '输入标签，多个用英文逗号分隔'
+                    : '输入用户名，多个用英文逗号分隔'
+                }
+                loading={suggestLoading}
+                onChange={(value) => updateFilterValues(index, value)}
               />
             )}
             <button
