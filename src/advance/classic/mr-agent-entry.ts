@@ -346,7 +346,7 @@ export async function reviewProject(
 
   let mrs: MergeRequest[];
   try {
-    mrs = await provider.listOpenMRs();
+    mrs = await provider.listOpenMRs(config.filter);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[MR Agent] 列出项目 ${project.name} 的 MR 失败: ${message}`);
