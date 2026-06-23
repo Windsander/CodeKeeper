@@ -91,6 +91,36 @@ export class GitLabClient {
   }
 
   /**
+   * List project members (including inherited members)
+   */
+  async listMembers(): Promise<GitLabMember[]> {
+    return this.request<GitLabMember[]>(
+      'GET',
+      `/projects/${this.projectId}/members/all?per_page=100`
+    );
+  }
+
+  /**
+   * List project labels
+   */
+  async listLabels(): Promise<GitLabLabel[]> {
+    return this.request<GitLabLabel[]>(
+      'GET',
+      `/projects/${this.projectId}/labels?per_page=100`
+    );
+  }
+
+  /**
+   * List protected branches
+   */
+  async listProtectedBranches(): Promise<GitLabProtectedBranch[]> {
+    return this.request<GitLabProtectedBranch[]>(
+      'GET',
+      `/projects/${this.projectId}/protected_branches?per_page=100`
+    );
+  }
+
+  /**
    * Get single merge request
    */
   async getMergeRequest(iid: number): Promise<GitLabMR> {
@@ -249,6 +279,19 @@ export interface GitLabMR {
   state: string;
   merge_status: string;
   head_pipeline?: { status?: string };
+}
+
+export interface GitLabMember {
+  username: string;
+  name: string;
+}
+
+export interface GitLabLabel {
+  name: string;
+}
+
+export interface GitLabProtectedBranch {
+  name: string;
 }
 
 export interface GitLabMRChanges {
