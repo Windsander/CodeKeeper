@@ -13,6 +13,7 @@ import { scanExistingFiles } from '../project-scanner';
 import { UndoExecutor } from '../archive/undo-executor';
 import { detectGitInfo } from '../utils/git-info';
 import { loadSoulContent, saveSoulContent } from '../classic/soul/soul-loader.js';
+import { loadProjectStatus } from '../classic/status/project-status-store.js';
 import type { ClassicService } from '../classic/classic-service';
 
 import { readDirectoryTree } from '../utils/file-tree';
@@ -306,6 +307,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return {
       running: ctx.classicService?.isRunning() ?? false,
       enabledProjects,
+      runningProjects: ctx.classicService?.getRunningProjectIds() ?? [],
     };
   },
 
@@ -322,6 +324,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!gitlab || !gitlab.baseUrl || !gitlab.projectPath) {
       throw new Error('GitLab 配置缺少必要字段');
     }
+    const oldGitlab = project.gitlab;
     const updated: NonNullable<typeof project.gitlab> = {
       baseUrl: gitlab.baseUrl,
       projectPath: gitlab.projectPath,
@@ -329,6 +332,15 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       defaultBranch: gitlab.defaultBranch ?? project.gitlab?.defaultBranch ?? 'main',
     };
     ctx.store.updateProjectGitlabConfig(params.projectId, updated);
+
+    const needRestart =
+      oldGitlab?.baseUrl !== updated.baseUrl ||
+      oldGitlab?.projectPath !== updated.projectPath ||
+      oldGitlab?.token !== updated.token;
+    if (needRestart) {
+      ctx.classicService?.restartProject(params.projectId);
+    }
+
     return { success: true };
   },
 
@@ -338,6 +350,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { mrReview: project.mrReview ?? null };
   },
 
+  'project.mrreview.status.get': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    return loadProjectStatus(project);
+  },
+
   'project.mrreview.config.update': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
@@ -345,6 +363,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!mrReview) {
       throw new Error('MR 评审配置不能为空');
     }
+    const oldMrReview = project.mrReview;
     const updated: NonNullable<typeof project.mrReview> = {
       enabled: mrReview.enabled ?? false,
       agentRole: mrReview.agentRole ?? 'reviewer+auto-fixer',
@@ -356,6 +375,19 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       resolveOthersDiscussions: mrReview.resolveOthersDiscussions ?? true,
     };
     ctx.store.updateMrReviewConfig(params.projectId, updated);
+
+    const needRestart =
+      !oldMrReview ||
+      oldMrReview.enabled !== updated.enabled ||
+      oldMrReview.agentRole !== updated.agentRole ||
+      oldMrReview.reviewSchedule !== updated.reviewSchedule ||
+      oldMrReview.autoFixEnabled !== updated.autoFixEnabled ||
+      oldMrReview.resolveOthersDiscussions !== updated.resolveOthersDiscussions ||
+      oldMrReview.maxAutoMergeRisk !== updated.maxAutoMergeRisk;
+    if (needRestart) {
+      ctx.classicService?.restartProject(params.projectId);
+    }
+
     return { success: true };
   },
 
