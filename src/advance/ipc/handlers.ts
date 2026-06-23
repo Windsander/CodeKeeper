@@ -388,7 +388,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         oldMrReview.reviewSchedule !== updated.reviewSchedule ||
         oldMrReview.autoFixEnabled !== updated.autoFixEnabled ||
         oldMrReview.resolveOthersDiscussions !== updated.resolveOthersDiscussions ||
-        oldMrReview.maxAutoMergeRisk !== updated.maxAutoMergeRisk;
+        oldMrReview.maxAutoMergeRisk !== updated.maxAutoMergeRisk ||
+        JSON.stringify(oldMrReview.filter) !== JSON.stringify(updated.filter);
       if (otherChanged) {
         ctx.classicService?.restartProject(params.projectId);
       }
