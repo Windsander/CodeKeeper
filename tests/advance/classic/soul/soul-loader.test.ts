@@ -1,47 +1,74 @@
+/**
+ * soul-loader 单元测试
+ *
+ * SOUL.md 现在存放在 CodeKeeper App 存储空间：
+ * ~/.codekeeper/memory/souls/{projectName}/MR-Agent-SOUL.md
+ */
+
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadSoulContent } from '../../../../src/advance/classic/soul/soul-loader.js';
+import {
+  loadSoulContent,
+  saveSoulContent,
+} from '../../../../src/advance/classic/soul/soul-loader.js';
+import { getProjectSoulsDir } from '../../../../src/core/platform.js';
+import type { Project } from '../../../../src/advance/types.js';
 
-describe('loadSoulContent', () => {
-  let tmpDir: string;
+function makeProject(name: string): Project {
+  return {
+    id: `test-${name}`,
+    name,
+    rootPath: join(tmpdir(), `soul-project-${name}`),
+    registeredAt: Date.now(),
+    lastScannedAt: null,
+  };
+}
+
+describe('soul-loader', () => {
+  const projectName = `ck-soul-test-${Date.now()}`;
+  const project = makeProject(projectName);
+  const soulsDir = getProjectSoulsDir(projectName);
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'soul-test-'));
+    // 确保测试前目录干净
+    if (existsSync(soulsDir)) {
+      rmSync(soulsDir, { recursive: true, force: true });
+    }
   });
 
   afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(soulsDir, { recursive: true, force: true });
   });
 
-  it('优先返回项目根目录 MR-Agent-SOUL.md', () => {
-    const rootSoul = join(tmpDir, 'MR-Agent-SOUL.md');
-    const archiveDir = join(tmpDir, '.codekeeper');
-    const archiveSoul = join(archiveDir, 'MR-Agent-SOUL.md');
-    writeFileSync(rootSoul, '根目录 SOUL', 'utf-8');
-    mkdirSync(archiveDir, { recursive: true });
-    writeFileSync(archiveSoul, '归档目录 SOUL', 'utf-8');
+  it('保存后读取应一致', () => {
+    const content = '# 测试 SOUL\n## 评审风格\n严格但友善';
+    const sourcePath = saveSoulContent(project, content);
 
-    const result = loadSoulContent(tmpDir, archiveDir);
-    expect(result).not.toBeNull();
-    expect(result?.content).toBe('根目录 SOUL');
-    expect(result?.sourcePath).toBe(rootSoul);
+    expect(sourcePath).toBe(join(soulsDir, 'MR-Agent-SOUL.md'));
+    expect(readFileSync(sourcePath, 'utf-8')).toBe(content);
+
+    const loaded = loadSoulContent(project);
+    expect(loaded).not.toBeNull();
+    expect(loaded?.content).toBe(content);
+    expect(loaded?.sourcePath).toBe(sourcePath);
   });
 
-  it('项目根目录不存在时回退到归档目录', () => {
-    const archiveDir = join(tmpDir, '.codekeeper');
-    const archiveSoul = join(archiveDir, 'MR-Agent-SOUL.md');
-    mkdirSync(archiveDir, { recursive: true });
-    writeFileSync(archiveSoul, '归档目录 SOUL', 'utf-8');
-
-    const result = loadSoulContent(tmpDir, archiveDir);
-    expect(result).not.toBeNull();
-    expect(result?.content).toBe('归档目录 SOUL');
-  });
-
-  it('都不存在时返回 null', () => {
-    const result = loadSoulContent(tmpDir);
+  it('SOUL.md 不存在时返回 null', () => {
+    const result = loadSoulContent(project);
     expect(result).toBeNull();
+  });
+
+  it('文件名非法字符会被替换为下划线', () => {
+    const weirdName = 'project/name:with|special';
+    const weirdProject = makeProject(weirdName);
+    const path = saveSoulContent(weirdProject, 'test');
+    expect(path).toContain('project_name_with_special');
+    expect(path).not.toContain('project/name');
+    rmSync(getProjectSoulsDir('project_name_with_special'), {
+      recursive: true,
+      force: true,
+    });
   });
 });

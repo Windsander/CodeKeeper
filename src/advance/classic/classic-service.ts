@@ -88,9 +88,52 @@ export class ClassicService {
   }
 
   /**
+   * 启动指定项目的 MR Agent 子进程
+   *
+   * 仅在该项目启用 MR 评审、配置了 GitLab、且当前未运行时才会 spawn。
+   * 调用方应自行判断全局服务是否运行。
+   */
+  startProject(projectId: string): void {
+    if (this.isProjectRunning(projectId)) {
+      logger.info(`[ClassicService] 项目 ${projectId} 的 MR Agent 已在运行，跳过`);
+      return;
+    }
+
+    const project = this.options.registry.list().find((p) => p.id === projectId);
+    if (!project) {
+      logger.warn(`[ClassicService] 启动项目 ${projectId} 失败：项目不存在`);
+      return;
+    }
+
+    if (!project.mrReview?.enabled || !project.gitlab) {
+      logger.info(`[ClassicService] 项目 ${project.name} 未启用 MR 评审或未配置 GitLab，跳过启动`);
+      return;
+    }
+
+    const daemonConfig = this.options.getDaemonConfig();
+    this.spawnProjectAgent(project, daemonConfig);
+  }
+
+  /**
+   * 停止指定项目的 MR Agent 子进程
+   */
+  stopProject(projectId: string): void {
+    const child = this.children.get(projectId);
+    if (!child || child.killed) {
+      logger.info(`[ClassicService] 项目 ${projectId} 的 MR Agent 未运行，跳过停止`);
+      return;
+    }
+
+    child.kill('SIGTERM');
+    this.children.delete(projectId);
+    logger.info(`[ClassicService] 已停止项目 ${projectId} 的 MR Agent`);
+  }
+
+  /**
    * 重启指定项目的 MR Agent 子进程
    *
    * 用于项目配置（Token、schedule、角色等）变更后热重启该项目的 Agent。
+   * 会先停止再启动；若项目未启用或未配置 GitLab，则只停止不启动。
    */
   restartProject(projectId: string): void {
     const project = this.options.registry.list().find((p) => p.id === projectId);

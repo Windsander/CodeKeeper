@@ -1,10 +1,12 @@
 /**
  * project-status-store 单元测试
+ *
+ * 状态文件存放在 CodeKeeper App 存储空间：
+ * ~/.codekeeper/memory/agents/{projectName}/mr-agent-project-status.json
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   loadProjectStatus,
@@ -14,36 +16,44 @@ import {
   recordAgentStarted,
   recordAgentStopped,
 } from '../../../../src/advance/classic/status/project-status-store.js';
+import { getProjectAgentStatusDir } from '../../../../src/core/platform.js';
 import type { Project } from '../../../../src/advance/types.js';
 
-function makeProject(rootPath: string): Project {
+const TEST_PROJECT_NAME = `ck-status-test-${Date.now()}`;
+
+function makeProject(): Project {
   return {
-    id: rootPath,
-    name: 'test-project',
-    rootPath,
+    id: `test-${TEST_PROJECT_NAME}`,
+    name: TEST_PROJECT_NAME,
+    rootPath: '/tmp/ck-status-project',
     registeredAt: Date.now(),
     lastScannedAt: null,
   };
 }
 
-describe('project-status-store', () => {
-  let tmpRoot: string;
+function getTestStatusDir(): string {
+  return getProjectAgentStatusDir(TEST_PROJECT_NAME);
+}
 
+describe('project-status-store', () => {
   beforeEach(() => {
-    tmpRoot = mkdtempSync(join(tmpdir(), 'ck-status-'));
+    const dir = getTestStatusDir();
+    if (existsSync(dir)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   afterEach(() => {
-    rmSync(tmpRoot, { recursive: true, force: true });
+    rmSync(getTestStatusDir(), { recursive: true, force: true });
   });
 
   it('未保存时返回空状态', () => {
-    const project = makeProject(tmpRoot);
+    const project = makeProject();
     expect(loadProjectStatus(project)).toEqual({});
   });
 
   it('保存后读取应一致', () => {
-    const project = makeProject(tmpRoot);
+    const project = makeProject();
     const status = {
       lastError: {
         type: 'invalid-token' as const,
@@ -57,14 +67,14 @@ describe('project-status-store', () => {
   });
 
   it('支持显式覆盖错误类型', () => {
-    const project = makeProject(tmpRoot);
+    const project = makeProject();
     recordProjectError(project, new Error('连接超时'), 'missing-token');
     const status = loadProjectStatus(project);
     expect(status.lastError?.type).toBe('missing-token');
   });
 
   it('记录 missing-token 错误', () => {
-    const project = makeProject(tmpRoot);
+    const project = makeProject();
     recordProjectError(project, new Error('GitLab API 401: Unauthorized'));
     const status = loadProjectStatus(project);
     expect(status.lastError?.type).toBe('invalid-token');
@@ -72,21 +82,21 @@ describe('project-status-store', () => {
   });
 
   it('记录 gitlab-api 错误', () => {
-    const project = makeProject(tmpRoot);
+    const project = makeProject();
     recordProjectError(project, new Error('GitLab API 500: Internal Server Error'));
     const status = loadProjectStatus(project);
     expect(status.lastError?.type).toBe('gitlab-api');
   });
 
   it('记录 unknown 错误', () => {
-    const project = makeProject(tmpRoot);
+    const project = makeProject();
     recordProjectError(project, new Error('连接超时'));
     const status = loadProjectStatus(project);
     expect(status.lastError?.type).toBe('unknown');
   });
 
   it('清除错误并记录成功时间', () => {
-    const project = makeProject(tmpRoot);
+    const project = makeProject();
     recordProjectError(project, new Error('GitLab API 401'));
     clearProjectError(project);
     const status = loadProjectStatus(project);
@@ -95,7 +105,7 @@ describe('project-status-store', () => {
   });
 
   it('记录 Agent 启动与停止时间', () => {
-    const project = makeProject(tmpRoot);
+    const project = makeProject();
     recordAgentStarted(project);
     let status = loadProjectStatus(project);
     expect(status.agentStartedAt).toBeDefined();
@@ -107,10 +117,10 @@ describe('project-status-store', () => {
   });
 
   it('状态文件损坏时返回空对象', () => {
-    const project = makeProject(tmpRoot);
-    const archiveRoot = join(tmpRoot, '.codekeeper');
-    const path = join(archiveRoot, 'mr-agent-project-status.json');
-    mkdirSync(archiveRoot, { recursive: true });
+    const project = makeProject();
+    const dir = getTestStatusDir();
+    const path = join(dir, 'mr-agent-project-status.json');
+    mkdirSync(dir, { recursive: true });
     writeFileSync(path, 'not-json', 'utf-8');
     expect(loadProjectStatus(project)).toEqual({});
   });

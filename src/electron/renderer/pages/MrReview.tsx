@@ -274,7 +274,8 @@ export function MrReview() {
             marginBottom: 16,
           }}
         >
-          为项目配置 GitLab 仓库信息与 MR 评审开关后，MR 评审服务才会为该项目启动独立的 MR Agent。
+          为项目配置 GitLab 仓库信息并启用 MR 评审后，该项目将加入全局服务的轮询范围。
+          点击上方"启动服务"才会为所有已启用的项目启动 MR Agent；服务运行中单独勾选/取消项目可实时启动或停止该项目的 Agent。
         </p>
 
         {!projects || projects.length === 0 ? (

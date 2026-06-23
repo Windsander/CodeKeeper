@@ -244,6 +244,90 @@ describe('ClassicService', () => {
     expect(lastProject[0].id).toBe('p2');
   });
 
+  it('startProject 只启动指定项目', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+        makeProject({
+          id: 'p2',
+          name: 'project-2',
+          rootPath: '/path/p2',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p2', token: 'token2' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
+
+    const service = new ClassicService(options);
+    service.startProject('p2');
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const project = JSON.parse(spawnMock.mock.calls[0][2].env.CK_PROJECTS_JSON);
+    expect(project[0].id).toBe('p2');
+    expect(service.isProjectRunning('p2')).toBe(true);
+    expect(service.isProjectRunning('p1')).toBe(false);
+  });
+
+  it('startProject 对未启用项目不应 spawn', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: false, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
+
+    const service = new ClassicService(options);
+    service.startProject('p1');
+
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('stopProject 只停止指定项目', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+        makeProject({
+          id: 'p2',
+          name: 'project-2',
+          rootPath: '/path/p2',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p2', token: 'token2' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
+
+    const service = new ClassicService(options);
+    service.start();
+    expect(service.isProjectRunning('p1')).toBe(true);
+    expect(service.isProjectRunning('p2')).toBe(true);
+
+    service.stopProject('p1');
+
+    expect(mockKill).toHaveBeenCalledTimes(1);
+    expect(service.isProjectRunning('p1')).toBe(false);
+    expect(service.isProjectRunning('p2')).toBe(true);
+  });
+
   it('子进程 exit 后 isRunning 返回 false', () => {
     const options = makeMockOptions({
       spawn: spawnMock,

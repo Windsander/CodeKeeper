@@ -1,8 +1,8 @@
 /**
  * MR Agent 项目级状态持久化
  *
- * 每个项目独立维护自己的状态文件：
- * `<archiveRoot>/mr-agent-project-status.json`
+ * 每个项目独立维护自己的状态文件，存放在 CodeKeeper App 存储空间：
+ * ~/.codekeeper/memory/agents/{projectName}/mr-agent-project-status.json
  *
  * 用于记录：
  * - 最近一次错误（类型、消息、时间）
@@ -11,8 +11,8 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { getArchiveRoot } from '../../types.js';
+import { join } from 'node:path';
+import { getProjectAgentStatusDir } from '../../../core/platform.js';
 import type { Project } from '../../types.js';
 
 export type MrAgentProjectErrorType =
@@ -40,8 +40,7 @@ export interface MrAgentProjectStatus {
 }
 
 function getStatusPath(project: Project): string {
-  const archiveRoot = getArchiveRoot(project);
-  return join(archiveRoot, 'mr-agent-project-status.json');
+  return join(getProjectAgentStatusDir(project.name), 'mr-agent-project-status.json');
 }
 
 /**
@@ -74,7 +73,7 @@ export function saveProjectStatus(
   status: MrAgentProjectStatus
 ): void {
   const path = getStatusPath(project);
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(getProjectAgentStatusDir(project.name), { recursive: true });
   writeFileSync(path, JSON.stringify(status, null, 2), 'utf-8');
 }
 

@@ -333,11 +333,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     };
     ctx.store.updateProjectGitlabConfig(params.projectId, updated);
 
-    const needRestart =
+    const changed =
       oldGitlab?.baseUrl !== updated.baseUrl ||
       oldGitlab?.projectPath !== updated.projectPath ||
       oldGitlab?.token !== updated.token;
-    if (needRestart) {
+    // 仅在全局服务运行且该项目 Agent 正在运行时热重启
+    if (changed && ctx.classicService?.isProjectRunning(params.projectId)) {
       ctx.classicService?.restartProject(params.projectId);
     }
 
@@ -376,16 +377,31 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     };
     ctx.store.updateMrReviewConfig(params.projectId, updated);
 
-    const needRestart =
-      !oldMrReview ||
-      oldMrReview.enabled !== updated.enabled ||
-      oldMrReview.agentRole !== updated.agentRole ||
-      oldMrReview.reviewSchedule !== updated.reviewSchedule ||
-      oldMrReview.autoFixEnabled !== updated.autoFixEnabled ||
-      oldMrReview.resolveOthersDiscussions !== updated.resolveOthersDiscussions ||
-      oldMrReview.maxAutoMergeRisk !== updated.maxAutoMergeRisk;
-    if (needRestart) {
-      ctx.classicService?.restartProject(params.projectId);
+    const oldEnabled = oldMrReview?.enabled ?? false;
+    const newEnabled = updated.enabled;
+    const serviceRunning = ctx.classicService?.isRunning() ?? false;
+
+    if (oldEnabled !== newEnabled) {
+      // 启用状态变化时，仅在全局服务运行中才单独启动/停止该项目 Agent
+      if (serviceRunning) {
+        if (newEnabled) {
+          ctx.classicService?.startProject(params.projectId);
+        } else {
+          ctx.classicService?.stopProject(params.projectId);
+        }
+      }
+    } else if (ctx.classicService?.isProjectRunning(params.projectId)) {
+      // 其他字段变化且该项目 Agent 正在运行时热重启
+      const otherChanged =
+        !oldMrReview ||
+        oldMrReview.agentRole !== updated.agentRole ||
+        oldMrReview.reviewSchedule !== updated.reviewSchedule ||
+        oldMrReview.autoFixEnabled !== updated.autoFixEnabled ||
+        oldMrReview.resolveOthersDiscussions !== updated.resolveOthersDiscussions ||
+        oldMrReview.maxAutoMergeRisk !== updated.maxAutoMergeRisk;
+      if (otherChanged) {
+        ctx.classicService?.restartProject(params.projectId);
+      }
     }
 
     return { success: true };
@@ -400,15 +416,15 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.soul.get': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    const soul = loadSoulContent(project.rootPath, getArchiveRoot(project));
-    return { soul: soul ?? { content: '', sourcePath: join(project.rootPath, 'MR-Agent-SOUL.md') } };
+    const soul = loadSoulContent(project);
+    return { soul: soul ?? { content: '', sourcePath: '' } };
   },
 
   'project.soul.update': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
     const content = params.content ?? '';
-    const sourcePath = saveSoulContent(project.rootPath, content);
+    const sourcePath = saveSoulContent(project, content);
     return { success: true, sourcePath };
   },
 };

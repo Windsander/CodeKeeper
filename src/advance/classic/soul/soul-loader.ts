@@ -1,5 +1,14 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+/**
+ * MR Agent SOUL.md 加载与保存
+ *
+ * SOUL.md 存放在 CodeKeeper App 存储空间下，避免被误提交到项目仓库：
+ * ~/.codekeeper/memory/souls/{projectName}/MR-Agent-SOUL.md
+ */
+
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { getProjectSoulsDir } from '../../../core/platform.js';
+import type { Project } from '../../types.js';
 
 export const DEFAULT_SOUL_MD_FILENAME = 'MR-Agent-SOUL.md';
 
@@ -8,41 +17,36 @@ export interface SoulContent {
   sourcePath: string;
 }
 
-/**
- * 加载项目 MR Agent 的 SOUL.md 配置
- *
- * 加载优先级：
- * 1. 项目根目录 MR-Agent-SOUL.md
- * 2. 归档目录 MR-Agent-SOUL.md
- * 3. 未找到返回 null
- */
-export function loadSoulContent(
-  projectRoot: string,
-  archiveRoot?: string
-): SoulContent | null {
-  const candidates = [join(projectRoot, DEFAULT_SOUL_MD_FILENAME)];
-  if (archiveRoot) {
-    candidates.push(join(archiveRoot, DEFAULT_SOUL_MD_FILENAME));
-  }
-
-  for (const path of candidates) {
-    if (existsSync(path)) {
-      return {
-        content: readFileSync(path, 'utf-8'),
-        sourcePath: path,
-      };
-    }
-  }
-
-  return null;
+function getSoulPath(project: Project): string {
+  return join(getProjectSoulsDir(project.name), DEFAULT_SOUL_MD_FILENAME);
 }
 
 /**
- * 保存 SOUL.md 内容到项目根目录
+ * 加载项目 MR Agent 的 SOUL.md 配置
+ *
+ * 从 CodeKeeper App 存储空间读取，不存在时返回 null。
  */
-export function saveSoulContent(projectRoot: string, content: string): string {
-  const path = join(projectRoot, DEFAULT_SOUL_MD_FILENAME);
-  mkdirSync(dirname(path), { recursive: true });
+export function loadSoulContent(project: Project): SoulContent | null {
+  const path = getSoulPath(project);
+  if (!existsSync(path)) {
+    return null;
+  }
+  try {
+    return {
+      content: readFileSync(path, 'utf-8'),
+      sourcePath: path,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 保存 SOUL.md 内容到 CodeKeeper App 存储空间
+ */
+export function saveSoulContent(project: Project, content: string): string {
+  const path = getSoulPath(project);
+  mkdirSync(getProjectSoulsDir(project.name), { recursive: true });
   writeFileSync(path, content, 'utf-8');
   return path;
 }
