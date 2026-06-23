@@ -486,6 +486,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
               value={condition.field}
               options={FILTER_FIELD_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
               onChange={(value) => updateFilterField(index, value as MrReviewFilterField)}
+              className="filter-field-dropdown"
             />
             {condition.field === 'draft' ? (
               <Dropdown

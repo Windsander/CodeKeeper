@@ -11,6 +11,7 @@ interface DropdownProps {
   onChange: (value: string) => void;
   placeholder?: string;
   disabled?: boolean;
+  className?: string;
 }
 
 /**
@@ -18,7 +19,7 @@ interface DropdownProps {
  *
  * 替代原生 <select>，提供一致的圆角、阴影与字体样式。
  */
-export function Dropdown({ value, options, onChange, placeholder = '请选择...', disabled = false }: DropdownProps) {
+export function Dropdown({ value, options, onChange, placeholder = '请选择...', disabled = false, className = '' }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const selectedLabel = options.find((o) => o.value === value)?.label ?? placeholder;
@@ -40,7 +41,7 @@ export function Dropdown({ value, options, onChange, placeholder = '请选择...
   };
 
   return (
-    <div className="dropdown" ref={containerRef}>
+    <div className={`dropdown ${className}`} ref={containerRef}>
       <button
         type="button"
         className={`dropdown-trigger ${open ? 'open' : ''}`}

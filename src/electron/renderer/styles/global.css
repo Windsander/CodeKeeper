@@ -440,9 +440,9 @@ select.input:focus {
   min-width: 0;
 }
 
-.filter-condition-row .dropdown {
-  min-width: 140px;
-  max-width: 180px;
+.filter-condition-row .filter-field-dropdown {
+  flex: 0 0 140px;
+  max-width: 140px;
 }
 
 .filter-condition-row .dropdown-trigger,
