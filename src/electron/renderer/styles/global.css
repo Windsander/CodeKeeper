@@ -434,13 +434,20 @@ select.input:focus {
 }
 
 .filter-condition-row .dropdown,
-.filter-condition-row .input {
+.filter-condition-row .input,
+.filter-condition-row .autocomplete {
   flex: 1;
   min-width: 0;
 }
 
+.filter-condition-row .dropdown {
+  min-width: 140px;
+  max-width: 180px;
+}
+
 .filter-condition-row .dropdown-trigger,
-.filter-condition-row .input {
+.filter-condition-row .input,
+.filter-condition-row .autocomplete-input {
   height: 40px;
   box-sizing: border-box;
 }
