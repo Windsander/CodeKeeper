@@ -4,17 +4,16 @@ import { getLogDir } from '../../core/platform';
 import { logger } from '../../core/logger';
 import type { MetadataStore } from '../store/metadata-store';
 import type { ProjectRegistry } from '../project-registry';
-import type { ArchivePipeline } from '../pipeline/archive-pipeline';
 import type { LlmClient } from '../llm/client';
 import type { Project } from '../types';
 import { getArchiveRoot } from '../types';
 import { loadProjectConfig } from '../config/project-config';
-import { scanExistingFiles } from '../project-scanner';
 import { UndoExecutor } from '../archive/undo-executor';
 import { detectGitInfo } from '../utils/git-info';
 import { loadSoulContent, saveSoulContent } from '../classic/soul/soul-loader.js';
 import { loadProjectStatus } from '../classic/status/project-status-store.js';
 import type { ClassicService } from '../classic/classic-service';
+import type { ScanService } from '../scan/scan-service.js';
 
 import { readDirectoryTree } from '../utils/file-tree';
 
@@ -22,8 +21,8 @@ export interface HandlerContext {
   store: MetadataStore;
   registry: ProjectRegistry;
   classicService?: ClassicService;
+  scanService?: ScanService;
   getClient: () => LlmClient | null;
-  getPipeline: () => ArchivePipeline;
   updateDaemonConfig?: (config: {
     apiKey?: string;
     apiUrl?: string;
@@ -50,17 +49,15 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.register': async (ctx, params) => {
     const project = ctx.registry.register(params.rootPath, params.archiveRoot);
     ctx.watchProject?.(project);
-    // 全量扫描可能耗时较长，异步执行不阻塞注册返回；
-    // scanExistingFiles 内部会在目录间让出事件循环，避免卡住 daemon。
-    (async () => {
+    // 全量扫描在独立 worker 中异步执行，不阻塞注册返回，也不阻塞 daemon IPC
+    if (ctx.scanService) {
       try {
-        const config = loadProjectConfig(project.rootPath, project.archiveRoot);
-        const scannedCount = await scanExistingFiles(ctx.store, project, config);
-        logger.info({ projectId: project.id, scannedCount }, '注册项目时全量扫描完成');
+        ctx.scanService.scanProject(project.id);
+        logger.info({ projectId: project.id }, '注册项目时已加入后台扫描队列');
       } catch (err) {
-        logger.warn({ err, projectId: project.id }, '注册项目时全量扫描失败');
+        logger.warn({ err, projectId: project.id }, '注册项目时触发后台扫描失败');
       }
-    })();
+    }
 
     // 自动从本地 git 检测 GitLab 配置，作为默认配置保存（token 留空待用户填写）
     (async () => {
@@ -151,12 +148,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!project) throw new Error('项目未注册');
     const client = ctx.getClient();
     if (!client) throw new Error('未配置 API Key');
-    logger.info({ projectId: project.id, projectRoot: project.rootPath }, '收到手动扫描请求');
-    const pipeline = ctx.getPipeline();
-    ctx.store.updateLastScannedAt(project.id, Date.now());
-    await pipeline.run(project);
-    logger.info({ projectId: project.id }, '手动扫描完成');
-    return { scannedAt: Date.now() };
+    if (!ctx.scanService) throw new Error('扫描服务未初始化');
+    logger.info({ projectId: project.id, projectRoot: project.rootPath }, '收到手动扫描请求，已加入后台队列');
+    ctx.scanService.scanProject(params.projectId);
+    return { queued: true, scannedAt: Date.now() };
   },
 
   'project.context': async (ctx, params) => {

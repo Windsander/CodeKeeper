@@ -11,6 +11,9 @@ export class MetadataStore {
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
+    // 启用 WAL mode 以支持多进程并发读写；busy_timeout 让写入冲突时自动等待
+    this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db.exec('PRAGMA busy_timeout = 30000;');
     this.db.exec(readFileSync(join(__dirname, 'schema.sql'), 'utf-8'));
     this.migrate();
   }

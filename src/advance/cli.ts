@@ -95,6 +95,7 @@ export async function main(): Promise<void> {
     const daemon = new Daemon({
       registry,
       store,
+      dbPath: DB_PATH,
       apiKey: cmdApiKey ?? persisted.apiKey,
       apiUrl: persisted.apiUrl,
       provider: persisted.provider,

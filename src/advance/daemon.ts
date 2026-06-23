@@ -6,18 +6,19 @@ import type { Project, WatchedEvent } from './types';
 import { getArchiveRoot } from './types';
 import { loadProjectConfig } from './config/project-config';
 import { saveDaemonConfig } from './config/daemon-config';
-import { scanExistingFiles } from './project-scanner';
-import { ArchivePipeline } from './pipeline/archive-pipeline';
-import { LlmClient } from './llm/client';
 import { IpcServer } from './ipc/server';
 import { getIpcSocketPath } from './ipc/paths';
 import { handlers, type HandlerContext } from './ipc/handlers';
 import { logger } from '../core/logger';
+import { LlmClient } from './llm/client';
 import { ClassicService } from './classic/classic-service';
+import { ScanService } from './scan/scan-service.js';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
   store: MetadataStore;
+  /** 数据库文件路径，用于启动扫描 worker */
+  dbPath: string;
   /** LLM API Key */
   apiKey?: string;
   /** 自定义 LLM API Base URL */
@@ -43,6 +44,7 @@ export class Daemon {
   private ipcServer: IpcServer | null = null;
   private handlerContext: HandlerContext;
   private classicService: ClassicService;
+  private scanService: ScanService;
 
   constructor(private options: DaemonOptions) {
     this.classicService = new ClassicService({
@@ -57,10 +59,25 @@ export class Daemon {
       }),
     });
 
+    this.scanService = new ScanService({
+      store: options.store,
+      registry: options.registry,
+      dbPath: options.dbPath,
+      getDaemonConfig: () => ({
+        apiKey: this.options.apiKey ?? '',
+        apiUrl: this.options.apiUrl ?? '',
+        provider: this.options.provider ?? 'anthropic',
+        model: this.options.model ?? '',
+        headers: this.options.headers ?? {},
+      }),
+      maxEventsPerScan: this.options.maxEventsPerScan,
+    });
+
     this.handlerContext = {
       store: options.store,
       registry: options.registry,
       classicService: this.classicService,
+      scanService: this.scanService,
       getClient: () =>
         this.options.apiKey
           ? new LlmClient({
@@ -72,19 +89,6 @@ export class Daemon {
               minRequestInterval: this.llmRequestInterval(),
             })
           : null,
-      getPipeline: () =>
-        new ArchivePipeline({
-          store: this.options.store,
-          client: new LlmClient({
-            apiKey: this.options.apiKey ?? '',
-            baseURL: this.options.apiUrl,
-            provider: this.options.provider,
-            model: this.options.model,
-            headers: this.options.headers,
-            minRequestInterval: this.llmRequestInterval(),
-          }),
-          maxEvents: this.options.maxEventsPerScan ?? 10,
-        }),
       updateDaemonConfig: (config) => this.updateConfig(config),
       getDaemonConfig: () => ({
         apiKey: this.options.apiKey ?? '',
@@ -122,13 +126,14 @@ export class Daemon {
     });
 
     const cron = this.options.scanCron ?? '*/5 * * * *';
-    this.scanJob = schedule(cron, () => this.scanAll());
+    this.scanJob = schedule(cron, () => this.scanService.scanAllProjects());
   }
 
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
     this.classicService.stop();
+    this.scanService.stop();
     this.scanJob?.stop();
     this.scanJob = null;
     for (const watchers of this.watchers.values()) {
@@ -171,7 +176,7 @@ export class Daemon {
     if (config.scanCron !== undefined) {
       this.options.scanCron = config.scanCron;
       this.scanJob?.stop();
-      this.scanJob = schedule(config.scanCron, () => this.scanAll());
+      this.scanJob = schedule(config.scanCron, () => this.scanService.scanAllProjects());
       persisted.scanCron = config.scanCron;
     }
     if (config.llmRequestsPerMinute !== undefined) {
@@ -251,52 +256,5 @@ export class Daemon {
       watcher.stop();
     }
     this.watchers.delete(projectId);
-  }
-
-  private async scanAll(): Promise<void> {
-    const apiKey = this.options.apiKey;
-    if (!apiKey) {
-      console.warn('[Daemon] 未配置 LLM API Key，跳过归档扫描');
-      return;
-    }
-
-    const projects = this.options.registry.list();
-
-    // 1. 先对每个项目做全量扫描，补全漏掉的新文件
-    for (const project of projects) {
-      // 每个项目扫描前让出事件循环，避免连续扫描阻塞 IPC
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      const config = loadProjectConfig(project.rootPath, project.archiveRoot);
-      const addedCount = await scanExistingFiles(this.options.store, project, config);
-      logger.info({ projectId: project.id, addedCount }, '定时全量扫描完成');
-    }
-
-    const client = new LlmClient({
-      apiKey,
-      baseURL: this.options.apiUrl,
-      provider: this.options.provider,
-      model: this.options.model,
-      headers: this.options.headers,
-      minRequestInterval: this.llmRequestInterval(),
-    });
-    const pipeline = new ArchivePipeline({
-      store: this.options.store,
-      client,
-      maxEvents: this.options.maxEventsPerScan ?? 10,
-    });
-
-    // 2. 处理所有 pending 事件（包括实时监控和全量扫描产生的）
-    for (const project of projects) {
-      // 每个项目 LLM 处理前也让出事件循环
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      this.options.store.updateLastScannedAt(project.id, Date.now());
-      try {
-        await pipeline.run(project);
-      } catch (err) {
-        console.warn(`[Daemon] 项目扫描失败: ${project.rootPath}`, err);
-      }
-    }
   }
 }
