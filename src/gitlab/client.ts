@@ -63,6 +63,12 @@ export class GitLabClient {
     per_page?: number;
     order_by?: string;
     sort?: string;
+    author_username?: string;
+    assignee_username?: string;
+    reviewer_username?: string;
+    labels?: string;
+    source_branch?: string;
+    target_branch?: string;
   }): Promise<GitLabMR[]> {
     const query = new URLSearchParams({
       state: params?.state || 'opened',
@@ -70,6 +76,13 @@ export class GitLabClient {
       order_by: params?.order_by || 'updated_at',
       sort: params?.sort || 'desc',
     });
+
+    if (params?.author_username) query.set('author_username', params.author_username);
+    if (params?.assignee_username) query.set('assignee_username', params.assignee_username);
+    if (params?.reviewer_username) query.set('reviewer_username', params.reviewer_username);
+    if (params?.labels) query.set('labels', params.labels);
+    if (params?.source_branch) query.set('source_branch', params.source_branch);
+    if (params?.target_branch) query.set('target_branch', params.target_branch);
 
     return this.request<GitLabMR[]>(
       'GET',

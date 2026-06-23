@@ -13,9 +13,10 @@ import {
   type MergeOptions,
   type GitLabDiffPosition,
 } from './types.js';
+import { matchesFilter } from './mr-filter.js';
 import { GitLabClient } from '../../../gitlab/client.js';
 import type { ProjectConfig } from '../../../types.js';
-import type { GitlabConfig } from '../../types.js';
+import type { GitlabConfig, MrReviewFilter } from '../../types.js';
 
 /**
  * 需要过滤的 bot / 系统账号用户名模式（词边界匹配）
@@ -104,12 +105,59 @@ export class GitLabProvider implements IGitProvider {
   }
 
   /**
-   * 列出所有开放的 MR
+   * 列出所有开放的 MR，支持按过滤条件筛选
    */
-  async listOpenMRs(): Promise<MergeRequest[]> {
-    const gitlabMRs = await this.client.listMergeRequests({ state: 'opened' });
+  async listOpenMRs(filters?: MrReviewFilter): Promise<MergeRequest[]> {
+    const apiParams: Record<string, string> = {
+      state: 'opened',
+      per_page: '50',
+      order_by: 'updated_at',
+      sort: 'desc',
+    };
 
-    return gitlabMRs.map((mr) => ({
+    // 取每个字段的第一个值利用 GitLab API 预过滤，减少传输量
+    if (filters) {
+      for (const condition of filters.conditions) {
+        const values = condition.values.filter((v) => v.trim() !== '');
+        if (values.length === 0) continue;
+        const firstValue = values[0];
+        switch (condition.field) {
+          case 'author':
+            apiParams.author_username = firstValue;
+            break;
+          case 'assignee':
+            apiParams.assignee_username = firstValue;
+            break;
+          case 'reviewer':
+            apiParams.reviewer_username = firstValue;
+            break;
+          case 'label':
+            apiParams.labels = firstValue;
+            break;
+          case 'sourceBranch':
+            apiParams.source_branch = firstValue;
+            break;
+          case 'targetBranch':
+            apiParams.target_branch = firstValue;
+            break;
+        }
+      }
+    }
+
+    const gitlabMRs = await this.client.listMergeRequests({
+      state: apiParams.state,
+      per_page: Number(apiParams.per_page),
+      order_by: apiParams.order_by,
+      sort: apiParams.sort,
+      author_username: apiParams.author_username,
+      assignee_username: apiParams.assignee_username,
+      reviewer_username: apiParams.reviewer_username,
+      labels: apiParams.labels,
+      source_branch: apiParams.source_branch,
+      target_branch: apiParams.target_branch,
+    });
+
+    const mrs = gitlabMRs.map((mr) => ({
       iid: mr.iid,
       title: mr.title,
       description: mr.description ?? '',
@@ -121,7 +169,12 @@ export class GitLabProvider implements IGitProvider {
       createdAt: mr.created_at,
       updatedAt: mr.updated_at,
       webUrl: mr.web_url,
+      assignee: (mr as unknown as { assignee?: { username: string } }).assignee?.username,
+      reviewers: (mr as unknown as { reviewers?: Array<{ username: string }> }).reviewers?.map((r) => r.username),
+      labels: (mr as unknown as { labels?: string[] }).labels,
     }));
+
+    return mrs.filter((mr) => matchesFilter(mr, filters));
   }
 
   /**
