@@ -58,17 +58,19 @@ function countDiffLines(diffText: string): { additions: number; deletions: numbe
 export class GitLabProvider implements IGitProvider {
   private client: GitLabClient;
 
-  // 临时占位实现，等待 Task 3 完善
   async listMembers(): Promise<Array<{ username: string; name?: string }>> {
-    return [];
+    const members = await this.client.listMembers();
+    return members.map((m) => ({ username: m.username, name: m.name }));
   }
 
   async listLabels(): Promise<string[]> {
-    return [];
+    const labels = await this.client.listLabels();
+    return labels.map((l) => l.name);
   }
 
   async listProtectedBranches(): Promise<string[]> {
-    return [];
+    const branches = await this.client.listProtectedBranches();
+    return branches.map((b) => b.name);
   }
 
   constructor(config: GitlabConfig) {

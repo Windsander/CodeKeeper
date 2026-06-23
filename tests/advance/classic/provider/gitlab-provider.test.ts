@@ -17,6 +17,9 @@ const mockGetMergeRequest = vi.fn();
 const mockGetMergeRequestChanges = vi.fn();
 const mockGetMergeRequestNotes = vi.fn();
 const mockCreateNote = vi.fn();
+const mockListMembers = vi.fn();
+const mockListLabels = vi.fn();
+const mockListProtectedBranches = vi.fn();
 
 vi.mock('../../../../src/gitlab/client', () => ({
   GitLabClient: vi.fn().mockImplementation(() => ({
@@ -25,6 +28,9 @@ vi.mock('../../../../src/gitlab/client', () => ({
     getMergeRequestChanges: mockGetMergeRequestChanges,
     getMergeRequestNotes: mockGetMergeRequestNotes,
     createNote: mockCreateNote,
+    listMembers: mockListMembers,
+    listLabels: mockListLabels,
+    listProtectedBranches: mockListProtectedBranches,
   })),
 }));
 
@@ -227,6 +233,51 @@ describe('GitLabProvider', () => {
 
       expect(result).toHaveLength(1);
       expect(result[0].iid).toBe(2);
+    });
+  });
+
+  describe('listMembers', () => {
+    it('应返回项目成员 username 和 name', async () => {
+      mockListMembers.mockResolvedValue([
+        { username: 'arikan', name: 'Arikan Chen' },
+        { username: 'bob', name: 'Bob' },
+      ]);
+
+      const provider = new GitLabProvider(gitlabConfig);
+      const members = await provider.listMembers();
+
+      expect(members).toEqual([
+        { username: 'arikan', name: 'Arikan Chen' },
+        { username: 'bob', name: 'Bob' },
+      ]);
+      expect(mockListMembers).toHaveBeenCalled();
+    });
+  });
+
+  describe('listLabels', () => {
+    it('应返回项目标签名列表', async () => {
+      mockListLabels.mockResolvedValue([{ name: 'bug' }, { name: 'feature' }]);
+
+      const provider = new GitLabProvider(gitlabConfig);
+      const labels = await provider.listLabels();
+
+      expect(labels).toEqual(['bug', 'feature']);
+      expect(mockListLabels).toHaveBeenCalled();
+    });
+  });
+
+  describe('listProtectedBranches', () => {
+    it('应返回保护分支名列表', async () => {
+      mockListProtectedBranches.mockResolvedValue([
+        { name: 'main' },
+        { name: 'develop' },
+      ]);
+
+      const provider = new GitLabProvider(gitlabConfig);
+      const branches = await provider.listProtectedBranches();
+
+      expect(branches).toEqual(['main', 'develop']);
+      expect(mockListProtectedBranches).toHaveBeenCalled();
     });
   });
 
