@@ -14,6 +14,7 @@ import { loadSoulContent, saveSoulContent } from '../classic/soul/soul-loader.js
 import { loadProjectStatus } from '../classic/status/project-status-store.js';
 import type { ClassicService } from '../classic/classic-service';
 import type { ScanService } from '../scan/scan-service.js';
+import { GitLabProvider } from '../classic/provider/gitlab-provider.js';
 
 import { readDirectoryTree } from '../utils/file-tree';
 
@@ -350,6 +351,27 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
     return loadProjectStatus(project);
+  },
+
+  'project.members': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project?.gitlab) return { members: [] };
+    const provider = new GitLabProvider(project.gitlab);
+    return { members: await provider.listMembers() };
+  },
+
+  'project.labels': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project?.gitlab) return { labels: [] };
+    const provider = new GitLabProvider(project.gitlab);
+    return { labels: await provider.listLabels() };
+  },
+
+  'project.protected-branches': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project?.gitlab) return { branches: [] };
+    const provider = new GitLabProvider(project.gitlab);
+    return { branches: await provider.listProtectedBranches() };
   },
 
   'project.mrreview.config.update': async (ctx, params) => {
