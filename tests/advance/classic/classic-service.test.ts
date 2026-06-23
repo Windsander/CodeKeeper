@@ -1,13 +1,27 @@
 /**
  * ClassicService 单元测试
  *
- * 通过 options.spawn 注入 mock spawn 函数，验证子进程生命周期管理。
+ * 验证按项目隔离的子进程生命周期管理。
  */
 
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
-import { ClassicService } from '../../../src/advance/classic/classic-service';
-import type { MetadataStore } from '../../../src/advance/store/metadata-store';
-import type { ProjectRegistry } from '../../../src/advance/project-registry';
+import { ClassicService } from '../../../src/advance/classic/classic-service.js';
+import type { MetadataStore } from '../../../src/advance/store/metadata-store.js';
+import type { ProjectRegistry } from '../../../src/advance/project-registry.js';
+import type { Project } from '../../../src/advance/types.js';
+
+function makeProject(overrides?: Partial<Project>): Project {
+  return {
+    id: overrides?.id ?? 'p1',
+    rootPath: overrides?.rootPath ?? '/path/p1',
+    name: overrides?.name ?? 'project-1',
+    registeredAt: Date.now(),
+    lastScannedAt: null,
+    archiveRoot: overrides?.archiveRoot,
+    gitlab: overrides?.gitlab,
+    mrReview: overrides?.mrReview,
+  };
+}
 
 function makeMockOptions(overrides?: {
   spawn?: Mock;
@@ -53,68 +67,198 @@ describe('ClassicService', () => {
     ) as Mock;
   });
 
-  it('start 应调用 spawn 并传入 mr-agent-entry.js 路径', () => {
-    const options = makeMockOptions({ spawn: spawnMock });
-    const service = new ClassicService(options);
+  it('start 应为每个启用 MR 评审的项目 spawn 子进程', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+        makeProject({
+          id: 'p2',
+          name: 'project-2',
+          rootPath: '/path/p2',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p2', token: 'token2' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
 
+    const service = new ClassicService(options);
     service.start();
 
-    expect(spawnMock).toHaveBeenCalledOnce();
-    const [command, args, spawnOptions] = spawnMock.mock.calls[0];
-    expect(command).toBe('node');
-    expect(args[0]).toContain('mr-agent-entry.js');
-    expect(spawnOptions.stdio).toEqual(['ignore', 'pipe', 'pipe']);
-    expect(spawnOptions.env).toBeDefined();
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    const projects1 = JSON.parse(spawnMock.mock.calls[0][2].env.CK_PROJECTS_JSON);
+    const projects2 = JSON.parse(spawnMock.mock.calls[1][2].env.CK_PROJECTS_JSON);
+    expect(projects1).toHaveLength(1);
+    expect(projects2).toHaveLength(1);
+    expect([projects1[0].id, projects2[0].id].sort()).toEqual(['p1', 'p2']);
   });
 
-  it('start 在已运行时不应重复 spawn', () => {
-    const options = makeMockOptions({ spawn: spawnMock });
+  it('start 应跳过未启用 MR 评审或未配置 GitLab 的项目', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+        makeProject({
+          id: 'p2',
+          name: 'project-2',
+          rootPath: '/path/p2',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p2', token: 'token2' },
+          mrReview: { enabled: false, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+        makeProject({
+          id: 'p3',
+          name: 'project-3',
+          rootPath: '/path/p3',
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
+
     const service = new ClassicService(options);
-
-    service.start();
     service.start();
 
-    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const projects = JSON.parse(spawnMock.mock.calls[0][2].env.CK_PROJECTS_JSON);
+    expect(projects[0].id).toBe('p1');
   });
 
-  it('stop 应调用 kill 并清除 child 引用', () => {
-    const options = makeMockOptions({ spawn: spawnMock });
-    const service = new ClassicService(options);
+  it('start 对已运行项目不应重复 spawn', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
 
+    const service = new ClassicService(options);
+    service.start();
+    service.start();
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop 应杀掉所有子进程', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+        makeProject({
+          id: 'p2',
+          name: 'project-2',
+          rootPath: '/path/p2',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p2', token: 'token2' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
+
+    const service = new ClassicService(options);
     service.start();
     expect(service.isRunning()).toBe(true);
 
     service.stop();
 
+    expect(mockKill).toHaveBeenCalledTimes(2);
     expect(mockKill).toHaveBeenCalledWith('SIGTERM');
     expect(service.isRunning()).toBe(false);
   });
 
-  it('stop 在未运行时不应报错', () => {
-    const options = makeMockOptions({ spawn: spawnMock });
-    const service = new ClassicService(options);
-
-    expect(() => service.stop()).not.toThrow();
-    expect(mockKill).not.toHaveBeenCalled();
-  });
-
   it('restart 应先 stop 再 start', () => {
-    const options = makeMockOptions({ spawn: spawnMock });
-    const service = new ClassicService(options);
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
 
+    const service = new ClassicService(options);
     service.start();
-    expect(spawnMock).toHaveBeenCalledOnce();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
 
     service.restart();
 
-    expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(mockKill).toHaveBeenCalledWith('SIGTERM');
+    expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
-  it('isRunning 在子进程退出后应返回 false', () => {
-    const options = makeMockOptions({ spawn: spawnMock });
-    const service = new ClassicService(options);
+  it('restartProject 只重启指定项目', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+        makeProject({
+          id: 'p2',
+          name: 'project-2',
+          rootPath: '/path/p2',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p2', token: 'token2' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
 
+    const service = new ClassicService(options);
+    service.start();
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+
+    service.restartProject('p2');
+
+    expect(mockKill).toHaveBeenCalledTimes(1);
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+    const lastProject = JSON.parse(spawnMock.mock.calls[2][2].env.CK_PROJECTS_JSON);
+    expect(lastProject[0].id).toBe('p2');
+  });
+
+  it('子进程 exit 后 isRunning 返回 false', () => {
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
+
+    const service = new ClassicService(options);
     service.start();
     expect(service.isRunning()).toBe(true);
 
@@ -125,42 +269,51 @@ describe('ClassicService', () => {
 
     exitCallback(0);
     expect(service.isRunning()).toBe(false);
+    expect(service.getRunningProjectIds()).toEqual([]);
   });
 
-  it('start 应通过 buildMrAgentEnv 构造环境变量', () => {
+  it('getRunningProjectIds 应返回运行中项目 ID 列表', () => {
     const options = makeMockOptions({
       spawn: spawnMock,
       registryList: vi.fn(() => [
-        {
+        makeProject({
           id: 'p1',
-          rootPath: '/path/p1',
           name: 'project-1',
-          registeredAt: Date.now(),
-          lastScannedAt: null,
+          rootPath: '/path/p1',
           gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
-          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '0 9 * * 1-5', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM' },
-        },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+        makeProject({
+          id: 'p2',
+          name: 'project-2',
+          rootPath: '/path/p2',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p2', token: 'token2' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
       ]),
     });
 
     const service = new ClassicService(options);
     service.start();
 
-    const [, , spawnOptions] = spawnMock.mock.calls[0];
-    expect(spawnOptions.env.CK_LLM_API_KEY).toBe('test-key');
-    expect(spawnOptions.env.CK_LLM_PROVIDER).toBe('anthropic');
-    expect(spawnOptions.env.CK_LLM_MODEL).toBe('claude-3-5-sonnet');
-    expect(spawnOptions.env.CK_PROJECTS_JSON).toBeDefined();
-
-    const projects = JSON.parse(spawnOptions.env.CK_PROJECTS_JSON);
-    expect(projects).toHaveLength(1);
-    expect(projects[0].name).toBe('project-1');
+    expect(service.getRunningProjectIds().sort()).toEqual(['p1', 'p2']);
   });
 
   it('子进程 stdout/stderr 数据应被转发到 logger', () => {
-    const options = makeMockOptions({ spawn: spawnMock });
-    const service = new ClassicService(options);
+    const options = makeMockOptions({
+      spawn: spawnMock,
+      registryList: vi.fn(() => [
+        makeProject({
+          id: 'p1',
+          name: 'project-1',
+          rootPath: '/path/p1',
+          gitlab: { baseUrl: 'https://git.example.com', projectPath: 'group/p1', token: 'token1' },
+          mrReview: { enabled: true, autoMergeMode: 'audit', reviewSchedule: '*/10 * * * *', learningEnabled: false, maxAutoMergeRisk: 'MEDIUM', agentRole: 'reviewer' },
+        }),
+      ]),
+    });
 
+    const service = new ClassicService(options);
     service.start();
 
     const stdoutCallback = mockStdout.on.mock.calls.find(

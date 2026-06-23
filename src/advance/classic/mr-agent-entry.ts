@@ -9,6 +9,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { schedule, validate as validateCron } from 'node-cron';
 import { LlmClient } from '../llm/client.js';
 import { GitLabProvider } from './provider/gitlab-provider.js';
 import { ClassicReviewer } from './review/reviewer.js';
@@ -18,6 +19,12 @@ import { MrFixAgent } from './fix/mr-fix-agent.js';
 import { FixDecisionEngine } from './fix/fix-decision-engine.js';
 import { loadSoulContent } from './soul/soul-loader.js';
 import { loadProjectContext } from './context/project-context-loader.js';
+import {
+  recordProjectError,
+  clearProjectError,
+  recordAgentStarted,
+  recordProjectMissingToken,
+} from './status/project-status-store.js';
 import type { Project, GitlabConfig, MrReviewConfig } from '../types.js';
 import { getArchiveRoot } from '../types.js';
 import type {
@@ -295,7 +302,7 @@ function getMrReviewConfig(project: Project): MrReviewConfig {
  * 7. 仅对 HIGH/CRITICAL 创建 discussion thread（带代码行定位）
  * 8. 记录 finding-discussion 映射
  */
-async function reviewProject(
+export async function reviewProject(
   project: Project,
   llmClient: LlmClient
 ): Promise<void> {
@@ -311,6 +318,15 @@ async function reviewProject(
   }
 
   const gitlabConfig: GitlabConfig = project.gitlab;
+
+  // Token 预检查：缺失时直接记录错误，不再继续调用 API
+  if (!gitlabConfig.token || gitlabConfig.token.trim() === '') {
+    const message = `[MR Agent] 项目 ${project.name} 未配置 GitLab Access Token`;
+    console.error(message);
+    recordProjectMissingToken(project, message);
+    return;
+  }
+
   const provider = new GitLabProvider(gitlabConfig);
 
   const soul = loadSoulContent(project.rootPath, getArchiveRoot(project));
@@ -334,6 +350,7 @@ async function reviewProject(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[MR Agent] 列出项目 ${project.name} 的 MR 失败: ${message}`);
+    recordProjectError(project, error);
     return;
   }
 
@@ -495,6 +512,9 @@ async function reviewProject(
       await handleOthersDiscussions(mr, provider, diffs, shaInfo, fixAgent);
     }
   }
+
+  // 本次轮询成功完成，清除错误并记录成功时间
+  clearProjectError(project);
 }
 
 /**
@@ -605,10 +625,61 @@ async function handleOthersDiscussions(
 }
 
 /**
+ * 运行单个项目的评审轮询
+ *
+ * 包装 reviewProject，增加未捕获异常保护，避免一个项目的问题导致整个子进程崩溃。
+ */
+async function runProjectReviewSafely(
+  project: Project,
+  llmClient: LlmClient
+): Promise<void> {
+  try {
+    await reviewProject(project, llmClient);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[MR Agent] 项目 ${project.name} 评审异常: ${message}`);
+    recordProjectError(project, error);
+  }
+}
+
+/**
+ * 启动单个项目的定时评审循环
+ *
+ * 按照项目配置的 reviewSchedule 执行 cron 调度。
+ * 若 schedule 表达式非法，记录错误并立即返回。
+ */
+function startProjectReviewLoop(
+  project: Project,
+  llmClient: LlmClient
+): void {
+  const config = getMrReviewConfig(project);
+  const scheduleExpr = config.reviewSchedule?.trim() || '*/10 * * * *';
+
+  if (!validateCron(scheduleExpr)) {
+    const message = `[MR Agent] 项目 ${project.name} 的 reviewSchedule "${scheduleExpr}" 不是合法的 cron 表达式`;
+    console.error(message);
+    recordProjectError(project, new Error(message), 'unknown');
+    return;
+  }
+
+  recordAgentStarted(project);
+
+  // 立即执行一次评审
+  void runProjectReviewSafely(project, llmClient);
+
+  // 按 schedule 定时执行
+  schedule(scheduleExpr, () => {
+    void runProjectReviewSafely(project, llmClient);
+  });
+
+  console.log(`[MR Agent] 项目 ${project.name} 已启动定时评审循环: ${scheduleExpr}`);
+}
+
+/**
  * MR Agent 主入口
  *
- * 从环境变量加载配置，构造 LlmClient，然后依次评审每个项目。
- * 执行完成后进程正常退出（exit code 0），异常时退出码为 1。
+ * 从环境变量加载配置，构造 LlmClient，然后为每个项目启动独立的定时评审循环。
+ * 子进程保持运行，直到被外部发送 SIGTERM 终止。
  */
 export async function main(): Promise<void> {
   console.log('[MR Agent] 启动 MR 评审轮询...');
@@ -638,10 +709,11 @@ export async function main(): Promise<void> {
   });
 
   for (const project of config.projects) {
-    await reviewProject(project, llmClient);
+    startProjectReviewLoop(project, llmClient);
   }
 
-  console.log('[MR Agent] 评审轮询完成');
+  // 子进程需要保持事件循环活跃以运行 cron 定时器
+  console.log(`[MR Agent] 已为 ${config.projects.length} 个项目启动评审循环，子进程保持运行`);
 }
 
 // 直接运行时执行主函数
@@ -651,11 +723,8 @@ const isMainModule = process.argv[1] && (
   process.argv[1].endsWith('mr-agent-entry.js')
 );
 if (isMainModule) {
-  main().then(
-    () => process.exit(0),
-    (error) => {
-      console.error('[MR Agent] 异常退出:', error);
-      process.exit(1);
-    }
-  );
+  main().catch((error) => {
+    console.error('[MR Agent] 异常退出:', error);
+    process.exit(1);
+  });
 }
