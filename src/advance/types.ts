@@ -61,6 +61,32 @@ export interface MrReviewConfig {
   autoFixEnabled?: boolean;
   /** 是否处理他人 discussion（角色含 auto-fixer 时生效） */
   resolveOthersDiscussions?: boolean;
+  /** MR 评审范围过滤条件 */
+  filter?: MrReviewFilter;
+}
+
+/** MR 评审范围过滤 */
+export interface MrReviewFilter {
+  /** 过滤条件列表；字段间为 AND，同字段多值为 OR */
+  conditions: MrReviewFilterCondition[];
+}
+
+/** 支持过滤的 MR 字段 */
+export type MrReviewFilterField =
+  | 'author'
+  | 'assignee'
+  | 'reviewer'
+  | 'label'
+  | 'sourceBranch'
+  | 'targetBranch'
+  | 'draft';
+
+/** 单个过滤条件 */
+export interface MrReviewFilterCondition {
+  /** 字段名 */
+  field: MrReviewFilterField;
+  /** 字段允许的值列表；同字段内满足任一即可 */
+  values: string[];
 }
 
 /**
