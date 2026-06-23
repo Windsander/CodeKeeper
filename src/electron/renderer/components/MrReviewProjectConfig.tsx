@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '../api/electron-api';
+import { useIpc } from '../hooks/useIpc';
 import { Dropdown } from '../components/Dropdown';
+import { CollapsibleSection } from '../components/CollapsibleSection';
+
+interface ClassicStatus {
+  running: boolean;
+  enabledProjects: number;
+  runningProjects: string[];
+}
 
 interface GitlabConfig {
   baseUrl: string;
@@ -135,6 +143,8 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const gitlab = project.gitlab ?? DEFAULT_GITLAB;
   const mrReview = project.mrReview ?? DEFAULT_MR_REVIEW;
 
+  const { data: serviceStatus } = useIpc<ClassicStatus>('classic.status');
+
   const [gitlabUrl, setGitlabUrl] = useState(buildGitlabUrl(gitlab));
   const [token, setToken] = useState(gitlab.token);
   const [agentRole, setAgentRole] = useState(mrReview.agentRole);
@@ -264,9 +274,13 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   return (
     <div className="card" style={{ marginTop: 16, background: 'var(--main-bg)' }}>
       {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
+      {saved && serviceStatus?.running && (
+        <div className="project-meta" style={{ marginBottom: 16, color: 'var(--success)' }}>
+          配置已保存，对应项目的 MR Agent 将自动重启以应用新配置。
+        </div>
+      )}
 
-      <div className="config-section">
-        <h5 className="config-section-title">Git 仓库</h5>
+      <CollapsibleSection title="Git 仓库">
         <div className="form-group">
           <label>GitLab 项目 URL</label>
           <div className="form-row">
@@ -300,10 +314,9 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             需要 api、read_repository、write_repository 权限以读取 MR 并发表评论
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
-      <div className="config-section">
-        <h5 className="config-section-title">Agent 角色与策略</h5>
+      <CollapsibleSection title="Agent 角色与策略">
         <div className="form-group">
           <label>Agent 角色</label>
           <Dropdown
@@ -360,10 +373,9 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             当前 cron: {reviewSchedule}
           </div>
         </div>
-      </div>
+      </CollapsibleSection>
 
-      <div className="config-section">
-        <h5 className="config-section-title">Agent 个性配置（MR-Agent-SOUL.md）</h5>
+      <CollapsibleSection title="Agent 个性配置（MR-Agent-SOUL.md）">
         <div className="form-group">
           <div className="form-row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <label style={{ marginBottom: 0 }}>SOUL.md 内容</label>
@@ -389,7 +401,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             </div>
           )}
         </div>
-      </div>
+      </CollapsibleSection>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button
