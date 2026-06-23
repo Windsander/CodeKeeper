@@ -110,11 +110,10 @@ export class Daemon {
     });
     await this.ipcServer.start();
 
-    // IPC server 启动后，把文件监控、MR Agent 调度等非关键初始化推迟到下一个事件循环，
+    // IPC server 启动后，把文件监控等非关键初始化推迟到下一个事件循环，
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
+    // MR Agent 调度服务（ClassicService）不随 daemon 启动，由 UI 的“启动服务”按钮控制。
     setImmediate(() => {
-      this.classicService.start();
-
       const projects = this.options.registry.list();
       // 错开每个项目 watcher 的启动时间，避免多个 chokidar 同时扫描目录阻塞事件循环
       projects.forEach((project, index) => {
