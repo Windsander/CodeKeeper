@@ -153,6 +153,15 @@ export interface IGitProvider {
   /** 列出所有开放的 MR，可选按过滤条件筛选 */
   listOpenMRs(filters?: MrReviewFilter): Promise<MergeRequest[]>;
 
+  /** 列出项目成员 */
+  listMembers(): Promise<Array<{ username: string; name?: string }>>;
+
+  /** 列出项目标签 */
+  listLabels(): Promise<string[]>;
+
+  /** 列出项目保护分支 */
+  listProtectedBranches(): Promise<string[]>;
+
   /** 获取指定 MR 的 diff 列表 */
   getMRDiff(iid: number): Promise<MrDiff[]>;
 

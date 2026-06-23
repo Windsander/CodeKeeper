@@ -58,6 +58,19 @@ function countDiffLines(diffText: string): { additions: number; deletions: numbe
 export class GitLabProvider implements IGitProvider {
   private client: GitLabClient;
 
+  // 临时占位实现，等待 Task 3 完善
+  async listMembers(): Promise<Array<{ username: string; name?: string }>> {
+    return [];
+  }
+
+  async listLabels(): Promise<string[]> {
+    return [];
+  }
+
+  async listProtectedBranches(): Promise<string[]> {
+    return [];
+  }
+
   constructor(config: GitlabConfig) {
     // 构造最小化的 ProjectConfig 对象，满足 GitLabClient 构造要求
     // id / name / localPath 为占位值，gitlab 配置使用真实值
