@@ -83,7 +83,12 @@ describe('GitLabProvider', () => {
         webUrl: 'https://git.example.com/group/project/-/merge_requests/42',
       });
 
-      expect(mockListMergeRequests).toHaveBeenCalledWith({ state: 'opened' });
+      expect(mockListMergeRequests).toHaveBeenCalledWith({
+        state: 'opened',
+        per_page: 50,
+        order_by: 'updated_at',
+        sort: 'desc',
+      });
     });
 
     it('应处理空列表', async () => {
@@ -121,6 +126,107 @@ describe('GitLabProvider', () => {
 
       expect(result[0].description).toBe('');
       expect(result[0].draft).toBe(true);
+    });
+
+    it('应用 filter 时应透传 API 参数并本地二次过滤', async () => {
+      const mockMRs: GitLabMR[] = [
+        {
+          iid: 1,
+          title: 'MR by alice',
+          description: null,
+          source_branch: 'feat/a',
+          target_branch: 'main',
+          author: { username: 'alice', name: 'Alice' },
+          draft: false,
+          changes_count: '1',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          web_url: 'https://git.example.com/1',
+          state: 'opened',
+          merge_status: 'unchecked',
+        },
+        {
+          iid: 2,
+          title: 'MR by bob',
+          description: null,
+          source_branch: 'feat/b',
+          target_branch: 'main',
+          author: { username: 'bob', name: 'Bob' },
+          draft: false,
+          changes_count: '1',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          web_url: 'https://git.example.com/2',
+          state: 'opened',
+          merge_status: 'unchecked',
+        },
+      ];
+
+      mockListMergeRequests.mockResolvedValue(mockMRs);
+
+      const provider = new GitLabProvider(gitlabConfig);
+      const result = await provider.listOpenMRs({
+        conditions: [
+          { field: 'author', values: ['alice', 'carol'] },
+          { field: 'targetBranch', values: ['main'] },
+        ],
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].iid).toBe(1);
+      expect(mockListMergeRequests).toHaveBeenCalledWith({
+        state: 'opened',
+        per_page: 50,
+        order_by: 'updated_at',
+        sort: 'desc',
+        author_username: 'alice',
+        target_branch: 'main',
+      });
+    });
+
+    it('draft filter 应在本地过滤', async () => {
+      const mockMRs: GitLabMR[] = [
+        {
+          iid: 1,
+          title: 'Draft MR',
+          description: null,
+          source_branch: 'feat/draft',
+          target_branch: 'main',
+          author: { username: 'alice', name: 'Alice' },
+          draft: true,
+          changes_count: '1',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          web_url: 'https://git.example.com/1',
+          state: 'opened',
+          merge_status: 'unchecked',
+        },
+        {
+          iid: 2,
+          title: 'Ready MR',
+          description: null,
+          source_branch: 'feat/ready',
+          target_branch: 'main',
+          author: { username: 'bob', name: 'Bob' },
+          draft: false,
+          changes_count: '1',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          web_url: 'https://git.example.com/2',
+          state: 'opened',
+          merge_status: 'unchecked',
+        },
+      ];
+
+      mockListMergeRequests.mockResolvedValue(mockMRs);
+
+      const provider = new GitLabProvider(gitlabConfig);
+      const result = await provider.listOpenMRs({
+        conditions: [{ field: 'draft', values: ['false'] }],
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].iid).toBe(2);
     });
   });
 
