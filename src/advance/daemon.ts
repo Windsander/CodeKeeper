@@ -110,12 +110,16 @@ export class Daemon {
     });
     await this.ipcServer.start();
 
-    this.classicService.start();
+    // IPC server 启动后，把文件监控、MR Agent 调度等非关键初始化推迟到下一个事件循环，
+    // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
+    setImmediate(() => {
+      this.classicService.start();
 
-    const projects = this.options.registry.list();
-    for (const project of projects) {
-      this.watchProject(project);
-    }
+      const projects = this.options.registry.list();
+      for (const project of projects) {
+        this.watchProject(project);
+      }
+    });
 
     const cron = this.options.scanCron ?? '*/5 * * * *';
     this.scanJob = schedule(cron, () => this.scanAll());

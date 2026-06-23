@@ -20,10 +20,11 @@ export function mutateIpcCache<T>(method: string, params: unknown, data: T): voi
   cache.set(cacheKey, data);
 }
 
-export function useIpc<T>(method: string, params?: unknown) {
+export function useIpc<T>(method: string, params?: unknown, options?: { pollInterval?: number }) {
   const paramsKey = JSON.stringify(params);
   const cacheKey = `${method}:${paramsKey}`;
   const cached = cache.get(cacheKey) as T | undefined;
+  const pollInterval = options?.pollInterval;
 
   const [data, setData] = useState<T | null>(cached ?? null);
   const [loading, setLoading] = useState(!cached);
@@ -57,6 +58,12 @@ export function useIpc<T>(method: string, params?: unknown) {
       refresh();
     }
   }, [refresh, cached]);
+
+  useEffect(() => {
+    if (!pollInterval || pollInterval <= 0) return;
+    const id = setInterval(() => refresh(true), pollInterval);
+    return () => clearInterval(id);
+  }, [refresh, pollInterval]);
 
   const mutate = useCallback(
     (value: T | ((prev: T | null) => T | null)) => {

@@ -714,6 +714,11 @@ select.input:focus {
   color: var(--primary);
 }
 
+.badge-secondary {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
 .tabs {
   display: flex;
   gap: 8px;

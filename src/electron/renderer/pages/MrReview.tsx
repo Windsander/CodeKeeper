@@ -38,7 +38,8 @@ function formatRelativeTime(timestamp?: number): string {
 function getStatusBadges(
   project: ProjectWithMrConfig,
   runningProjects: string[],
-  agentStatus?: MrAgentProjectStatus | null
+  agentStatus?: MrAgentProjectStatus | null,
+  serviceRunning?: boolean
 ) {
   const badges: Array<{ label: string; className: string; title?: string }> = [];
   const hasGitlab = Boolean(project.gitlab?.baseUrl && project.gitlab?.projectPath);
@@ -52,6 +53,15 @@ function getStatusBadges(
 
   if (!enabled) {
     badges.push({ label: 'MR 评审未启用', className: 'badge badge-info' });
+    return badges;
+  }
+
+  if (!serviceRunning) {
+    badges.push({
+      label: '服务未启动',
+      className: 'badge badge-secondary',
+      title: '点击上方"启动服务"后，该项目的 MR Agent 才会开始运行',
+    });
     return badges;
   }
 
@@ -103,6 +113,7 @@ function getStatusBadges(
 interface ProjectCardProps {
   project: ProjectWithMrConfig;
   runningProjects: string[];
+  serviceRunning: boolean;
   expanded: boolean;
   onToggleExpand: () => void;
   onToggleEnabled: () => void;
@@ -112,6 +123,7 @@ interface ProjectCardProps {
 function ProjectCard({
   project,
   runningProjects,
+  serviceRunning,
   expanded,
   onToggleExpand,
   onToggleEnabled,
@@ -119,10 +131,11 @@ function ProjectCard({
 }: ProjectCardProps) {
   const { data: agentStatus } = useIpc<MrAgentProjectStatus>(
     'project.mrreview.status.get',
-    { projectId: project.id }
+    { projectId: project.id },
+    { pollInterval: 2000 }
   );
 
-  const badges = getStatusBadges(project, runningProjects, agentStatus);
+  const badges = getStatusBadges(project, runningProjects, agentStatus, serviceRunning);
 
   return (
     <div className="card" style={{ marginBottom: 12 }}>
@@ -170,7 +183,7 @@ function ProjectCard({
  * 同时列出所有已注册项目，允许为每个项目配置 GitLab 与 MR 评审参数。
  */
 export function MrReview() {
-  const { data: status, refresh: refreshStatus } = useIpc<ClassicStatus>('classic.status');
+  const { data: status, refresh: refreshStatus } = useIpc<ClassicStatus>('classic.status', undefined, { pollInterval: 2000 });
   const { data: projects, refresh: refreshProjects } = useIpc<ProjectWithMrConfig[]>('project.list');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -287,6 +300,7 @@ export function MrReview() {
                 key={project.id}
                 project={project}
                 runningProjects={runningProjects}
+                serviceRunning={status?.running ?? false}
                 expanded={expandedId === project.id}
                 onToggleExpand={() => toggleConfig(project.id)}
                 onToggleEnabled={() => toggleMrReview(project)}
