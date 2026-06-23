@@ -31,6 +31,12 @@ export interface MergeRequest {
   updatedAt: string;
   /** Web 页面 URL */
   webUrl: string;
+  /** 被指派人用户名（可选，用于过滤） */
+  assignee?: string;
+  /** 评审人用户名列表（可选，用于过滤） */
+  reviewers?: string[];
+  /** 标签列表（可选，用于过滤） */
+  labels?: string[];
 }
 
 /**
@@ -136,14 +142,16 @@ export interface MrShaInfo {
   startSha: string;
 }
 
+import type { MrReviewFilter } from '../../types.js';
+
 /**
  * Git 平台抽象接口
  *
  * 所有方法返回 Promise，便于统一错误处理和重试策略。
  */
 export interface IGitProvider {
-  /** 列出所有开放的 MR */
-  listOpenMRs(): Promise<MergeRequest[]>;
+  /** 列出所有开放的 MR，可选按过滤条件筛选 */
+  listOpenMRs(filters?: MrReviewFilter): Promise<MergeRequest[]>;
 
   /** 获取指定 MR 的 diff 列表 */
   getMRDiff(iid: number): Promise<MrDiff[]>;
