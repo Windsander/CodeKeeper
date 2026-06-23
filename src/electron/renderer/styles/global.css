@@ -457,13 +457,57 @@ select.input:focus {
   border-bottom: none;
 }
 
+.config-section-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
+.config-section-header:hover .config-section-title {
+  color: var(--primary);
+}
+
 .config-section-title {
   font-size: 12px;
   font-weight: 600;
   color: var(--text-secondary);
-  margin: 0 0 16px;
+  margin: 0;
   text-transform: uppercase;
   letter-spacing: 0.6px;
+}
+
+.config-section-arrow {
+  display: inline-flex;
+  color: var(--text-secondary);
+  transition: transform 0.2s ease, color 0.15s ease;
+}
+
+.config-section-header:hover .config-section-arrow {
+  color: var(--primary);
+}
+
+.config-section.collapsed .config-section-arrow {
+  transform: rotate(-90deg);
+}
+
+.config-section-body {
+  overflow: hidden;
+  transition: max-height 0.25s ease, opacity 0.2s ease, margin-top 0.2s ease;
+  max-height: 2000px;
+  opacity: 1;
+  margin-top: 16px;
+}
+
+.config-section.collapsed .config-section-body {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
 }
 
 .toggle {
