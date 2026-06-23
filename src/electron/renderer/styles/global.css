@@ -449,6 +449,60 @@ select.input:focus {
   flex-shrink: 0;
 }
 
+.autocomplete {
+  position: relative;
+  width: 100%;
+}
+
+.autocomplete-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.autocomplete-item {
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.autocomplete-item.highlighted,
+.autocomplete-item:hover {
+  background: var(--main-bg);
+}
+
+.autocomplete-item.disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.autocomplete-hint {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: #fff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  z-index: 100;
+}
+
 .form-checkbox {
   display: flex;
   align-items: center;
