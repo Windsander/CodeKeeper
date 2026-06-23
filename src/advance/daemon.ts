@@ -13,6 +13,7 @@ import { logger } from '../core/logger';
 import { LlmClient } from './llm/client';
 import { ClassicService } from './classic/classic-service';
 import { ScanService } from './scan/scan-service.js';
+import { GitLabProvider } from './classic/provider/gitlab-provider.js';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -78,6 +79,12 @@ export class Daemon {
       registry: options.registry,
       classicService: this.classicService,
       scanService: this.scanService,
+      getProvider: (project) => {
+        if (project.gitlab) {
+          return new GitLabProvider(project.gitlab);
+        }
+        return null;
+      },
       getClient: () =>
         this.options.apiKey
           ? new LlmClient({
