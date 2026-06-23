@@ -29,6 +29,7 @@ export async function scanExistingFiles(
   ]);
 
   const matched: string[] = [];
+  let scannedCount = 0;
 
   async function walk(dir: string): Promise<void> {
     let entries: string[];
@@ -63,6 +64,12 @@ export async function scanExistingFiles(
         if (!tracked.has(fullPath)) {
           matched.push(fullPath);
         }
+      }
+
+      // 每扫描 50 个文件项让出一次事件循环，降低大目录扫描对 IPC 的占用
+      scannedCount += 1;
+      if (scannedCount % 50 === 0) {
+        await yieldEventLoop();
       }
     }
   }

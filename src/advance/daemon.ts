@@ -264,6 +264,9 @@ export class Daemon {
 
     // 1. 先对每个项目做全量扫描，补全漏掉的新文件
     for (const project of projects) {
+      // 每个项目扫描前让出事件循环，避免连续扫描阻塞 IPC
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
       const config = loadProjectConfig(project.rootPath, project.archiveRoot);
       const addedCount = await scanExistingFiles(this.options.store, project, config);
       logger.info({ projectId: project.id, addedCount }, '定时全量扫描完成');
@@ -285,6 +288,9 @@ export class Daemon {
 
     // 2. 处理所有 pending 事件（包括实时监控和全量扫描产生的）
     for (const project of projects) {
+      // 每个项目 LLM 处理前也让出事件循环
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
       this.options.store.updateLastScannedAt(project.id, Date.now());
       try {
         await pipeline.run(project);
