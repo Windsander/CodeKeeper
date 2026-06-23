@@ -44,7 +44,14 @@ export class GitLabClient {
 
     logger.debug(`GitLab API ${method} ${endpoint}`);
 
-    const response = await fetch(url, fetchOptions);
+    let response: Response;
+    try {
+      response = await fetch(url, fetchOptions);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ url, err: message }, `GitLab API fetch failed: ${method} ${endpoint}`);
+      throw new Error(`GitLab API fetch failed: ${message}`);
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

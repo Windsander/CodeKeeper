@@ -359,7 +359,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!project || !ctx.getProvider) return { members: [] };
     const provider = ctx.getProvider(project);
     if (!provider) return { members: [] };
-    return { members: await provider.listMembers() };
+    try {
+      return { members: await provider.listMembers() };
+    } catch (err) {
+      logger.warn({ err, projectId: project.id }, '获取项目成员失败');
+      return { members: [] };
+    }
   },
 
   'project.labels': async (ctx, params) => {
@@ -367,7 +372,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!project || !ctx.getProvider) return { labels: [] };
     const provider = ctx.getProvider(project);
     if (!provider) return { labels: [] };
-    return { labels: await provider.listLabels() };
+    try {
+      return { labels: await provider.listLabels() };
+    } catch (err) {
+      logger.warn({ err, projectId: project.id }, '获取项目标签失败');
+      return { labels: [] };
+    }
   },
 
   'project.protected-branches': async (ctx, params) => {
@@ -375,7 +385,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!project || !ctx.getProvider) return { branches: [] };
     const provider = ctx.getProvider(project);
     if (!provider) return { branches: [] };
-    return { branches: await provider.listProtectedBranches() };
+    try {
+      return { branches: await provider.listProtectedBranches() };
+    } catch (err) {
+      logger.warn({ err, projectId: project.id }, '获取保护分支失败');
+      return { branches: [] };
+    }
   },
 
   'project.mrreview.config.update': async (ctx, params) => {
