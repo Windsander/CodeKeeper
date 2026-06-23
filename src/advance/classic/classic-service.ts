@@ -2,7 +2,8 @@
  * Classic Service
  *
  * 负责管理 MR 自动评审 Agent 子进程的生命周期。
- * 每个启用 MR 评审的项目对应一个独立的子进程，实现项目级隔离。
+ * 采用调度器模式：启动服务后，按固定周期 reconcile 一次，
+ * 根据各项目的启用状态自动 spawn/kill 对应的子进程。
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -12,6 +13,9 @@ import { buildMrAgentEnv } from './classic-config-builder.js';
 import type { MetadataStore } from '../store/metadata-store.js';
 import type { ProjectRegistry } from '../project-registry.js';
 import type { Project } from '../types.js';
+
+/** 调度周期：每 1 秒 reconcile 一次，保证 checkbox 启停接近实时响应 */
+const RECONCILE_INTERVAL_MS = 1000;
 
 export interface ClassicServiceOptions {
   /** 元数据存储 */
@@ -33,44 +37,48 @@ export interface ClassicServiceOptions {
 export class ClassicService {
   /** projectId → ChildProcess */
   private children = new Map<string, ChildProcess>();
+  /** 调度服务是否正在运行 */
+  private running = false;
+  /** 周期性 reconcile 定时器 */
+  private intervalId?: NodeJS.Timeout;
 
   constructor(private options: ClassicServiceOptions) {}
 
   /**
-   * 启动所有启用 MR 评审项目的 Agent 子进程
+   * 启动 MR Agent 调度服务
    *
-   * 遍历项目注册表，为每个启用 MR 评审且配置了 GitLab 的项目单独 spawn
-   * 一个子进程。每个子进程只携带该项目的配置，实现项目级隔离。
+   * 启动后会立即执行一次 reconcile，并按固定周期持续 reconcile。
    */
   start(): void {
-    const projects = this.options.registry.list();
-    const daemonConfig = this.options.getDaemonConfig();
-
-    for (const project of projects) {
-      if (!project.mrReview?.enabled || !project.gitlab) {
-        continue;
-      }
-
-      // 若该项目 Agent 已在运行，跳过
-      if (this.isProjectRunning(project.id)) {
-        logger.info(`[ClassicService] 项目 ${project.name} 的 MR Agent 已在运行，跳过`);
-        continue;
-      }
-
-      this.spawnProjectAgent(project, daemonConfig);
-    }
-  }
-
-  /**
-   * 停止所有 MR Agent 子进程
-   */
-  stop(): void {
-    if (this.children.size === 0) {
-      logger.info('[ClassicService] 没有运行中的 MR Agent，跳过停止');
+    if (this.running) {
+      logger.info('[ClassicService] MR Agent 调度服务已在运行，跳过启动');
       return;
     }
 
-    logger.info(`[ClassicService] 停止 ${this.children.size} 个 MR Agent 子进程`);
+    this.running = true;
+    logger.info('[ClassicService] 启动 MR Agent 调度服务');
+    this.reconcile();
+    this.intervalId = setInterval(() => this.reconcile(), RECONCILE_INTERVAL_MS);
+  }
+
+  /**
+   * 停止 MR Agent 调度服务
+   *
+   * 停止周期 reconcile，并杀掉所有正在运行的子进程。
+   */
+  stop(): void {
+    if (!this.running) {
+      logger.info('[ClassicService] MR Agent 调度服务未运行，跳过停止');
+      return;
+    }
+
+    this.running = false;
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = undefined;
+    }
+
+    logger.info('[ClassicService] 停止 MR Agent 调度服务');
     for (const [projectId, child] of this.children) {
       child.kill('SIGTERM');
       logger.info(`[ClassicService] 已发送 SIGTERM 到项目 ${projectId} 的 MR Agent`);
@@ -79,70 +87,61 @@ export class ClassicService {
   }
 
   /**
-   * 重启所有 MR Agent 子进程
+   * 重启 MR Agent 调度服务
    */
   restart(): void {
-    logger.info('[ClassicService] 重启所有 MR Agent 子进程');
+    logger.info('[ClassicService] 重启 MR Agent 调度服务');
     this.stop();
     this.start();
   }
 
   /**
-   * 启动指定项目的 MR Agent 子进程
+   * 根据当前项目启用状态对账子进程
    *
-   * 仅在该项目启用 MR 评审、配置了 GitLab、且当前未运行时才会 spawn。
-   * 调用方应自行判断全局服务是否运行。
+   * - 对启用 MR 评审且配置了 GitLab 的项目：若未运行则 spawn
+   * - 对已不在启用列表中的项目：若正在运行则 kill
    */
-  startProject(projectId: string): void {
-    if (this.isProjectRunning(projectId)) {
-      logger.info(`[ClassicService] 项目 ${projectId} 的 MR Agent 已在运行，跳过`);
+  reconcile(): void {
+    if (!this.running) {
       return;
     }
 
-    const project = this.options.registry.list().find((p) => p.id === projectId);
-    if (!project) {
-      logger.warn(`[ClassicService] 启动项目 ${projectId} 失败：项目不存在`);
-      return;
-    }
-
-    if (!project.mrReview?.enabled || !project.gitlab) {
-      logger.info(`[ClassicService] 项目 ${project.name} 未启用 MR 评审或未配置 GitLab，跳过启动`);
-      return;
-    }
-
+    const projects = this.options.registry.list();
     const daemonConfig = this.options.getDaemonConfig();
-    this.spawnProjectAgent(project, daemonConfig);
-  }
+    const enabledProjectIds = new Set<string>();
 
-  /**
-   * 停止指定项目的 MR Agent 子进程
-   */
-  stopProject(projectId: string): void {
-    const child = this.children.get(projectId);
-    if (!child || child.killed) {
-      logger.info(`[ClassicService] 项目 ${projectId} 的 MR Agent 未运行，跳过停止`);
-      return;
+    for (const project of projects) {
+      if (!project.mrReview?.enabled || !project.gitlab) {
+        continue;
+      }
+      enabledProjectIds.add(project.id);
+
+      if (this.isProjectRunning(project.id)) {
+        continue;
+      }
+
+      this.spawnProjectAgent(project, daemonConfig);
     }
 
-    child.kill('SIGTERM');
-    this.children.delete(projectId);
-    logger.info(`[ClassicService] 已停止项目 ${projectId} 的 MR Agent`);
+    for (const [projectId, child] of this.children) {
+      if (!enabledProjectIds.has(projectId)) {
+        child.kill('SIGTERM');
+        this.children.delete(projectId);
+        logger.info(`[ClassicService] 项目 ${projectId} 已禁用，停止其 MR Agent`);
+      }
+    }
   }
 
   /**
    * 重启指定项目的 MR Agent 子进程
    *
    * 用于项目配置（Token、schedule、角色等）变更后热重启该项目的 Agent。
-   * 会先停止再启动；若项目未启用或未配置 GitLab，则只停止不启动。
+   * 仅当调度服务正在运行时生效。
    */
   restartProject(projectId: string): void {
-    const project = this.options.registry.list().find((p) => p.id === projectId);
-    if (!project) {
-      logger.warn(`[ClassicService] 重启项目 ${projectId} 失败：项目不存在`);
+    if (!this.running) {
       return;
     }
-
-    logger.info(`[ClassicService] 重启项目 ${project.name} 的 MR Agent`);
 
     const child = this.children.get(projectId);
     if (child && !child.killed) {
@@ -150,17 +149,14 @@ export class ClassicService {
     }
     this.children.delete(projectId);
 
-    if (project.mrReview?.enabled && project.gitlab) {
-      const daemonConfig = this.options.getDaemonConfig();
-      this.spawnProjectAgent(project, daemonConfig);
-    }
+    this.reconcile();
   }
 
   /**
-   * 查询是否至少有一个 MR Agent 子进程正在运行
+   * 查询调度服务是否正在运行
    */
   isRunning(): boolean {
-    return this.getRunningProjectIds().length > 0;
+    return this.running;
   }
 
   /**

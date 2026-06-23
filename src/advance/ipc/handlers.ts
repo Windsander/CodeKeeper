@@ -337,8 +337,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       oldGitlab?.baseUrl !== updated.baseUrl ||
       oldGitlab?.projectPath !== updated.projectPath ||
       oldGitlab?.token !== updated.token;
-    // 仅在全局服务运行且该项目 Agent 正在运行时热重启
-    if (changed && ctx.classicService?.isProjectRunning(params.projectId)) {
+    // GitLab 配置变更且调度服务正在运行时，立即对账以应用变化
+    if (changed && ctx.classicService?.isRunning()) {
       ctx.classicService?.restartProject(params.projectId);
     }
 
@@ -379,19 +379,14 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
     const oldEnabled = oldMrReview?.enabled ?? false;
     const newEnabled = updated.enabled;
-    const serviceRunning = ctx.classicService?.isRunning() ?? false;
 
     if (oldEnabled !== newEnabled) {
-      // 启用状态变化时，仅在全局服务运行中才单独启动/停止该项目 Agent
-      if (serviceRunning) {
-        if (newEnabled) {
-          ctx.classicService?.startProject(params.projectId);
-        } else {
-          ctx.classicService?.stopProject(params.projectId);
-        }
+      // 启用状态变化后，若调度服务运行中则立即对账
+      if (ctx.classicService?.isRunning()) {
+        ctx.classicService?.reconcile();
       }
-    } else if (ctx.classicService?.isProjectRunning(params.projectId)) {
-      // 其他字段变化且该项目 Agent 正在运行时热重启
+    } else if (ctx.classicService?.isRunning()) {
+      // 其他字段变化且调度服务运行中，热重启该项目 Agent
       const otherChanged =
         !oldMrReview ||
         oldMrReview.agentRole !== updated.agentRole ||
