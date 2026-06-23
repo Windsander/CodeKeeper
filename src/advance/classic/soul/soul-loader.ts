@@ -24,12 +24,13 @@ function getSoulPath(project: Project): string {
 /**
  * 加载项目 MR Agent 的 SOUL.md 配置
  *
- * 从 CodeKeeper App 存储空间读取，不存在时返回 null。
+ * 从 CodeKeeper App 存储空间读取；文件不存在或读取失败时，仍返回默认保存路径，
+ * 以便 UI 在一打开配置面板时就能显示保存位置提示。
  */
-export function loadSoulContent(project: Project): SoulContent | null {
+export function loadSoulContent(project: Project): SoulContent {
   const path = getSoulPath(project);
   if (!existsSync(path)) {
-    return null;
+    return { content: '', sourcePath: path };
   }
   try {
     return {
@@ -37,7 +38,7 @@ export function loadSoulContent(project: Project): SoulContent | null {
       sourcePath: path,
     };
   } catch {
-    return null;
+    return { content: '', sourcePath: path };
   }
 }
 

@@ -335,8 +335,8 @@ export async function reviewProject(
   const reviewer = new ClassicReviewer({
     client: llmClient,
     tokenBudget: 4000,
-    rules: soul?.content ?? '默认评审规则：检查代码质量、安全性、性能问题',
-    soulContent: soul?.content,
+    rules: soul.content || '默认评审规则：检查代码质量、安全性、性能问题',
+    soulContent: soul.content || undefined,
     projectContext,
   });
 

@@ -50,14 +50,14 @@ describe('soul-loader', () => {
     expect(readFileSync(sourcePath, 'utf-8')).toBe(content);
 
     const loaded = loadSoulContent(project);
-    expect(loaded).not.toBeNull();
-    expect(loaded?.content).toBe(content);
-    expect(loaded?.sourcePath).toBe(sourcePath);
+    expect(loaded.content).toBe(content);
+    expect(loaded.sourcePath).toBe(sourcePath);
   });
 
-  it('SOUL.md 不存在时返回 null', () => {
+  it('SOUL.md 不存在时返回默认路径和空内容', () => {
     const result = loadSoulContent(project);
-    expect(result).toBeNull();
+    expect(result.content).toBe('');
+    expect(result.sourcePath).toBe(join(soulsDir, 'MR-Agent-SOUL.md'));
   });
 
   it('文件名非法字符会被替换为下划线', () => {

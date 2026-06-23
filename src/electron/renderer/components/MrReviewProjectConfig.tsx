@@ -147,6 +147,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
 
   const [gitlabUrl, setGitlabUrl] = useState(buildGitlabUrl(gitlab));
   const [token, setToken] = useState(gitlab.token);
+  const [showToken, setShowToken] = useState(false);
   const [agentRole, setAgentRole] = useState(mrReview.agentRole);
   const [reviewSchedule, setReviewSchedule] = useState(mrReview.reviewSchedule);
   const [customSchedule, setCustomSchedule] = useState(mrReview.reviewSchedule);
@@ -303,13 +304,34 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
 
         <div className="form-group">
           <label>Access Token</label>
-          <input
-            type="password"
-            className="input"
-            value={token}
-            placeholder="请输入 GitLab Access Token"
-            onChange={(e) => setToken(e.target.value)}
-          />
+          <div className="input-group">
+            <input
+              type={showToken ? 'text' : 'password'}
+              className="input"
+              value={token}
+              placeholder="请输入 GitLab Access Token"
+              onChange={(e) => setToken(e.target.value)}
+            />
+            <button
+              type="button"
+              className="input-group-btn"
+              onClick={() => setShowToken((prev) => !prev)}
+              aria-label={showToken ? '隐藏 Access Token' : '显示 Access Token'}
+              title={showToken ? '隐藏' : '显示'}
+            >
+              {showToken ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              )}
+            </button>
+          </div>
           <div className="project-meta" style={{ marginTop: 6 }}>
             需要 api、read_repository、write_repository 权限以读取 MR 并发表评论
           </div>
@@ -395,11 +417,9 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             placeholder="# MR Agent 个性配置&#10;## 评审风格&#10;..."
             onChange={(e) => setSoulContent(e.target.value)}
           />
-          {soulSourcePath && (
-            <div className="project-meta" style={{ marginTop: 6 }}>
-              保存位置: {soulSourcePath}
-            </div>
-          )}
+          <div className="project-meta" style={{ marginTop: 6 }}>
+            保存位置: {soulSourcePath}
+          </div>
         </div>
       </CollapsibleSection>
 

@@ -406,8 +406,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.soul.get': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    const soul = loadSoulContent(project);
-    return { soul: soul ?? { content: '', sourcePath: '' } };
+    return { soul: loadSoulContent(project) };
   },
 
   'project.soul.update': async (ctx, params) => {
