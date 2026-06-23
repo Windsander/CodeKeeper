@@ -106,6 +106,21 @@ const AGENT_ROLE_OPTIONS = [
   { value: 'reviewer+auto-fixer', label: 'Reviewer + Auto-Fixer（评论 + 自动修复）' },
 ];
 
+const FILTER_FIELD_OPTIONS: { value: MrReviewFilterField; label: string }[] = [
+  { value: 'author', label: 'Author' },
+  { value: 'assignee', label: 'Assignee' },
+  { value: 'reviewer', label: 'Reviewer' },
+  { value: 'label', label: 'Label' },
+  { value: 'sourceBranch', label: 'Source Branch' },
+  { value: 'targetBranch', label: 'Target Branch' },
+  { value: 'draft', label: 'Draft' },
+];
+
+const DRAFT_OPTIONS = [
+  { value: 'true', label: '是' },
+  { value: 'false', label: '否' },
+];
+
 function getAgentRoleTip(role: MrReviewConfig['agentRole']): string {
   switch (role) {
     case 'reviewer':
@@ -172,6 +187,10 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
   const [customSchedule, setCustomSchedule] = useState(mrReview.reviewSchedule);
   const [learningEnabled, setLearningEnabled] = useState(mrReview.learningEnabled);
   const [maxAutoMergeRisk, setMaxAutoMergeRisk] = useState(mrReview.maxAutoMergeRisk);
+
+  const [filterConditions, setFilterConditions] = useState<MrReviewFilterCondition[]>(
+    mrReview.filter?.conditions ?? []
+  );
 
   const [soulContent, setSoulContent] = useState('');
   const [soulSourcePath, setSoulSourcePath] = useState('');
@@ -245,6 +264,38 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
     setSoulContent(DEFAULT_SOUL_MD_TEMPLATE);
   };
 
+  const addFilterCondition = () => {
+    setFilterConditions((prev) => [...prev, { field: 'author', values: [''] }]);
+  };
+
+  const removeFilterCondition = (index: number) => {
+    setFilterConditions((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const updateFilterField = (index: number, field: MrReviewFilterField) => {
+    setFilterConditions((prev) => {
+      const next = [...prev];
+      next[index] = { field, values: field === 'draft' ? ['false'] : [''] };
+      return next;
+    });
+  };
+
+  const updateFilterValues = (index: number, raw: string) => {
+    setFilterConditions((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], values: raw.split(',').map((v) => v.trim()).filter(Boolean) };
+      return next;
+    });
+  };
+
+  const updateDraftValue = (index: number, value: string) => {
+    setFilterConditions((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], values: [value] };
+      return next;
+    });
+  };
+
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -274,6 +325,7 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
           maxAutoMergeRisk,
           autoFixEnabled: isAutoFixer,
           resolveOthersDiscussions: isAutoFixer,
+          filter: { conditions: filterConditions },
         },
       });
       await invoke('project.soul.update', {
@@ -355,6 +407,55 @@ export function MrReviewProjectConfig({ project, onSaved }: MrReviewProjectConfi
             需要 api、read_repository、write_repository 权限以读取 MR 并发表评论
           </div>
         </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="过滤条件">
+        {filterConditions.length === 0 && (
+          <div className="project-meta" style={{ marginBottom: 12 }}>
+            未设置过滤条件，将处理所有开放 MR
+          </div>
+        )}
+        {filterConditions.map((condition, index) => (
+          <div
+            key={index}
+            className="form-row"
+            style={{ marginBottom: 8, alignItems: 'center' }}
+          >
+            <Dropdown
+              value={condition.field}
+              options={FILTER_FIELD_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+              onChange={(value) => updateFilterField(index, value as MrReviewFilterField)}
+            />
+            {condition.field === 'draft' ? (
+              <Dropdown
+                value={condition.values[0] ?? 'false'}
+                options={DRAFT_OPTIONS}
+                onChange={(value) => updateDraftValue(index, value)}
+              />
+            ) : (
+              <input
+                className="input"
+                placeholder="多个值用英文逗号分隔"
+                value={condition.values.join(', ')}
+                onChange={(e) => updateFilterValues(index, e.target.value)}
+              />
+            )}
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={() => removeFilterCondition(index)}
+            >
+              删除
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={addFilterCondition}
+        >
+          + 添加条件
+        </button>
       </CollapsibleSection>
 
       <CollapsibleSection title="Agent 角色与策略">
