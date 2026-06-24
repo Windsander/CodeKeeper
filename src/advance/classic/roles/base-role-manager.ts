@@ -23,7 +23,7 @@ export abstract class BaseRoleManager implements IRoleManager {
     this.store.updateProjectRoleConfig(projectId, this.role, config);
   }
 
-  async getStatus(projectId: string): Promise<RoleProjectStatus> {
+  async getStatus(_projectId: string): Promise<RoleProjectStatus> {
     // 后续与 RoleService 联动，当前返回占位
     return { running: false, lastRunAt: null };
   }

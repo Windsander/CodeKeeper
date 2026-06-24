@@ -448,14 +448,14 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.soul.get': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    return { soul: loadSoulContent(project) };
+    return { soul: loadSoulContent(project, 'reviewer') };
   },
 
   'project.soul.update': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
     const content = params.content ?? '';
-    const sourcePath = saveSoulContent(project, content);
-    return { success: true, sourcePath };
+    await saveSoulContent(project, 'reviewer', content);
+    return { success: true };
   },
 };

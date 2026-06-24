@@ -329,7 +329,7 @@ export async function reviewProject(
 
   const provider = new GitLabProvider(gitlabConfig);
 
-  const soul = loadSoulContent(project);
+  const soul = loadSoulContent(project, 'reviewer');
   const projectContext = loadProjectContext(getArchiveRoot(project));
 
   const reviewer = new ClassicReviewer({

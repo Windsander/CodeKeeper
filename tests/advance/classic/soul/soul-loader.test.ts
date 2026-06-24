@@ -2,7 +2,7 @@
  * soul-loader 单元测试
  *
  * SOUL.md 现在存放在 CodeKeeper App 存储空间：
- * ~/.codekeeper/memory/souls/{projectName}/MR-Agent-SOUL.md
+ * ~/.codekeeper/memory/souls/{projectName}/{role}-SOUL.md
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
