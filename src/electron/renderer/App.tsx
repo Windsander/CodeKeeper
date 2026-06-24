@@ -8,6 +8,9 @@ import { Settings } from './pages/Settings';
 import { MrReview } from './pages/MrReview';
 import { Maintainer } from './pages/Maintainer';
 import { getAllRoleUIs } from './roles/role-registry.js';
+// 触发角色 UI 注册（side-effect）
+import './roles/reviewer-role.js';
+import './roles/maintainer-role.js';
 
 export function App() {
   return (
