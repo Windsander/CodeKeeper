@@ -6,6 +6,8 @@ import { ActionHistory } from './pages/ActionHistory';
 import { Logs } from './pages/Logs';
 import { Settings } from './pages/Settings';
 import { MrReview } from './pages/MrReview';
+import { Maintainer } from './pages/Maintainer';
+import { getAllRoleUIs } from './roles/role-registry.js';
 
 export function App() {
   return (
@@ -18,9 +20,15 @@ export function App() {
             <NavLink to="/" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
               仪表盘
             </NavLink>
-            <NavLink to="/mr-review" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
-              MR 评审
-            </NavLink>
+            {getAllRoleUIs().map((ui) => (
+              <NavLink
+                key={ui.role}
+                to={ui.routePath}
+                className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
+              >
+                {ui.navLabel}
+              </NavLink>
+            ))}
             <NavLink to="/history" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
               动作历史
             </NavLink>
@@ -38,7 +46,8 @@ export function App() {
               <Route path="/history" element={<ActionHistory />} />
               <Route path="/logs" element={<Logs />} />
               <Route path="/settings" element={<Settings />} />
-              <Route path="/mr-review" element={<MrReview />} />
+              <Route path="/reviewer" element={<MrReview />} />
+              <Route path="/maintainer" element={<Maintainer />} />
             </Routes>
           </main>
         </div>
