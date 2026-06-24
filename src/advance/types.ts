@@ -61,6 +61,14 @@ export type RoleConfigOf<R extends Role> = R extends 'reviewer'
     ? MaintainerConfig
     : never;
 
+/**
+ * 角色项目运行状态
+ */
+export interface RoleProjectStatus {
+  running: boolean;
+  lastRunAt: number | null;
+}
+
 // ---------- 兼容类型（后续任务将逐步迁移）----------
 
 /**
