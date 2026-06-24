@@ -47,7 +47,6 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
-    "@rollup/rollup-linux-x64-gnu": "^4.60.4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "@types/better-sqlite3": "^7.6.12",
