@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import type { Project, WatchedEvent, KnowledgeEntry, ArchiveAction, GitlabConfig, Role, RoleConfig } from '../types';
+import type { Project, WatchedEvent, KnowledgeEntry, ArchiveAction, GitlabConfig, Role, RoleConfig, RoleFilter, ReviewerConfig } from '../types';
 
 /**
  * SQLite 元数据存储封装
@@ -784,15 +784,21 @@ export class MetadataStore {
   }
 
   /** @deprecated 请使用 updateProjectRoleConfig */
-  updateMrReviewConfig(projectId: string, config: { enabled: boolean; autoMergeMode: 'full' | 'audit'; reviewSchedule: string; learningEnabled: boolean; maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH'; autoFixEnabled?: boolean; resolveOthersDiscussions?: boolean; filter?: unknown }): void {
-    this.db
-      .prepare('UPDATE projects SET mr_review_config = ? WHERE id = ?')
-      .run(JSON.stringify(config), projectId);
+  updateMrReviewConfig(projectId: string, mrReview: { enabled: boolean; autoMergeMode: 'full' | 'audit'; reviewSchedule: string; learningEnabled: boolean; maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH'; autoFixEnabled?: boolean; resolveOthersDiscussions?: boolean; filter?: unknown }): void {
+    // 兼容旧调用方：将 mrReview 配置映射为 reviewer 角色配置
+    const reviewerConfig: ReviewerConfig = {
+      role: 'reviewer',
+      enabled: mrReview.enabled ?? false,
+      reviewSchedule: mrReview.reviewSchedule ?? '*/10 * * * *',
+      learningEnabled: mrReview.learningEnabled ?? true,
+      filter: mrReview.filter as RoleFilter | undefined,
+    };
+    this.updateProjectRoleConfig(projectId, 'reviewer', reviewerConfig);
   }
 
   /** @deprecated 请使用 getRoleEnabledProjects */
   getMrEnabledProjects(): Project[] {
-    return this.listProjects().filter((p) => p.gitlab !== undefined && p.mrReview?.enabled === true);
+    return this.getRoleEnabledProjects('reviewer');
   }
 
   insertOrUpdateMrState(state: {
