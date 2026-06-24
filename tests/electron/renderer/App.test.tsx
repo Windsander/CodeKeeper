@@ -25,9 +25,9 @@ beforeEach(() => {
 });
 
 describe('App 导航', () => {
-  it('渲染 MR评审 和 自动维护 导航链接', () => {
+  it('渲染 自动评审 和 自动维护 导航链接', () => {
     render(<App />);
-    expect(screen.getByText('MR评审')).toBeTruthy();
+    expect(screen.getByText('自动评审')).toBeTruthy();
     expect(screen.getByText('自动维护')).toBeTruthy();
   });
 });

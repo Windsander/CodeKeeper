@@ -107,11 +107,11 @@ function setupMocks() {
 }
 
 describe('RolePage', () => {
-  it('reviewer 页面显示 MR评审 标题', async () => {
+  it('reviewer 页面显示 自动评审 标题', async () => {
     setupMocks();
     await renderAndStabilize(<RolePage role="reviewer" />);
     await waitFor(() => {
-      expect(screen.getByText('MR评审')).toBeTruthy();
+      expect(screen.getByText('自动评审')).toBeTruthy();
     });
   });
 

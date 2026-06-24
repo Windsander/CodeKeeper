@@ -15,8 +15,8 @@ const DEFAULT_REVIEWER_SOUL = `## MR Reviewer Soul
 
 registerRoleUI<ReviewerConfig>({
   role: 'reviewer',
-  displayName: 'MR评审',
-  navLabel: 'MR评审',
+  displayName: '自动评审',
+  navLabel: '自动评审',
   routePath: '/reviewer',
   icon: ReviewerIcon,
   soulFileName: 'MR-REVIEWER-SOUL.md',

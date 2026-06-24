@@ -7,7 +7,7 @@ describe('Role UI Registry', () => {
   it('可获取 reviewer UI 配置', () => {
     const ui = getRoleUI('reviewer');
     expect(ui.role).toBe('reviewer');
-    expect(ui.displayName).toBe('MR评审');
+    expect(ui.displayName).toBe('自动评审');
   });
 
   it('可获取 maintainer UI 配置', () => {
