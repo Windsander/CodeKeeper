@@ -1,6 +1,7 @@
 import type { Role } from '../../types.js';
 import { ReviewerRunner } from './reviewer-runner.js';
 import { MaintainerRunner } from './maintainer-runner.js';
+import { LlmClient } from '../../llm/client.js';
 
 /**
  * 项目配置（兼容类型，用于 Runner 接口）
@@ -33,15 +34,16 @@ export interface IRoleRunner {
 /**
  * 根据角色创建对应的 Runner 实例
  * @param role - 角色标识
+ * @param llmClient - LLM 客户端实例
  * @returns 对应角色的 Runner 实例
  * @throws 当传入未支持的角色时抛出错误
  */
-export function createRoleRunner(role: Role): IRoleRunner {
+export function createRoleRunner(role: Role, llmClient: LlmClient): IRoleRunner {
   switch (role) {
     case 'reviewer':
-      return new ReviewerRunner();
+      return new ReviewerRunner({ llmClient });
     case 'maintainer':
-      return new MaintainerRunner();
+      return new MaintainerRunner({ llmClient });
     default:
       throw new Error(`未支持的角色: ${role}`);
   }

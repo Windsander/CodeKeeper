@@ -5,7 +5,7 @@ import {
 } from '../../../src/advance/classic/classic-config-builder';
 import {
   loadConfigFromEnv,
-} from '../../../src/advance/classic/mr-agent-entry';
+} from '../../../src/advance/classic/agent-entries/role-entry';
 import type { Project } from '../../../src/advance/types';
 
 /**
