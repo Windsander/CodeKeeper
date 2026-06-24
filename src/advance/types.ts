@@ -97,16 +97,6 @@ export interface MrReviewConfig {
 }
 
 /**
- * @deprecated 使用 advance/types.ts 中的 GitlabConfig 替代
- */
-export interface MrReviewGitlabConfig {
-  baseUrl: string;
-  projectPath: string;
-  token: string;
-  defaultBranch?: string;
-}
-
-/**
  * 已注册项目的运行时元数据（区别于 ProjectConfig 项目配置）
  */
 export interface Project {
