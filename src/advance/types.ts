@@ -1,6 +1,102 @@
 import { join } from 'node:path';
 
 /**
+ * 角色标识
+ */
+export type Role = 'reviewer' | 'maintainer';
+
+/**
+ * 所有注册角色列表
+ */
+export const ROLES: Role[] = ['reviewer', 'maintainer'];
+
+/**
+ * 角色过滤条件
+ */
+export interface RoleFilter {
+  conditions: Array<{
+    field: 'author' | 'assignee' | 'reviewer' | 'label' | 'sourceBranch' | 'targetBranch' | 'draft';
+    values: string[];
+  }>;
+}
+
+/**
+ * 所有角色共享的基础配置
+ */
+export interface BaseRoleConfig {
+  enabled: boolean;
+  reviewSchedule: string;
+  learningEnabled: boolean;
+  filter?: RoleFilter;
+}
+
+/**
+ * Reviewer 专属配置
+ */
+export interface ReviewerConfig extends BaseRoleConfig {
+  role: 'reviewer';
+}
+
+/**
+ * Maintainer 专属配置
+ */
+export interface MaintainerConfig extends BaseRoleConfig {
+  role: 'maintainer';
+  maintainerName: string;
+  autoFixEnabled: boolean;
+  resolveOthersDiscussions: boolean;
+}
+
+/**
+ * 角色配置联合类型
+ */
+export type RoleConfig = ReviewerConfig | MaintainerConfig;
+
+/**
+ * 角色配置的类型映射，用于按角色窄化
+ */
+export type RoleConfigOf<R extends Role> = R extends 'reviewer'
+  ? ReviewerConfig
+  : R extends 'maintainer'
+    ? MaintainerConfig
+    : never;
+
+// ---------- 兼容类型（后续任务将逐步迁移）----------
+
+/**
+ * @deprecated 使用 RoleFilter 替代
+ */
+export type MrReviewFilter = RoleFilter;
+
+/**
+ * @deprecated 使用 RoleFilter 中的 field 类型替代
+ */
+export type MrReviewFilterField = RoleFilter['conditions'][number]['field'];
+
+/**
+ * @deprecated 使用 RoleFilter 中的 condition 类型替代
+ */
+export interface MrReviewFilterCondition {
+  field: MrReviewFilterField;
+  values: string[];
+}
+
+/**
+ * @deprecated 使用 ReviewerConfig 或 RoleConfig 替代
+ */
+export interface MrReviewConfig {
+  enabled: boolean;
+  agentRole: 'reviewer' | 'auto-fixer' | 'reviewer+auto-fixer';
+  autoMergeMode: 'full' | 'audit';
+  reviewSchedule: string;
+  learningEnabled: boolean;
+  maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+  autoFixEnabled?: boolean;
+  resolveOthersDiscussions?: boolean;
+  filter?: MrReviewFilter;
+}
+
+/**
  * 已注册项目的运行时元数据（区别于 ProjectConfig 项目配置）
  */
 export interface Project {
@@ -18,7 +114,9 @@ export interface Project {
   archiveRoot?: string;
   /** GitLab 配置（可选） */
   gitlab?: GitlabConfig;
-  /** MR 评审配置（可选） */
+  /** 角色配置（新） */
+  roles?: Record<Role, RoleConfig>;
+  /** MR 评审配置（旧，后续迁移到 roles） */
   mrReview?: MrReviewConfig;
 }
 
@@ -39,54 +137,6 @@ export interface GitlabConfig {
   token: string;
   /** 默认分支名 */
   defaultBranch?: string;
-}
-
-/**
- * MR 自动评审配置
- */
-export interface MrReviewConfig {
-  /** 是否启用 MR 自动评审 */
-  enabled: boolean;
-  /** Agent 角色：reviewer / auto-fixer / reviewer+auto-fixer */
-  agentRole: 'reviewer' | 'auto-fixer' | 'reviewer+auto-fixer';
-  /** 自动合并模式：full 全自动 / audit 仅审计 */
-  autoMergeMode: 'full' | 'audit';
-  /** 评审调度 Cron 表达式 */
-  reviewSchedule: string;
-  /** 是否启用学习模式 */
-  learningEnabled: boolean;
-  /** 允许自动合并的最大风险等级 */
-  maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH';
-  /** 是否启用自动修复（角色含 auto-fixer 时生效） */
-  autoFixEnabled?: boolean;
-  /** 是否处理他人 discussion（角色含 auto-fixer 时生效） */
-  resolveOthersDiscussions?: boolean;
-  /** MR 评审范围过滤条件 */
-  filter?: MrReviewFilter;
-}
-
-/** MR 评审范围过滤 */
-export interface MrReviewFilter {
-  /** 过滤条件列表；字段间为 AND，同字段多值为 OR */
-  conditions: MrReviewFilterCondition[];
-}
-
-/** 支持过滤的 MR 字段 */
-export type MrReviewFilterField =
-  | 'author'
-  | 'assignee'
-  | 'reviewer'
-  | 'label'
-  | 'sourceBranch'
-  | 'targetBranch'
-  | 'draft';
-
-/** 单个过滤条件 */
-export interface MrReviewFilterCondition {
-  /** 字段名 */
-  field: MrReviewFilterField;
-  /** 字段允许的值列表；同字段内满足任一即可 */
-  values: string[];
 }
 
 /**
