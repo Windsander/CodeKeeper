@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS projects (
   registered_at INTEGER NOT NULL,
   last_scanned_at INTEGER,
   gitlab_config TEXT,
-  mr_review_config TEXT
+  roles_config TEXT NOT NULL DEFAULT '{}'
 );
 
 -- 文件系统事件队列

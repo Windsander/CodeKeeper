@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import type { Project, WatchedEvent, KnowledgeEntry, ArchiveAction, GitlabConfig, MrReviewConfig } from '../types';
+import type { Project, WatchedEvent, KnowledgeEntry, ArchiveAction, GitlabConfig, Role, RoleConfig } from '../types';
 
 /**
  * SQLite 元数据存储封装
@@ -19,7 +19,7 @@ export class MetadataStore {
   }
 
   private migrate(): void {
-    // 旧版 projects 表缺少 archive_root 列
+    // 旧版 projects 表字段迁移
     const projectColumns = this.db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
     const hasArchiveRoot = projectColumns.some((c) => c.name === 'archive_root');
     if (!hasArchiveRoot) {
@@ -28,8 +28,9 @@ export class MetadataStore {
     if (!projectColumns.some((c) => c.name === 'gitlab_config')) {
       this.db.exec('ALTER TABLE projects ADD COLUMN gitlab_config TEXT');
     }
-    if (!projectColumns.some((c) => c.name === 'mr_review_config')) {
-      this.db.exec('ALTER TABLE projects ADD COLUMN mr_review_config TEXT');
+    // mr_review_config 已废弃，迁移到 roles_config
+    if (!projectColumns.some((c) => c.name === 'roles_config')) {
+      this.db.exec("ALTER TABLE projects ADD COLUMN roles_config TEXT NOT NULL DEFAULT '{}'");
     }
 
     // 创建 mr_review_states 表（如不存在）
@@ -87,7 +88,7 @@ export class MetadataStore {
     // archive_metadata 新增 type 列
     const metadataColumns = this.db.prepare("PRAGMA table_info(archive_metadata)").all() as Array<{ name: string }>;
     if (!metadataColumns.some((c) => c.name === 'type')) {
-      this.db.exec('ALTER TABLE archive_metadata ADD COLUMN type TEXT NOT NULL DEFAULT \'copy\'');
+      this.db.exec("ALTER TABLE archive_metadata ADD COLUMN type TEXT NOT NULL DEFAULT 'copy'");
     }
 
     // 创建 archive_metadata 表（主表）
@@ -200,6 +201,15 @@ export class MetadataStore {
     }
   }
 
+  private normalizeRoles(raw: unknown): Record<Role, RoleConfig> {
+    const defaults: Record<Role, RoleConfig> = {
+      reviewer: { role: 'reviewer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true },
+      maintainer: { role: 'maintainer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true, maintainerName: 'CodeKeeper Maintainer', autoFixEnabled: true, resolveOthersDiscussions: true },
+    };
+    if (!raw || typeof raw !== 'object') return defaults;
+    return { ...defaults, ...(raw as Record<Role, RoleConfig>) };
+  }
+
   close(): void {
     this.db.close();
   }
@@ -208,13 +218,13 @@ export class MetadataStore {
 
   registerProject(project: Project): void {
     const stmt = this.db.prepare(
-      `INSERT INTO projects (id, root_path, archive_root, name, registered_at, last_scanned_at, gitlab_config, mr_review_config)
+      `INSERT INTO projects (id, root_path, archive_root, name, registered_at, last_scanned_at, gitlab_config, roles_config)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          archive_root = excluded.archive_root,
          name = excluded.name,
          gitlab_config = excluded.gitlab_config,
-         mr_review_config = excluded.mr_review_config`
+         roles_config = excluded.roles_config`
     );
     stmt.run(
       project.id,
@@ -224,7 +234,7 @@ export class MetadataStore {
       project.registeredAt,
       project.lastScannedAt,
       project.gitlab ? JSON.stringify(project.gitlab) : null,
-      project.mrReview ? JSON.stringify(project.mrReview) : null
+      project.roles ? JSON.stringify(project.roles) : '{}'
     );
   }
 
@@ -248,7 +258,7 @@ export class MetadataStore {
       registered_at: number;
       last_scanned_at: number | null;
       gitlab_config: string | null;
-      mr_review_config: string | null;
+      roles_config: string;
     }>;
     return rows.map((r) => ({
       id: r.id,
@@ -258,7 +268,7 @@ export class MetadataStore {
       registeredAt: r.registered_at,
       lastScannedAt: r.last_scanned_at,
       gitlab: r.gitlab_config ? (JSON.parse(r.gitlab_config) as GitlabConfig) : undefined,
-      mrReview: r.mr_review_config ? (JSON.parse(r.mr_review_config) as MrReviewConfig) : undefined,
+      roles: this.normalizeRoles(JSON.parse(r.roles_config)),
     }));
   }
 
@@ -272,7 +282,7 @@ export class MetadataStore {
           registered_at: number;
           last_scanned_at: number | null;
           gitlab_config: string | null;
-          mr_review_config: string | null;
+          roles_config: string;
         }
       | undefined;
     return r
@@ -284,7 +294,7 @@ export class MetadataStore {
           registeredAt: r.registered_at,
           lastScannedAt: r.last_scanned_at,
           gitlab: r.gitlab_config ? (JSON.parse(r.gitlab_config) as GitlabConfig) : undefined,
-          mrReview: r.mr_review_config ? (JSON.parse(r.mr_review_config) as MrReviewConfig) : undefined,
+          roles: this.normalizeRoles(JSON.parse(r.roles_config)),
         }
       : null;
   }
@@ -757,12 +767,30 @@ export class MetadataStore {
       .run(JSON.stringify(config), projectId);
   }
 
-  updateMrReviewConfig(projectId: string, config: MrReviewConfig): void {
+  updateProjectRoleConfig(projectId: string, role: Role, config: RoleConfig): void {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+    const roles = project.roles ?? this.normalizeRoles({});
+    roles[role] = config;
+    this.db
+      .prepare('UPDATE projects SET roles_config = ? WHERE id = ?')
+      .run(JSON.stringify(roles), projectId);
+  }
+
+  getRoleEnabledProjects(role: Role): Project[] {
+    return this.listProjects().filter(
+      (p) => p.gitlab !== undefined && (p.roles?.[role]?.enabled === true)
+    );
+  }
+
+  /** @deprecated 请使用 updateProjectRoleConfig */
+  updateMrReviewConfig(projectId: string, config: { enabled: boolean; autoMergeMode: 'full' | 'audit'; reviewSchedule: string; learningEnabled: boolean; maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH'; autoFixEnabled?: boolean; resolveOthersDiscussions?: boolean; filter?: unknown }): void {
     this.db
       .prepare('UPDATE projects SET mr_review_config = ? WHERE id = ?')
       .run(JSON.stringify(config), projectId);
   }
 
+  /** @deprecated 请使用 getRoleEnabledProjects */
   getMrEnabledProjects(): Project[] {
     return this.listProjects().filter((p) => p.gitlab !== undefined && p.mrReview?.enabled === true);
   }
