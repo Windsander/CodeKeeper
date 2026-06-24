@@ -68,7 +68,7 @@ export class RoleService {
    * 重启指定项目的服务
    * 当前实现：停止并重启整个角色服务
    */
-  restartProject(projectId: string): void {
+  restartProject(_projectId: string): void {
     this.stop();
     this.start();
   }

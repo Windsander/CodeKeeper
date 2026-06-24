@@ -8,11 +8,14 @@ import { RoleService, type RoleServiceStatus } from './role-service.js';
  */
 export class RoleServiceRegistry {
   private services = new Map<Role, RoleService>();
+  public context: HandlerContext;
 
   constructor(
-    private context: HandlerContext,
+    context: HandlerContext,
     private runnerPath: string,
-  ) {}
+  ) {
+    this.context = context;
+  }
 
   /**
    * 注册指定角色的服务

@@ -11,9 +11,11 @@ import { getIpcSocketPath } from './ipc/paths';
 import { handlers, type HandlerContext } from './ipc/handlers';
 import { logger } from '../core/logger';
 import { LlmClient } from './llm/client';
-import { ClassicService } from './classic/classic-service';
+import { RoleServiceRegistry } from './classic/role-service-registry.js';
+import { ROLES } from './types.js';
 import { ScanService } from './scan/scan-service.js';
 import { GitLabProvider } from './classic/provider/gitlab-provider.js';
+import path from 'node:path';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -44,21 +46,19 @@ export class Daemon {
   private running = false;
   private ipcServer: IpcServer | null = null;
   private handlerContext: HandlerContext;
-  private classicService: ClassicService;
+  private serviceRegistry: RoleServiceRegistry;
   private scanService: ScanService;
 
   constructor(private options: DaemonOptions) {
-    this.classicService = new ClassicService({
-      store: options.store,
-      registry: options.registry,
-      getDaemonConfig: () => ({
-        apiKey: this.options.apiKey ?? '',
-        provider: this.options.provider ?? 'anthropic',
-        model: this.options.model ?? '',
-        apiUrl: this.options.apiUrl ?? '',
-        headers: this.options.headers,
-      }),
-    });
+    // 初始化角色服务注册表，注册所有支持的角色
+    this.serviceRegistry = new RoleServiceRegistry(
+      // 先创建占位 context，等 scanService 初始化后再补全
+      {} as HandlerContext,
+      path.join(__dirname, 'agent-entries', 'role-entry.js')
+    );
+    for (const role of ROLES) {
+      this.serviceRegistry.register(role);
+    }
 
     this.scanService = new ScanService({
       store: options.store,
@@ -77,7 +77,7 @@ export class Daemon {
     this.handlerContext = {
       store: options.store,
       registry: options.registry,
-      classicService: this.classicService,
+      serviceRegistry: this.serviceRegistry,
       scanService: this.scanService,
       getProvider: (project) => {
         if (project.gitlab) {
@@ -109,6 +109,9 @@ export class Daemon {
       watchProject: (project) => this.watchProject(project),
       unwatchProject: (projectId) => this.unwatchProject(projectId),
     };
+
+    // 将完整的 handlerContext 回设到 serviceRegistry
+    this.serviceRegistry.context = this.handlerContext;
   }
 
   async start(): Promise<void> {
@@ -139,7 +142,10 @@ export class Daemon {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
-    this.classicService.stop();
+    // 停止所有角色服务
+    for (const role of ROLES) {
+      this.serviceRegistry.stop(role);
+    }
     this.scanService.stop();
     this.scanJob?.stop();
     this.scanJob = null;

@@ -12,7 +12,6 @@ import { UndoExecutor } from '../archive/undo-executor';
 import { detectGitInfo } from '../utils/git-info';
 import { loadSoulContent, saveSoulContent } from '../classic/soul/soul-loader.js';
 import { loadProjectStatus } from '../classic/status/project-status-store.js';
-import type { ClassicService } from '../classic/classic-service';
 import type { ScanService } from '../scan/scan-service.js';
 import type { IGitProvider } from '../classic/provider/types.js';
 import type { RoleServiceRegistry } from '../classic/role-service-registry.js';
@@ -26,7 +25,7 @@ import { readDirectoryTree } from '../utils/file-tree';
 export interface HandlerContext {
   store: MetadataStore;
   registry: ProjectRegistry;
-  classicService?: ClassicService;
+  serviceRegistry: RoleServiceRegistry;
   scanService?: ScanService;
   getProvider?: (project: Project) => IGitProvider | null;
   getClient: () => LlmClient | null;
@@ -50,7 +49,6 @@ export interface HandlerContext {
   };
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
-  serviceRegistry?: RoleServiceRegistry;
 }
 
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
@@ -288,18 +286,19 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'classic.start': async (ctx) => {
-    ctx.classicService?.start();
-    return { running: ctx.classicService?.isRunning() ?? false };
+    ctx.serviceRegistry.start('reviewer');
+    return { running: true };
   },
 
   'classic.stop': async (ctx) => {
-    ctx.classicService?.stop();
-    return { running: ctx.classicService?.isRunning() ?? false };
+    ctx.serviceRegistry.stop('reviewer');
+    return { running: false };
   },
 
   'classic.restart': async (ctx) => {
-    ctx.classicService?.restart();
-    return { running: ctx.classicService?.isRunning() ?? false };
+    ctx.serviceRegistry.stop('reviewer');
+    ctx.serviceRegistry.start('reviewer');
+    return { running: true };
   },
 
   'classic.status': async (ctx) => {
@@ -307,10 +306,11 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const enabledProjects = projects.filter(
       (p) => p.mrReview?.enabled && p.gitlab
     ).length;
+    const status = ctx.serviceRegistry.getStatus('reviewer');
     return {
-      running: ctx.classicService?.isRunning() ?? false,
+      running: status.running,
       enabledProjects,
-      runningProjects: ctx.classicService?.getRunningProjectIds() ?? [],
+      runningProjects: status.runningProjects,
     };
   },
 
@@ -341,8 +341,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       oldGitlab?.projectPath !== updated.projectPath ||
       oldGitlab?.token !== updated.token;
     // GitLab 配置变更且调度服务正在运行时，立即对账以应用变化
-    if (changed && ctx.classicService?.isRunning()) {
-      ctx.classicService?.restartProject(params.projectId);
+    if (changed) {
+      ctx.serviceRegistry.restartProject('reviewer', params.projectId);
     }
 
     return { success: true };
@@ -424,10 +424,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
     if (oldEnabled !== newEnabled) {
       // 启用状态变化后，若调度服务运行中则立即对账
-      if (ctx.classicService?.isRunning()) {
-        ctx.classicService?.reconcile();
-      }
-    } else if (ctx.classicService?.isRunning()) {
+      ctx.serviceRegistry.restartProject('reviewer', params.projectId);
+    } else {
       // 其他字段变化且调度服务运行中，热重启该项目 Agent
       const otherChanged =
         !oldMrReview ||
@@ -438,7 +436,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         oldMrReview.maxAutoMergeRisk !== updated.maxAutoMergeRisk ||
         JSON.stringify(oldMrReview.filter) !== JSON.stringify(updated.filter);
       if (otherChanged) {
-        ctx.classicService?.restartProject(params.projectId);
+        ctx.serviceRegistry.restartProject('reviewer', params.projectId);
       }
     }
 
