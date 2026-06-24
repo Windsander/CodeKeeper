@@ -15,6 +15,11 @@ import { loadProjectStatus } from '../classic/status/project-status-store.js';
 import type { ClassicService } from '../classic/classic-service';
 import type { ScanService } from '../scan/scan-service.js';
 import type { IGitProvider } from '../classic/provider/types.js';
+import type { RoleServiceRegistry } from '../classic/role-service-registry.js';
+import { ReviewerManager } from '../classic/roles/reviewer-manager.js';
+import { MaintainerManager } from '../classic/roles/maintainer-manager.js';
+import type { Role, RoleConfig } from '../types.js';
+import type { IRoleManager } from '../classic/roles/role-manager.js';
 
 import { readDirectoryTree } from '../utils/file-tree';
 
@@ -45,6 +50,7 @@ export interface HandlerContext {
   };
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
+  serviceRegistry?: RoleServiceRegistry;
 }
 
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
@@ -458,4 +464,69 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     await saveSoulContent(project, 'reviewer', content);
     return { success: true };
   },
+
+  // ---------- 角色 IPC Handler ----------
+
+  'project.role.config.get': async (ctx, params) => {
+    const { projectId, role } = params as { projectId: string; role: Role };
+    const manager = createRoleManager(role, ctx.store);
+    return manager.getConfig(projectId);
+  },
+
+  'project.role.config.update': async (ctx, params) => {
+    const { projectId, role, config } = params as { projectId: string; role: Role; config: RoleConfig };
+    const manager = createRoleManager(role, ctx.store);
+    await manager.updateConfig(projectId, config);
+    // 触发服务重启由后续 task 补齐
+    return { success: true };
+  },
+
+  'project.role.status.get': async (ctx, params) => {
+    const { projectId, role } = params as { projectId: string; role: Role };
+    const manager = createRoleManager(role, ctx.store);
+    return manager.getStatus(projectId);
+  },
+
+  'role.service.start': async (ctx, params) => {
+    const { role } = params as { role: Role };
+    if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
+    ctx.serviceRegistry.start(role);
+    return { success: true };
+  },
+
+  'role.service.stop': async (ctx, params) => {
+    const { role } = params as { role: Role };
+    if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
+    ctx.serviceRegistry.stop(role);
+    return { success: true };
+  },
+
+  'role.service.restart': async (ctx, params) => {
+    const { role, projectId } = params as { role: Role; projectId?: string };
+    if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
+    if (projectId) {
+      ctx.serviceRegistry.restartProject(role, projectId);
+    } else {
+      ctx.serviceRegistry.stop(role);
+      ctx.serviceRegistry.start(role);
+    }
+    return { success: true };
+  },
+
+  'role.service.status': async (ctx, params) => {
+    const { role } = params as { role: Role };
+    if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
+    return ctx.serviceRegistry.getStatus(role);
+  },
 };
+
+function createRoleManager(role: Role, store: MetadataStore): IRoleManager {
+  switch (role) {
+    case 'reviewer':
+      return new ReviewerManager(store);
+    case 'maintainer':
+      return new MaintainerManager(store);
+    default:
+      throw new Error(`未支持的角色: ${role}`);
+  }
+}
