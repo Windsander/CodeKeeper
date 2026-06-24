@@ -35,7 +35,7 @@ export function useIpc<T>(method: string, params?: unknown, options?: { pollInte
     (silent = false) => {
       if (!silent) setLoading(true);
       setError(null);
-      invoke<T>(method, params)
+      return invoke<T>(method, params)
         .then((result) => {
           cache.set(cacheKey, result);
           setData(result);

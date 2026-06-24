@@ -4,8 +4,8 @@ import { useIpc } from '../hooks/useIpc';
 import { Dropdown } from '../components/Dropdown';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { AutocompleteInput } from '../components/AutocompleteInput';
-import { getRoleUI, type RoleUIConfig, type RoleFieldConfig } from '../roles/role-registry.js';
-import type { Role, RoleConfig, RoleFilter, Project, GitlabConfig } from '../../../advance/types.js';
+import { getRoleUI, type RoleFieldConfig } from '../roles/role-registry.js';
+import type { Role, RoleConfig, Project, GitlabConfig } from '../../shared/types.js';
 
 interface ClassicStatus {
   running: boolean;
@@ -294,27 +294,30 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   };
 
   const renderRoleField = (field: RoleFieldConfig<Role>) => {
-    const value = (config as Record<string, unknown>)[field.key as string];
+    const value = config[field.key as keyof RoleConfig];
     const fieldId = `role-field-${role}-${String(field.key)}`;
     switch (field.type) {
-      case 'text':
+      case 'text': {
+        const textValue = typeof value === 'string' ? value : '';
         return (
           <div key={String(field.key)} className="form-group">
             <label htmlFor={fieldId}>{field.label}</label>
             <input
               id={fieldId}
               className="input"
-              value={(value as string) ?? ''}
+              value={textValue}
               onChange={(e) => updateConfigField(field.key as keyof RoleConfig, e.target.value)}
             />
           </div>
         );
-      case 'toggle':
+      }
+      case 'toggle': {
+        const toggleValue = value === true;
         return (
           <div key={String(field.key)} className="form-group">
             <label id={`${fieldId}-label`}>{field.label}</label>
             <Dropdown
-              value={(value as boolean) ? 'on' : 'off'}
+              value={toggleValue ? 'on' : 'off'}
               options={[
                 { value: 'on', label: '开启' },
                 { value: 'off', label: '关闭' },
@@ -324,19 +327,22 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
             />
           </div>
         );
-      case 'schedule':
+      }
+      case 'schedule': {
+        const scheduleValue = typeof value === 'string' ? value : '';
         return (
           <div key={String(field.key)} className="form-group">
             <label htmlFor={fieldId}>{field.label}</label>
             <input
               id={fieldId}
               className="input"
-              value={(value as string) ?? ''}
+              value={scheduleValue}
               placeholder="*/10 * * * *"
               onChange={(e) => updateConfigField(field.key as keyof RoleConfig, e.target.value)}
             />
           </div>
         );
+      }
       default:
         return null;
     }

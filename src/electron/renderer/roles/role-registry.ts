@@ -1,5 +1,14 @@
 import type { ComponentType } from 'react';
-import type { Role, RoleConfigOf } from '../../../advance/types.js';
+import type { Role } from '../../shared/types.js';
+
+/**
+ * 根据角色获取对应配置类型的辅助类型
+ */
+type RoleConfigOf<R extends Role> = R extends 'reviewer'
+  ? import('../../shared/types.js').ReviewerConfig
+  : R extends 'maintainer'
+    ? import('../../shared/types.js').MaintainerConfig
+    : never;
 
 /**
  * 字段类型：文本输入、开关、定时调度

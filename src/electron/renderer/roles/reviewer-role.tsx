@@ -1,5 +1,4 @@
 import { registerRoleUI } from './role-registry.js';
-import type { ReviewerConfig } from '../../../advance/types.js';
 
 /**
  * Reviewer 角色图标（占位）
@@ -13,7 +12,7 @@ const DEFAULT_REVIEWER_SOUL = `## MR Reviewer Soul
 你是一名严谨的代码评审员...
 `;
 
-registerRoleUI<ReviewerConfig>({
+registerRoleUI<'reviewer'>({
   role: 'reviewer',
   displayName: '自动评审',
   navLabel: '自动评审',

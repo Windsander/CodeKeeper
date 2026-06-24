@@ -1,5 +1,4 @@
 import { registerRoleUI } from './role-registry.js';
-import type { MaintainerConfig } from '../../../advance/types.js';
 
 /**
  * Maintainer 角色图标（占位）
@@ -13,7 +12,7 @@ const DEFAULT_MAINTAINER_SOUL = `## Maintainer Soul
 你是一名细心的代码维护者...
 `;
 
-registerRoleUI<MaintainerConfig>({
+registerRoleUI<'maintainer'>({
   role: 'maintainer',
   displayName: '自动维护',
   navLabel: '自动维护',

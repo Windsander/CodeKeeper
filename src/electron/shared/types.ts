@@ -67,3 +67,76 @@ export interface ProjectStatus {
   healthScore: number;
   healthScoreDefinition: string;
 }
+
+// ==================== Role Plugin Types ====================
+
+/**
+ * 角色标识
+ */
+export type Role = 'reviewer' | 'maintainer';
+
+/**
+ * 角色过滤条件
+ */
+export interface RoleFilter {
+  conditions: Array<{
+    field: 'author' | 'assignee' | 'reviewer' | 'label' | 'sourceBranch' | 'targetBranch' | 'draft';
+    values: string[];
+  }>;
+}
+
+/**
+ * GitLab 仓库配置
+ */
+export interface GitlabConfig {
+  baseUrl: string;
+  projectPath: string;
+  token: string;
+  defaultBranch?: string;
+}
+
+/**
+ * Reviewer 专属配置
+ */
+export interface ReviewerConfig {
+  role: 'reviewer';
+  enabled: boolean;
+  reviewSchedule: string;
+  learningEnabled: boolean;
+  filter?: RoleFilter;
+}
+
+/**
+ * Maintainer 专属配置
+ */
+export interface MaintainerConfig {
+  role: 'maintainer';
+  enabled: boolean;
+  reviewSchedule: string;
+  learningEnabled: boolean;
+  maintainerName: string;
+  autoFixEnabled: boolean;
+  resolveOthersDiscussions: boolean;
+  filter?: RoleFilter;
+}
+
+/**
+ * 角色配置联合类型
+ */
+export type RoleConfig = ReviewerConfig | MaintainerConfig;
+
+/**
+ * 按角色索引的配置映射
+ */
+export type RoleConfigMap = Record<Role, RoleConfig>;
+
+/**
+ * 项目运行时元数据（渲染端使用的最小子集）
+ */
+export interface Project {
+  id: string;
+  name: string;
+  rootPath: string;
+  gitlab?: GitlabConfig | null;
+  roles?: RoleConfigMap;
+}

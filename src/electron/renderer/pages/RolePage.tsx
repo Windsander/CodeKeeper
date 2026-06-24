@@ -4,7 +4,7 @@ import { invoke } from '../api/electron-api';
 import { Toggle } from '../components/Toggle';
 import { RoleProjectConfig } from '../components/RoleProjectConfig';
 import { getRoleUI } from '../roles/role-registry.js';
-import type { Role, Project, RoleConfig } from '../../../advance/types.js';
+import type { Role, Project, RoleConfig } from '../../shared/types.js';
 
 interface RoleServiceStatus {
   running: boolean;
