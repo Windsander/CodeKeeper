@@ -59,7 +59,7 @@ export class MaintainerBrain {
     /** 原始评论内容，优先于 finding.message 用于理解 Reviewer 意图 */
     originalComment?: string;
     /** MR 在 GitLab 中的 IID，用于记忆关联 */
-    mrIid?: number;
+    mrIid: number;
   }): Promise<MaintainerDecision> {
     const { finding, fileContent, originalComment, mrIid } = params;
 
@@ -78,7 +78,7 @@ export class MaintainerBrain {
 
     if (this.options.memoryClient) {
       await this.options.memoryClient.recordFixAttempt({
-        mrIid: mrIid ?? 0,
+        mrIid,
         file: finding.file,
         line: finding.line,
         success: decision.action === 'fix',

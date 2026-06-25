@@ -26,7 +26,7 @@ describe('MaintainerBrain', () => {
     const brain = new MaintainerBrain({
       llmClient: createMockLlmClient('{"action":"fix","reason":"可以安全修复"}'),
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;' });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1 });
     expect(decision.action).toBe('fix');
   });
 
@@ -36,7 +36,7 @@ describe('MaintainerBrain', () => {
         '{"action":"ask","reason":"需要澄清","question":"这里应该怎么改？"}'
       ),
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;' });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1 });
     expect(decision.action).toBe('ask');
     expect(decision.question).toBe('这里应该怎么改？');
   });
@@ -45,7 +45,7 @@ describe('MaintainerBrain', () => {
     const brain = new MaintainerBrain({
       llmClient: createMockLlmClient('{"action":"ignore","reason":"不相关"}'),
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;' });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1 });
     expect(decision.action).toBe('ignore');
   });
 
@@ -57,6 +57,7 @@ describe('MaintainerBrain', () => {
     const decision = await brain.decide({
       finding: makeFinding({ severity: 'HIGH' }),
       fileContent: 'const x = 1;',
+      mrIid: 1,
     });
     expect(decision.action).toBe('ask');
     expect(decision.reason).toContain('HIGH');
@@ -66,7 +67,7 @@ describe('MaintainerBrain', () => {
     const brain = new MaintainerBrain({
       llmClient: createMockLlmClient('不是 JSON'),
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;' });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1 });
     expect(decision.action).toBe('ask');
   });
 
