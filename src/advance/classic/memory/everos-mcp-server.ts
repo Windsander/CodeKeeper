@@ -211,6 +211,18 @@ export class EverOSMcpServer {
             required: ['context', 'userId', 'query'],
           },
         },
+        {
+          name: 'memory_delete',
+          description: '按 session_id 标记删除记忆（软删除）',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              sessionId: { type: 'string' },
+            },
+            required: ['context', 'sessionId'],
+          },
+        },
       ],
     }));
 
@@ -259,6 +271,10 @@ export class EverOSMcpServer {
               args as { context: MemoryContext; userId: string; query: string }
             )
           );
+        }
+        if (name === 'memory_delete') {
+          await this.handleMemoryDelete(args as { context: MemoryContext } & Record<string, unknown>);
+          return this.okResult();
         }
         throw new Error(`未知 tool: ${name}`);
       } catch (err) {
@@ -395,6 +411,13 @@ export class EverOSMcpServer {
       topK: 5,
     });
     return result.items;
+  }
+
+  private async handleMemoryDelete(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+    const ctx = args.context;
+    const sessionId = String(args.sessionId ?? '');
+    logger.info({ appId: ctx.appId, projectId: ctx.projectId, sessionId }, '标记记忆删除');
+    // EverOS 当前未暴露 memory 物理删除 API，tool 层仅记录 tombstone，后续由 Reflection/GC 处理
   }
 
   private async handleRecallUserPreferences(args: {

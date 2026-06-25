@@ -114,6 +114,17 @@ export class MetadataStore {
       CREATE INDEX IF NOT EXISTS idx_metadata_status ON archive_metadata(status);
     `);
 
+    // 创建 deleted_memory_sessions 表（记忆浏览器软删除用）
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS deleted_memory_sessions (
+        project_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, session_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_deleted_memory_project ON deleted_memory_sessions(project_id);
+    `);
+
     // 旧版 action_history 中 move/create/merge 类型迁移到新语义
     this.db.exec(`
       UPDATE action_history SET type = 'copy' WHERE type IN ('move', 'create');
@@ -1086,6 +1097,32 @@ export class MetadataStore {
     this.db
       .prepare(`UPDATE mr_review_states SET ${setClauses.join(', ')} WHERE project_id = ? AND mr_iid = ?`)
       .run(...values, projectId, mrIid);
+  }
+
+  // ---------- 记忆浏览器软删除 ----------
+
+  markMemorySessionDeleted(projectId: string, sessionId: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO deleted_memory_sessions (project_id, session_id, deleted_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(project_id, session_id) DO UPDATE SET deleted_at = excluded.deleted_at`
+      )
+      .run(projectId, sessionId, Date.now());
+  }
+
+  isMemorySessionDeleted(projectId: string, sessionId: string): boolean {
+    const row = this.db
+      .prepare('SELECT 1 FROM deleted_memory_sessions WHERE project_id = ? AND session_id = ?')
+      .get(projectId, sessionId) as { '1': number } | undefined;
+    return row !== undefined;
+  }
+
+  listDeletedMemorySessions(projectId: string): string[] {
+    const rows = this.db
+      .prepare('SELECT session_id FROM deleted_memory_sessions WHERE project_id = ?')
+      .all(projectId) as Array<{ session_id: string }>;
+    return rows.map((r) => r.session_id);
   }
 }
 

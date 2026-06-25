@@ -1116,3 +1116,40 @@ select.input:focus {
   max-height: 60vh;
   margin: 0;
 }
+
+/* 记忆浏览器 */
+.memory-browser {
+  padding: 20px;
+}
+
+.memory-search-form {
+  margin-bottom: 20px;
+}
+
+.memory-search-form .form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.memory-search-form .form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 160px;
+}
+
+.memory-search-form label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.memory-entry-content {
+  max-width: 480px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+

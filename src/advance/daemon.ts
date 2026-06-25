@@ -139,6 +139,7 @@ export class Daemon {
       const submodulePath = join(__dirname, '..', '..', 'vendor', 'everos');
       this.everosService = new EverOSService({ submodulePath });
       const everosUrl = await this.everosService.start();
+      this.handlerContext.everosUrl = everosUrl;
       this.everosMcpServer = new EverOSMcpServer({ everosUrl });
       this.everosMcpUrl = await this.everosMcpServer.start();
       this.serviceRegistry.setMemoryMcpUrl(this.everosMcpUrl);

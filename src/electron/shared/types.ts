@@ -71,9 +71,42 @@ export interface ProjectStatus {
 // ==================== Role Plugin Types ====================
 
 /**
+ * Electron 渲染进程与主进程共享的记忆查询类型
+ */
+
+export type MemoryEntryType = 'agent_case' | 'episode' | 'agent_skill' | 'profile';
+
+export interface MemoryEntry {
+  id: string;
+  type: MemoryEntryType;
+  content: string;
+  source: string;
+  timestamp: string;
+  sessionId: string;
+  score?: number;
+}
+
+export interface MemorySearchParams {
+  projectId: string;
+  agentId?: string;
+  userId?: string;
+  query?: string;
+  limit?: number;
+}
+
+export interface MemorySearchResult {
+  entries: MemoryEntry[];
+}
+
+export interface MemoryDeleteParams {
+  projectId: string;
+  sessionId: string;
+}
+
+/**
  * 角色标识
  */
-export type Role = 'reviewer' | 'maintainer';
+export type Role = 'reviewer' | 'maintainer' | 'archiver';
 
 /**
  * 角色过滤条件

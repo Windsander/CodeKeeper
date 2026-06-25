@@ -21,6 +21,8 @@ import type { Role, RoleConfig, GitlabConfig } from '../types.js';
 import type { IRoleManager } from '../classic/roles/role-manager.js';
 
 import { readDirectoryTree } from '../utils/file-tree';
+import { everosMemorySearch, type EverOSSearchItem } from '../classic/memory/everos-api.js';
+import type { MemoryEntry, MemorySearchParams, MemoryDeleteParams } from '../../electron/shared/types.js';
 
 export interface HandlerContext {
   store: MetadataStore;
@@ -51,6 +53,8 @@ export interface HandlerContext {
   };
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
+  /** EverOS HTTP URL，用于 memory.search 等 handler 直接访问 */
+  everosUrl?: string;
 }
 
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
@@ -523,6 +527,44 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { success: true };
   },
 
+  // ---------- 记忆浏览器 IPC Handler ----------
+
+  'memory.search': async (ctx, params) => {
+    const { projectId, agentId, userId, query, limit } = params as MemorySearchParams;
+    if (!projectId) throw new Error('项目 ID 不能为空');
+    if (!agentId && !userId) throw new Error('必须指定 agentId 或 userId');
+    if (!ctx.everosUrl) throw new Error('EverOS 服务未启动');
+
+    const project = ctx.registry.get(projectId);
+    if (!project) throw new Error('项目未注册');
+
+    const owner = agentId
+      ? { kind: 'agent' as const, agentId }
+      : { kind: 'user' as const, userId: userId! };
+
+    const result = await everosMemorySearch(ctx.everosUrl, {
+      appId: 'codekeeper-advance',
+      projectId,
+      owner,
+      query: query ?? '',
+      topK: limit ?? 20,
+    });
+
+    const deletedSessions = new Set(ctx.store.listDeletedMemorySessions(projectId));
+    const entries: MemoryEntry[] = result.items
+      .filter((item) => !deletedSessions.has(item.sessionId ?? ''))
+      .map((item) => mapEverOSSearchItemToMemoryEntry(item));
+
+    return { entries };
+  },
+
+  'memory.delete': async (ctx, params) => {
+    const { projectId, sessionId } = params as MemoryDeleteParams;
+    if (!projectId || !sessionId) throw new Error('项目 ID 和 sessionId 不能为空');
+    ctx.store.markMemorySessionDeleted(projectId, sessionId);
+    return { success: true };
+  },
+
   // ---------- 角色 IPC Handler ----------
 
   'project.role.config.get': async (ctx, params) => {
@@ -573,6 +615,25 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return ctx.serviceRegistry.getStatus(role);
   },
 };
+
+function mapEverOSSearchItemToMemoryEntry(item: EverOSSearchItem): MemoryEntry {
+  return {
+    id: item.id,
+    type: normalizeMemoryEntryType(item.type),
+    content: item.content,
+    source: item.source ?? item.type,
+    timestamp: item.timestamp ?? new Date().toISOString(),
+    sessionId: item.sessionId ?? '',
+    score: item.score,
+  };
+}
+
+function normalizeMemoryEntryType(type: string): MemoryEntry['type'] {
+  if (type === 'agent_case' || type === 'episode' || type === 'agent_skill' || type === 'profile') {
+    return type;
+  }
+  return 'agent_case';
+}
 
 function createRoleManager(role: Role, store: MetadataStore): IRoleManager {
   switch (role) {
