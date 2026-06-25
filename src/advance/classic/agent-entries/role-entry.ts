@@ -6,7 +6,7 @@ import { MetadataStore } from '../../store/metadata-store.js';
 /**
  * 从环境变量解析 Agent 配置
  */
-function loadConfigFromEnv(env: NodeJS.ProcessEnv): {
+export function loadConfigFromEnv(env: NodeJS.ProcessEnv): {
   role: Role;
   dbPath: string;
   llm: {

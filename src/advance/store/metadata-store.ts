@@ -235,7 +235,7 @@ export class MetadataStore {
       project.registeredAt,
       project.lastScannedAt,
       project.gitlab ? JSON.stringify(project.gitlab) : null,
-      project.roles ? JSON.stringify(project.roles) : null
+      project.roles ? JSON.stringify(project.roles) : '{}'
     );
   }
 
