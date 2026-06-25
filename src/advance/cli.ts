@@ -100,6 +100,7 @@ export async function main(): Promise<void> {
       apiUrl: persisted.apiUrl,
       provider: persisted.provider,
       model: persisted.model,
+      everos: persisted.everos,
       headers: persisted.headers,
       scanCron: persisted.scanCron,
       llmRequestsPerMinute: persisted.llmRequestsPerMinute,

@@ -148,6 +148,7 @@ export async function everosMemorySearch(
     query: params.query,
     top_k: params.topK ?? 5,
     method: 'hybrid',
+    enable_llm_rerank: true,
   };
 
   if (params.owner.kind === 'user') {

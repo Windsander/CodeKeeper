@@ -41,6 +41,7 @@ export interface HandlerContext {
     headers?: Record<string, string>;
     scanCron?: string;
     llmRequestsPerMinute?: number;
+    everos?: import('../config/daemon-config.js').EverOSConfig;
   }) => void;
   getDaemonConfig?: () => {
     apiKey: string;
@@ -50,6 +51,7 @@ export interface HandlerContext {
     headers: string;
     scanCron: string;
     llmRequestsPerMinute: number;
+    everos: string;
   };
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
@@ -238,6 +240,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       headers: '',
       scanCron: '*/5 * * * *',
       llmRequestsPerMinute: 10,
+      everos: '',
     };
   },
 
@@ -265,15 +268,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'daemon.config.update': async (ctx, params) => {
-    const config: {
-      apiKey?: string;
-      apiUrl?: string;
-      provider?: 'anthropic' | 'openai';
-      model?: string;
-      headers?: Record<string, string>;
-      scanCron?: string;
-      llmRequestsPerMinute?: number;
-    } = {};
+    const config: import('../config/daemon-config.js').DaemonPersistedConfig = {};
 
     if (params.apiKey !== undefined) config.apiKey = params.apiKey;
     if (params.apiUrl !== undefined) config.apiUrl = params.apiUrl || undefined;
@@ -298,6 +293,18 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       }
     } else if (params.headers === '') {
       config.headers = {};
+    }
+
+    if (params.everos !== undefined) {
+      if (params.everos) {
+        try {
+          config.everos = JSON.parse(params.everos) as import('../config/daemon-config.js').EverOSConfig;
+        } catch {
+          throw new Error('EverOS 配置不是合法 JSON');
+        }
+      } else {
+        config.everos = {};
+      }
     }
 
     ctx.updateDaemonConfig?.(config);

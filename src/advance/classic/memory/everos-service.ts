@@ -12,6 +12,8 @@ export interface EverOSServiceOptions {
   dataDir?: string;
   /** 指定端口；0 表示由 EverOS 自己选择 */
   port?: number;
+  /** 传递给 EverOS 子进程的环境变量 */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -22,12 +24,14 @@ export class EverOSService {
   private readonly submodulePath: string;
   private readonly dataDir: string;
   private readonly port: number;
+  private readonly env: NodeJS.ProcessEnv;
   private everosUrl: string | null = null;
 
   constructor(options: EverOSServiceOptions) {
     this.submodulePath = resolve(options.submodulePath);
     this.dataDir = options.dataDir ?? join(getAppStorageDir(), 'everos-data');
     this.port = options.port ?? 0;
+    this.env = options.env ?? process.env;
   }
 
   /**
@@ -157,7 +161,7 @@ export class EverOSService {
 
   private async runCommand(command: string, args: string[]): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, { stdio: 'ignore' });
+      const child = spawn(command, args, { stdio: 'ignore', env: this.env });
       child.on('error', reject);
       child.on('exit', (code) => {
         if (code === 0) resolve();

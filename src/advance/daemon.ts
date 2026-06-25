@@ -41,6 +41,8 @@ export interface DaemonOptions {
   maxEventsPerScan?: number;
   /** 每分钟 LLM 请求数限制，默认 10 */
   llmRequestsPerMinute?: number;
+  /** EverOS 独立配置；未设置时继承 Agent 通用配置 */
+  everos?: import('./config/daemon-config.js').EverOSConfig;
 }
 
 export class Daemon {
@@ -115,6 +117,7 @@ export class Daemon {
         headers: this.options.headers ? JSON.stringify(this.options.headers) : '',
         scanCron: this.options.scanCron ?? '*/5 * * * *',
         llmRequestsPerMinute: this.options.llmRequestsPerMinute ?? 10,
+        everos: this.options.everos ? JSON.stringify(this.options.everos) : '',
       }),
       watchProject: (project) => this.watchProject(project),
       unwatchProject: (projectId) => this.unwatchProject(projectId),
@@ -137,7 +140,10 @@ export class Daemon {
     // 启动 EverOS 本地记忆基础设施，所有角色服务共享同一套实例
     try {
       const submodulePath = join(__dirname, '..', '..', 'vendor', 'everos');
-      this.everosService = new EverOSService({ submodulePath });
+      this.everosService = new EverOSService({
+        submodulePath,
+        env: this.buildEverOSEnv(),
+      });
       const everosUrl = await this.everosService.start();
       this.handlerContext.everosUrl = everosUrl;
       this.everosMcpServer = new EverOSMcpServer({ everosUrl });
@@ -205,8 +211,8 @@ export class Daemon {
     return this.running;
   }
 
-  updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string; llmRequestsPerMinute?: number }): void {
-    const persisted: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string; llmRequestsPerMinute?: number } = {};
+  updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string; llmRequestsPerMinute?: number; everos?: import('./config/daemon-config.js').EverOSConfig }): void {
+    const persisted: import('./config/daemon-config.js').DaemonPersistedConfig = {};
 
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
@@ -238,10 +244,54 @@ export class Daemon {
       this.options.llmRequestsPerMinute = config.llmRequestsPerMinute;
       persisted.llmRequestsPerMinute = config.llmRequestsPerMinute;
     }
+    if (config.everos !== undefined) {
+      this.options.everos = config.everos;
+      persisted.everos = config.everos;
+    }
 
     if (Object.keys(persisted).length > 0) {
       saveDaemonConfig(persisted);
     }
+  }
+
+  private buildEverOSEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    const agent = {
+      apiKey: this.options.apiKey,
+      apiUrl: this.options.apiUrl,
+      model: this.options.model,
+    };
+    const cfg = this.options.everos ?? {};
+
+    const llmKey = cfg.llmApiKey ?? agent.apiKey;
+    const llmUrl = cfg.llmBaseUrl ?? agent.apiUrl;
+    const llmModel = cfg.llmModel ?? agent.model;
+    if (llmKey) env.EVEROS_LLM__API_KEY = llmKey;
+    if (llmUrl) env.EVEROS_LLM__BASE_URL = llmUrl;
+    if (llmModel) env.EVEROS_LLM__MODEL = llmModel;
+
+    const embedKey = cfg.embeddingApiKey ?? agent.apiKey;
+    const embedUrl = cfg.embeddingBaseUrl ?? agent.apiUrl;
+    const embedModel = cfg.embeddingModel;
+    if (embedKey) env.EVEROS_EMBEDDING__API_KEY = embedKey;
+    if (embedUrl) env.EVEROS_EMBEDDING__BASE_URL = embedUrl;
+    if (embedModel) env.EVEROS_EMBEDDING__MODEL = embedModel;
+
+    const mmKey = cfg.multimodalApiKey ?? agent.apiKey;
+    const mmUrl = cfg.multimodalBaseUrl ?? agent.apiUrl;
+    const mmModel = cfg.multimodalModel;
+    if (mmKey) env.EVEROS_MULTIMODAL__API_KEY = mmKey;
+    if (mmUrl) env.EVEROS_MULTIMODAL__BASE_URL = mmUrl;
+    if (mmModel) env.EVEROS_MULTIMODAL__MODEL = mmModel;
+
+    const rerankKey = cfg.rerankApiKey ?? agent.apiKey;
+    const rerankUrl = cfg.rerankBaseUrl ?? agent.apiUrl;
+    const rerankModel = cfg.rerankModel;
+    if (rerankKey) env.EVEROS_RERANK__API_KEY = rerankKey;
+    if (rerankUrl) env.EVEROS_RERANK__BASE_URL = rerankUrl;
+    if (rerankModel) env.EVEROS_RERANK__MODEL = rerankModel;
+
+    return env;
   }
 
   private llmRequestInterval(): number {
