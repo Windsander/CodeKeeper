@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ReviewerBrain } from '../../../../src/advance/classic/review/reviewer-brain.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { MergeRequest, MrDiff } from '../../../../src/advance/classic/provider/types.js';
@@ -106,5 +106,21 @@ describe('ReviewerBrain', () => {
 
     expect(result.findings).toHaveLength(0);
     expect(result.summary).toContain('解析失败');
+  });
+
+  it('评审后调用 memoryClient.recordReview', async () => {
+    const memoryClient = { recordReview: vi.fn() } as unknown as NonNullable<
+      import('../../../../src/advance/classic/review/reviewer-brain.js').ReviewerBrainOptions['memoryClient']
+    >;
+    const brain = new ReviewerBrain({
+      llmClient: createMockLlmClient(
+        JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] })
+      ),
+      tokenBudget: 4000,
+      rules: 'rule1',
+      memoryClient,
+    });
+    await brain.review(mockMR, mockDiffs);
+    expect(memoryClient.recordReview).toHaveBeenCalled();
   });
 });

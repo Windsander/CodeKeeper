@@ -1,5 +1,6 @@
 import { LlmClient } from '../../llm/client.js';
 import type { MergeRequest, MrDiff, ReviewFinding, ReviewResult } from '../provider/types.js';
+import type { IMemoryClient } from '../memory/types.js';
 
 export interface ReviewerBrainOptions {
   /** LLM 客户端实例 */
@@ -12,6 +13,8 @@ export interface ReviewerBrainOptions {
   soulContent?: string;
   /** 项目自动归纳的智库内容（context.md 摘要） */
   projectContext?: string;
+  /** 可选的记忆客户端，用于记录评审历史 */
+  memoryClient?: IMemoryClient;
 }
 
 /**
@@ -37,7 +40,18 @@ export class ReviewerBrain {
       '你是严格的代码评审助手。请只输出 JSON。'
     );
 
-    return this.parseReviewResponse(response);
+    const result = this.parseReviewResponse(response);
+
+    if (this.options.memoryClient) {
+      await this.options.memoryClient.recordReview({
+        mrIid: mr.iid,
+        title: mr.title,
+        findingsCount: result.findings.length,
+        summary: result.summary,
+      });
+    }
+
+    return result;
   }
 
   private buildReviewPrompt(mr: MergeRequest, diffs: MrDiff[]): string {
