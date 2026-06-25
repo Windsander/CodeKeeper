@@ -22,7 +22,7 @@ registerRoleUI<'maintainer'>({
   defaultSoulTemplate: DEFAULT_MAINTAINER_SOUL,
   projectConfigFields: [
     { key: 'maintainerName', label: '维护者名称', type: 'text', defaultValue: 'CodeKeeper Maintainer' },
-    { key: 'autoFixEnabled', label: '启用自动修复', type: 'toggle', defaultValue: true },
+    { key: 'autoFixRiskLevels', label: '自动处理风险等级', type: 'risk-levels', defaultValue: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
     { key: 'resolveOthersDiscussions', label: '自动 resolve 他人 discussion', type: 'toggle', defaultValue: true },
   ],
   defaultConfig: {
@@ -32,6 +32,7 @@ registerRoleUI<'maintainer'>({
     learningEnabled: true,
     maintainerName: 'CodeKeeper Maintainer',
     autoFixEnabled: true,
+    autoFixRiskLevels: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
     resolveOthersDiscussions: true,
   },
 });

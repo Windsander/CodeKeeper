@@ -1,35 +1,26 @@
 /**
  * Maintainer 角色的 Runner 实现
  *
- * 负责：创建 discussion、尝试自动修复、resolve discussion、处理他人 discussions。
- * 不发布 review summary。
+ * 负责：读取 MR 下所有 Reviewer/人工创建的 discussion，协调 MaintainerBrain 做决策、
+ * MaintainerActor 执行修复或回复，并通过评论与 Reviewer 交互。
+ * 不主动发现新问题，也不发布 review summary。
  */
 
-import { schedule, validate as validateCron } from 'node-cron';
 import { LlmClient } from '../../llm/client.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
-import { ClassicReviewer } from '../review/reviewer.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MrFixAgent } from '../fix/mr-fix-agent.js';
-import { FixDecisionEngine } from '../fix/fix-decision-engine.js';
+import { MaintainerBrain } from '../fix/maintainer-brain.js';
+import { MaintainerActor } from '../fix/maintainer-actor.js';
 import { loadSoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
-import {
-  recordProjectError,
-  clearProjectError,
-  recordProjectMissingToken,
-  recordAgentStarted,
-} from '../status/project-status-store.js';
-import type { Project, GitlabConfig } from '../../types.js';
 import { getArchiveRoot } from '../../types.js';
-import type { MergeRequest, MrDiff, ReviewFinding } from '../provider/types.js';
-import { buildDiffPosition, getFindingKey } from '../provider/discussion-mapper.js';
-import { formatFindingDiscussionBody } from './shared/review-utils.js';
-import { getMrReviewConfig, buildRemoteUrl } from './shared/config-utils.js';
-import { loadState, saveState, getDiscussionStateKey } from './shared/state-utils.js';
-import { inferFindingFromDiscussion } from './shared/finding-utils.js';
-import type { ProjectConfig } from './role-runner.js';
-import type { IRoleRunner } from './role-runner.js';
+import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
+import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
+import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
+import { inferFindingFromDiscussion, inferFindingsFromReviewSummary } from './shared/finding-utils.js';
+import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
+import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
  * MaintainerRunner 构造选项
@@ -39,132 +30,53 @@ export interface MaintainerRunnerOptions {
   llmClient: LlmClient;
 }
 
-export class MaintainerRunner implements IRoleRunner {
-  private llmClient: LlmClient;
-  private activeLoops = new Map<string, ReturnType<typeof schedule>>();
-
+export class MaintainerRunner extends BaseRoleRunner {
   constructor(options: MaintainerRunnerOptions) {
-    this.llmClient = options.llmClient;
+    super({ llmClient: options.llmClient });
   }
 
-  async startProjectLoop(project: ProjectConfig): Promise<void> {
-    const fullProject = project as unknown as Project;
-    const config = getMrReviewConfig(fullProject);
-
-    if (!config.enabled) {
-      console.log(`[MaintainerRunner] 项目 ${fullProject.name} 未启用 MR 评审，跳过`);
-      return;
-    }
-
-    const scheduleExpr = config.reviewSchedule?.trim() || '*/10 * * * *';
-    if (!validateCron(scheduleExpr)) {
-      const message = `[MaintainerRunner] 项目 ${fullProject.name} 的 reviewSchedule "${scheduleExpr}" 不是合法的 cron 表达式`;
-      console.error(message);
-      recordProjectError(fullProject, new Error(message), 'unknown');
-      return;
-    }
-
-    recordAgentStarted(fullProject);
-
-    // 立即执行一次
-    await this.maintainProjectSafely(fullProject);
-
-    // 按 schedule 定时执行
-    const job = schedule(scheduleExpr, () => {
-      void this.maintainProjectSafely(fullProject);
-    });
-
-    this.activeLoops.set(fullProject.id, job);
-    console.log(`[MaintainerRunner] 项目 ${fullProject.name} 已启动定时维护循环: ${scheduleExpr}`);
+  protected getRole(): 'maintainer' {
+    return 'maintainer';
   }
 
-  stopProjectLoop(projectId: string): void {
-    const job = this.activeLoops.get(projectId);
-    if (job) {
-      job.stop();
-      this.activeLoops.delete(projectId);
-      console.log(`[MaintainerRunner] 项目 ${projectId} 定时维护循环已停止`);
-    }
-  }
-
-  /**
-   * 安全地执行项目维护，捕获异常避免崩溃
-   */
-  private async maintainProjectSafely(project: Project): Promise<void> {
-    try {
-      await this.maintainProject(project);
-      clearProjectError(project);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[MaintainerRunner] 项目 ${project.name} 维护异常: ${message}`);
-      recordProjectError(project, error);
-    }
+  protected getDefaultSchedule(): string {
+    return '*/10 * * * *';
   }
 
   /**
    * 对单个项目执行 MR 维护轮询
-   *
-   * 流程：
-   * 1. 构造 GitLabProvider
-   * 2. 列出所有 open MRs
-   * 3. 跳过 draft MR
-   * 4. 对每个非 draft MR 获取 diff 和 SHA 信息
-   * 5. 调用 ClassicReviewer.review() 生成 findings
-   * 6. 仅对 HIGH/CRITICAL 创建 discussion thread（带代码行定位）
-   * 7. 尝试自动修复并 resolve discussion
-   * 8. 处理他人创建的 discussions
    */
-  private async maintainProject(project: Project): Promise<void> {
-    if (!project.gitlab) {
-      console.log(`[MaintainerRunner] 项目 ${project.name} 未配置 GitLab，跳过`);
-      return;
-    }
-
-    const config = getMrReviewConfig(project);
-    if (!config.enabled) {
-      console.log(`[MaintainerRunner] 项目 ${project.name} 未启用 MR 评审，跳过`);
-      return;
-    }
-
-    const gitlabConfig: GitlabConfig = project.gitlab;
-
-    // Token 预检查
-    if (!gitlabConfig.token || gitlabConfig.token.trim() === '') {
-      const message = `[MaintainerRunner] 项目 ${project.name} 未配置 GitLab Access Token`;
-      console.error(message);
-      recordProjectMissingToken(project, message);
-      return;
-    }
+  protected async runProject(project: Project, config: RoleConfig): Promise<void> {
+    const maintainerConfig = config as MaintainerConfig;
+    const gitlabConfig = project.gitlab!;
 
     const provider = new GitLabProvider(gitlabConfig);
 
     const soul = loadSoulContent(project, 'maintainer');
     const projectContext = loadProjectContext(getArchiveRoot(project));
 
-    const reviewer = new ClassicReviewer({
-      client: this.llmClient,
-      tokenBudget: 4000,
-      rules: soul.content || '默认维护规则：检查代码质量、安全性、性能问题并尝试自动修复',
-      soulContent: soul.content || undefined,
-      projectContext,
-    });
-
-    const state = loadState(project);
-
-    // 构造 auto-fixer
-    const autoFixEnabled = config.autoFixEnabled ?? true;
+    const allowedRiskLevels = maintainerConfig.autoFixRiskLevels ?? ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+    const maintainerName = maintainerConfig.maintainerName || 'CodeKeeper Maintainer';
     const worktreeManager = new WorktreeManager({
       projectId: project.id,
       rootPath: project.rootPath,
-      remoteUrl: buildRemoteUrl(gitlabConfig),
+      remoteUrl: buildAuthenticatedRemoteUrl(gitlabConfig),
     });
-    const fixAgent = new MrFixAgent({
-      worktreeManager,
-      reviewer,
-      decisionEngine: new FixDecisionEngine(),
+    const fixAgent = new MrFixAgent({ worktreeManager, llmClient: this.llmClient });
+    const brain = new MaintainerBrain({
+      llmClient: this.llmClient,
+      allowedRiskLevels,
+      soulContent: soul.content || undefined,
+      projectContext,
     });
+    const actor = new MaintainerActor({ provider, fixAgent, maintainerName });
+
+    const state = loadState(project);
+    state.interactiveThreads ??= {};
 
     console.log(`[MaintainerRunner] 扫描项目 ${project.name} 的 open MRs...`);
+    console.log(`[MaintainerRunner] 项目 ${project.name} 使用 filter: ${JSON.stringify(maintainerConfig.filter ?? {})}`);
+    console.log(`[MaintainerRunner] 项目 ${project.name} 允许自动修复的风险等级: ${allowedRiskLevels.join(',')}`);
 
     let mrs: MergeRequest[];
     try {
@@ -172,226 +84,330 @@ export class MaintainerRunner implements IRoleRunner {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[MaintainerRunner] 列出项目 ${project.name} 的 MR 失败: ${message}`);
-      recordProjectError(project, error);
-      return;
+      throw error;
     }
 
     console.log(`[MaintainerRunner] 项目 ${project.name} 发现 ${mrs.length} 个 open MR`);
 
+    // 默认跳过 draft；如果 filter 里显式配置了 Draft=true，则保留 draft MR
+    const draftCondition = maintainerConfig.filter?.conditions.find((c) => c.field === 'draft');
+    const includeDraft = draftCondition?.values.includes('true') ?? false;
+
     for (const mr of mrs) {
-      if (mr.draft) {
+      if (mr.draft && !includeDraft) {
         console.log(`[MaintainerRunner] 跳过 draft MR !${mr.iid}: ${mr.title}`);
         continue;
       }
 
       console.log(`[MaintainerRunner] 维护 MR !${mr.iid}: ${mr.title}`);
 
-      let diffs: MrDiff[];
+      let discussions: Discussion[];
       try {
-        diffs = await provider.getMRDiff(mr.iid);
+        discussions = await provider.getDiscussions(mr.iid);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`[MaintainerRunner] 获取 MR !${mr.iid} diff 失败: ${message}`);
+        console.error(`[MaintainerRunner] 获取 MR !${mr.iid} discussions 失败: ${message}`);
         continue;
       }
 
-      if (diffs.length === 0) {
-        console.log(`[MaintainerRunner] MR !${mr.iid} 无变更，跳过`);
+      console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
+      discussions.forEach((d, idx) => {
+        console.log(
+          `[MaintainerRunner] discussion[${idx}] id=${d.id}, resolvable=${d.resolvable}, resolved=${d.resolved}, notes=${d.notes.length}, firstAuthor=${d.notes[0]?.author ?? 'none'}`
+        );
+      });
+
+      const pendingDiscussions = discussions.filter((d) => {
+        if (d.resolved || !d.resolvable) return false;
+        const hasMaintainerNote = d.notes.some((note) =>
+          note.body.includes(maintainerSignature(maintainerName))
+        );
+        const isInteractive = state.interactiveThreads[d.id]?.status === 'awaiting-reply';
+        // 如果 Maintainer 已经处理过且不在交互等待中，跳过（避免重复回复）
+        if (hasMaintainerNote && !isInteractive) return false;
+        return true;
+      });
+
+      console.log(`[MaintainerRunner] MR !${mr.iid} 过滤后待处理 discussion 数量: ${pendingDiscussions.length}`);
+
+      if (pendingDiscussions.length === 0) {
+        console.log(`[MaintainerRunner] MR !${mr.iid} 没有待处理的 discussion，跳过`);
         continue;
       }
 
-      let shaInfo;
-      try {
-        shaInfo = await provider.getMRShaInfo(mr.iid);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[MaintainerRunner] 获取 MR !${mr.iid} SHA 信息失败: ${message}`);
-        continue;
-      }
-
-      let result;
-      try {
-        result = await reviewer.review(mr, diffs);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[MaintainerRunner] 评审 MR !${mr.iid} 失败: ${message}`);
-        continue;
-      }
-
-      // 仅对 HIGH/CRITICAL 创建 discussion thread
-      const stateKey = getDiscussionStateKey(mr);
-      const postedDiscussions = state.discussions[stateKey] ?? [];
-      const postedKeys = new Set(postedDiscussions.map((d) => d.findingKey));
-
-      for (const finding of result.findings) {
-        if (finding.severity !== 'HIGH' && finding.severity !== 'CRITICAL') {
-          continue;
-        }
-
-        const key = getFindingKey(finding);
-        if (postedKeys.has(key)) {
-          console.log(`[MaintainerRunner] finding ${key} 已存在 discussion，跳过`);
-          continue;
-        }
-
-        const position = buildDiffPosition(finding, diffs, shaInfo);
-        if (!position) {
-          console.warn(`[MaintainerRunner] 无法为 finding ${key} 构造 diff position，跳过`);
-          continue;
-        }
-
-        const body = formatFindingDiscussionBody(finding);
-        let discussionId: string;
-        try {
-          discussionId = await provider.createDiscussion(mr.iid, body, position);
-          postedDiscussions.push({
-            findingKey: key,
-            discussionId,
-            file: finding.file,
-            line: finding.line,
-            severity: finding.severity,
-            resolved: false,
-          });
-          console.log(`[MaintainerRunner] 已为 finding ${key} 创建 discussion ${discussionId}`);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[MaintainerRunner] 为 finding ${key} 创建 discussion 失败: ${message}`);
-          continue;
-        }
-
-        // 自动修复并 resolve discussion
-        if (autoFixEnabled) {
-          const fixResult = await fixAgent.processFinding(finding, mr);
-          if (fixResult.success) {
-            try {
-              await provider.resolveDiscussion(mr.iid, discussionId);
-              const posted = postedDiscussions.find((d) => d.discussionId === discussionId);
-              if (posted) posted.resolved = true;
-              await provider.addDiscussionNote(
-                mr.iid,
-                discussionId,
-                '✅ CodeKeeper 已自动修复该问题并推送至本分支。'
-              );
-              console.log(`[MaintainerRunner] 已修复 finding ${key} 并 resolve discussion ${discussionId}`);
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              console.error(`[MaintainerRunner] resolve discussion ${discussionId} 失败: ${message}`);
-            }
-          } else if (fixResult.action === 'skip' || fixResult.action === 'defer') {
-            try {
-              await provider.addDiscussionNote(
-                mr.iid,
-                discussionId,
-                `⏸️ CodeKeeper 决定暂不自动修复：${fixResult.reason}`
-              );
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              console.error(`[MaintainerRunner] 在 discussion ${discussionId} 追加说明失败: ${message}`);
-            }
-          }
-        }
-      }
-
-      state.discussions[stateKey] = postedDiscussions;
-      saveState(project, state);
-
-      // 处理他人 discussions
-      if (config.resolveOthersDiscussions) {
-        await this.handleOthersDiscussions(mr, provider, diffs, shaInfo, fixAgent);
+      console.log(`[MaintainerRunner] MR !${mr.iid} 有 ${pendingDiscussions.length} 个待处理 discussion`);
+      for (const discussion of pendingDiscussions) {
+        await this.processDiscussion(
+          mr,
+          discussion,
+          provider,
+          brain,
+          actor,
+          fixAgent,
+          worktreeManager,
+          maintainerName,
+          state
+        );
       }
     }
+
+    saveState(project, state);
   }
 
   /**
-   * 处理他人 reviewer 创建的 discussions
-   *
-   * 对未 resolved 的 discussion：
-   * - 尝试解析出 finding
-   * - 能解析则尝试自动修复，成功后 resolve 并追加说明
-   * - 不能解析或决定不修复则追加说明 comment，不 resolve
+   * 处理单个 discussion（来自 Reviewer 或人工）
    */
-  private async handleOthersDiscussions(
+  private async processDiscussion(
     mr: MergeRequest,
+    discussion: Discussion,
     provider: GitLabProvider,
-    diffs: MrDiff[],
-    shaInfo: { baseSha: string; headSha: string; startSha: string },
-    fixAgent: MrFixAgent
+    brain: MaintainerBrain,
+    actor: MaintainerActor,
+    fixAgent: MrFixAgent,
+    worktreeManager: WorktreeManager,
+    maintainerName: string,
+    state: MrAgentState
   ): Promise<void> {
-    let discussions;
-    try {
-      discussions = await provider.getDiscussions(mr.iid);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[MaintainerRunner] 获取 MR !${mr.iid} discussions 失败: ${message}`);
+    const firstNote = discussion.notes[0];
+    if (!firstNote) return;
+
+    // 如果本 discussion 正在交互式等待 Reviewer 回复，先处理新回复
+    const existingThread = state.interactiveThreads?.[discussion.id];
+    if (existingThread?.status === 'awaiting-reply') {
+      const askedAt = existingThread.askedAt;
+      const newReviewerNotes = discussion.notes.filter((note) => {
+        if (note.body.includes(maintainerSignature(maintainerName))) return false;
+        const noteTime = new Date(note.createdAt).getTime();
+        return !Number.isNaN(noteTime) && noteTime > askedAt;
+      });
+
+      if (newReviewerNotes.length === 0) {
+        console.log(`[MaintainerRunner] discussion ${discussion.id} 等待 Reviewer 回复中`);
+        return;
+      }
+
+      await this.handleInteractiveReply(
+        mr,
+        discussion,
+        brain,
+        actor,
+        worktreeManager,
+        maintainerName,
+        state
+      );
       return;
     }
 
-    for (const discussion of discussions) {
-      if (discussion.resolved || !discussion.resolvable) continue;
+    // 解析 finding
+    let findings: ReviewFinding[];
+    if (firstNote.body.includes('CodeKeeper Advance MR 评审 Agent')) {
+      findings = inferFindingsFromReviewSummary(firstNote.body);
+    } else {
+      const inferred = inferFindingFromDiscussion(firstNote.body, discussion.position);
+      findings = inferred ? [inferred] : [];
+    }
 
-      const firstNote = discussion.notes[0];
-      if (!firstNote) continue;
-
-      // 跳过自己创建的 discussion（以 CodeKeeper 签名判断）
-      if (firstNote.body.includes('CodeKeeper Advance MR 评审 Agent')) continue;
-
-      const inferred = inferFindingFromDiscussion(firstNote.body);
-      if (!inferred) {
-        try {
-          await provider.addDiscussionNote(
-            mr.iid,
-            discussion.id,
-            '👋 CodeKeeper 无法自动解析该讨论，需要人工处理。'
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[MaintainerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
-        }
-        continue;
-      }
-
-      const position = buildDiffPosition(inferred, diffs, shaInfo);
-      if (!position) {
-        try {
-          await provider.addDiscussionNote(
-            mr.iid,
-            discussion.id,
-            '👋 CodeKeeper 无法在当前 diff 中定位该问题，需要人工处理。'
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[MaintainerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
-        }
-        continue;
-      }
-
-      const finding: ReviewFinding = { ...inferred, autoFixable: false };
-      const fixResult = await fixAgent.processFinding(finding, mr);
-      if (fixResult.success) {
-        try {
-          await provider.resolveDiscussion(mr.iid, discussion.id);
-          await provider.addDiscussionNote(
-            mr.iid,
-            discussion.id,
-            '✅ CodeKeeper 已根据该讨论自动修复并推送至本分支。'
-          );
-          console.log(`[MaintainerRunner] 已修复他人 discussion ${discussion.id}`);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[MaintainerRunner] resolve 他人 discussion ${discussion.id} 失败: ${message}`);
-        }
+    // 无法从 body 解析时，若 position 提供了文件路径，则构造一个 synthetic finding
+    if (findings.length === 0) {
+      const fallbackFile = discussion.position?.newPath ?? discussion.position?.oldPath;
+      if (fallbackFile) {
+        console.log(
+          `[MaintainerRunner] discussion ${discussion.id} 无法从 body 解析 finding，使用 position 兜底`
+        );
+        findings = [
+          {
+            severity: 'MEDIUM',
+            file: fallbackFile,
+            line: discussion.position?.newLine ?? discussion.position?.oldLine ?? 1,
+            message: firstNote.body,
+            suggestion: firstNote.body,
+            autoFixable: false,
+          },
+        ];
       } else {
+        console.warn(`[MaintainerRunner] 无法从 discussion ${discussion.id} 解析 finding`);
         try {
           await provider.addDiscussionNote(
             mr.iid,
             discussion.id,
-            `⏸️ CodeKeeper 决定暂不自动修复：${fixResult.reason}`
+            `👋 ${maintainerName} 无法自动解析该 discussion，需要人工处理。\n\n${maintainerSignature(maintainerName)}`
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[MaintainerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
         }
+        return;
       }
     }
+
+    console.log(
+      `[MaintainerRunner] 从 discussion ${discussion.id} 解析到 ${findings.length} 个 finding`
+    );
+
+    // 单条 finding：直接交给 Actor 执行决策后的动作
+    if (findings.length === 1) {
+      const finding = findings[0];
+      const fileContent = await this.readDiscussionFileContent(
+        worktreeManager,
+        finding.file,
+        mr.sourceBranch
+      );
+      if (fileContent === null) {
+        console.warn(`[MaintainerRunner] 读取文件 ${finding.file} 失败，跳过`);
+        return;
+      }
+
+      const decision = await brain.decide({
+        finding,
+        fileContent,
+        originalComment: firstNote.body,
+      });
+      console.log(
+        `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
+      );
+
+      await actor.applyDecision(mr, discussion, finding, decision, state);
+      return;
+    }
+
+    // 多条 finding：逐个决策并执行修复，最后统一汇总回复
+    const fixedItems: string[] = [];
+    const failedItems: string[] = [];
+    const askedItems: Array<{ fileLine: string; text: string }> = [];
+    const ignoredItems: Array<{ fileLine: string; reason: string }> = [];
+
+    for (const finding of findings) {
+      const fileContent = await this.readDiscussionFileContent(
+        worktreeManager,
+        finding.file,
+        mr.sourceBranch
+      );
+      if (fileContent === null) {
+        failedItems.push(`${finding.file}:${finding.line} — 读取文件失败`);
+        continue;
+      }
+
+      const decision = await brain.decide({
+        finding,
+        fileContent,
+        originalComment: firstNote.body,
+      });
+      console.log(
+        `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
+      );
+
+      if (decision.action === 'ignore') {
+        ignoredItems.push({ fileLine: `${finding.file}:${finding.line}`, reason: decision.reason });
+        continue;
+      }
+
+      if (decision.action === 'ask') {
+        askedItems.push({
+          fileLine: `${finding.file}:${finding.line}`,
+          text: decision.question ?? decision.reason,
+        });
+        continue;
+      }
+
+      const fixResult = await fixAgent.executeFix(finding, mr);
+      console.log(
+        `[MaintainerRunner] finding ${finding.file}:${finding.line} 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`
+      );
+      if (fixResult.success) {
+        fixedItems.push(`${finding.file}:${finding.line}`);
+      } else {
+        failedItems.push(`${finding.file}:${finding.line} — ${fixResult.reason}`);
+      }
+    }
+
+    await actor.postSummary(
+      mr,
+      discussion,
+      fixedItems,
+      failedItems,
+      askedItems,
+      ignoredItems,
+      state
+    );
   }
+
+  /**
+   * 处理交互式 discussion 中 Reviewer 的新回复
+   */
+  private async handleInteractiveReply(
+    mr: MergeRequest,
+    discussion: Discussion,
+    brain: MaintainerBrain,
+    actor: MaintainerActor,
+    worktreeManager: WorktreeManager,
+    maintainerName: string,
+    state: MrAgentState
+  ): Promise<void> {
+    const thread = state.interactiveThreads[discussion.id];
+    const filePath = thread?.filePath;
+    if (!filePath) {
+      console.warn(`[MaintainerRunner] interactive thread ${discussion.id} 缺少 filePath，移除状态`);
+      delete state.interactiveThreads[discussion.id];
+      return;
+    }
+
+    const fileContent = await this.readDiscussionFileContent(worktreeManager, filePath, mr.sourceBranch);
+    if (fileContent === null) {
+      console.warn(`[MaintainerRunner] 读取文件 ${filePath} 失败，跳过交互回复处理`);
+      return;
+    }
+
+    const threadNotes = discussion.notes.map((note) => ({
+      author: note.author,
+      body: note.body,
+      createdAt: note.createdAt,
+    }));
+
+    console.log(`[MaintainerRunner] discussion ${discussion.id} 收到 Reviewer 回复，请求 LLM 决策`);
+    const decision = await brain.decideReply({
+      filePath,
+      fileContent,
+      threadNotes,
+      maintainerName,
+    });
+    console.log(`[MaintainerRunner] LLM 决策: action=${decision.action}`);
+
+    const syntheticFinding: ReviewFinding = {
+      severity: 'MEDIUM',
+      file: filePath,
+      line: 1,
+      message: decision.fixDescription ?? '根据 Reviewer 回复处理',
+      suggestion: decision.fixDescription ?? '根据 Reviewer 回复处理',
+      autoFixable: true,
+    };
+
+    await actor.applyDecision(mr, discussion, syntheticFinding, decision, state);
+  }
+
+  /**
+   * 读取 discussion 关联文件的内容
+   * 优先从 worktree 读取（确保能拿到 MR 分支最新文件），失败则回退原项目目录
+   */
+  private async readDiscussionFileContent(
+    worktreeManager: WorktreeManager,
+    filePath: string,
+    sourceBranch: string
+  ): Promise<string | null> {
+    try {
+      await worktreeManager.ensureWorktree();
+      await worktreeManager.checkoutBranch(sourceBranch);
+      return worktreeManager.readFile(filePath);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[MaintainerRunner] 从 worktree 读取 ${filePath} 失败: ${message}`);
+    }
+    return null;
+  }
+}
+
+/**
+ * Maintainer 签名，用于识别自己已处理过的 discussion
+ */
+function maintainerSignature(name: string): string {
+  return `— ${name}`;
 }

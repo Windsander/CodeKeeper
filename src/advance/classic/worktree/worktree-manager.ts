@@ -22,7 +22,11 @@ export interface WorktreeManagerOptions {
 
 async function defaultRunScript(script: string, cwd: string): Promise<{ success: boolean }> {
   try {
-    await execFileAsync('npm', ['run', script], { cwd });
+    // Windows 上 npm 是 .cmd 脚本，execFile 直接执行需要 shell 支持
+    await execFileAsync('npm', ['run', script], {
+      cwd,
+      shell: process.platform === 'win32',
+    });
     return { success: true };
   } catch (err) {
     logger.warn({ err, script }, `运行 ${script} 失败`);
@@ -38,11 +42,18 @@ async function defaultRunScript(script: string, cwd: string): Promise<{ success:
  */
 export class WorktreeManager {
   private readonly worktreePath: string;
-  private readonly git: SimpleGit;
+  private git?: SimpleGit;
 
   constructor(private readonly options: WorktreeManagerOptions) {
     this.worktreePath = this.resolveWorktreePath();
-    this.git = options.git ?? simpleGit(this.worktreePath);
+  }
+
+  /** 获取或创建 SimpleGit 实例（懒加载，确保 worktree 目录已存在） */
+  private getGit(): SimpleGit {
+    if (!this.git) {
+      this.git = this.options.git ?? simpleGit(this.worktreePath);
+    }
+    return this.git;
   }
 
   /** 获取工作区绝对路径 */
@@ -76,7 +87,13 @@ export class WorktreeManager {
     }
 
     logger.info({ projectId: this.options.projectId }, '更新 worktree');
-    await this.git.fetch('origin');
+    // 同步远程 URL，确保 token 更新后也能正常 fetch/push
+    try {
+      await this.getGit().remote(['set-url', 'origin', this.options.remoteUrl]);
+    } catch (err) {
+      logger.warn({ err, projectId: this.options.projectId }, '更新 worktree remote URL 失败');
+    }
+    await this.getGit().fetch('origin');
   }
 
   /**
@@ -85,10 +102,10 @@ export class WorktreeManager {
    * 分支名格式为 `codekeeper-fix/{sourceBranch}-{timestamp}`。
    */
   async createFixBranch(sourceBranch: string): Promise<string> {
-    await this.git.fetch('origin', sourceBranch);
+    await this.getGit().fetch('origin', sourceBranch);
     const timestamp = Date.now();
     const branchName = `codekeeper-fix/${sourceBranch}-${timestamp}`;
-    await this.git.checkoutBranch(branchName, `origin/${sourceBranch}`);
+    await this.getGit().checkoutBranch(branchName, `origin/${sourceBranch}`);
     return branchName;
   }
 
@@ -110,8 +127,8 @@ export class WorktreeManager {
    * 先从 origin 拉取最新状态，再 checkout。
    */
   async checkoutBranch(branchName: string): Promise<void> {
-    await this.git.fetch('origin', branchName);
-    await this.git.checkout(['-B', branchName, `origin/${branchName}`]);
+    await this.getGit().fetch('origin', branchName);
+    await this.getGit().checkout(['-B', branchName, `origin/${branchName}`]);
   }
 
   /**
@@ -124,24 +141,24 @@ export class WorktreeManager {
     message: string,
     options?: { setUpstream?: boolean }
   ): Promise<void> {
-    await this.git.add('.');
-    const status = await this.git.status();
+    await this.getGit().add('.');
+    const status = await this.getGit().status();
     if (status.files.length === 0) {
       logger.info({ branchName }, 'worktree 无变更，跳过提交');
       return;
     }
-    await this.git.commit(message);
+    await this.getGit().commit(message);
     if (options?.setUpstream ?? true) {
-      await this.git.push('origin', branchName, ['--set-upstream']);
+      await this.getGit().push('origin', branchName, ['--set-upstream']);
     } else {
-      await this.git.push('origin', branchName);
+      await this.getGit().push('origin', branchName);
     }
   }
 
   /** 强制删除本地分支 */
   async cleanupBranch(branchName: string): Promise<void> {
     try {
-      await this.git.deleteLocalBranch(branchName, true);
+      await this.getGit().deleteLocalBranch(branchName, true);
     } catch (err) {
       logger.warn({ err, branchName }, '清理本地分支失败');
     }

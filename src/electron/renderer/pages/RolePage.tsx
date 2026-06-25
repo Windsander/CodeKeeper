@@ -226,14 +226,6 @@ export function RolePage({ role }: RolePageProps) {
   const toggleRoleEnabled = async (project: Project) => {
     const roleConfig = getRoleConfig(project, role);
     const nextEnabled = !roleConfig?.enabled;
-    const gitlab = project.gitlab;
-    const missingConfig =
-      nextEnabled &&
-      (!gitlab?.baseUrl || !gitlab?.projectPath || !gitlab?.token);
-    if (missingConfig) {
-      setExpandedId(project.id);
-      return;
-    }
     try {
       await invoke('project.role.config.update', {
         projectId: project.id,

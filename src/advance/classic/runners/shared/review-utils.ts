@@ -62,6 +62,8 @@ export function formatFindingDiscussionBody(finding: ReviewFinding): string {
     ``,
     `**修改建议：**`,
     finding.suggestion,
+    ``,
+    `*CodeKeeper Advance MR 评审 Agent*`,
   ].join('\n');
 }
 

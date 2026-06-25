@@ -54,7 +54,7 @@ export class Daemon {
     this.serviceRegistry = new RoleServiceRegistry(
       // 先创建占位 context，等 scanService 初始化后再补全
       {} as HandlerContext,
-      path.join(__dirname, 'agent-entries', 'role-entry.js')
+      path.join(__dirname, 'classic', 'agent-entries', 'role-entry.js')
     );
     for (const role of ROLES) {
       this.serviceRegistry.register(role);
@@ -70,6 +70,7 @@ export class Daemon {
         provider: this.options.provider ?? 'anthropic',
         model: this.options.model ?? '',
         headers: this.options.headers ?? {},
+        llmRequestsPerMinute: this.options.llmRequestsPerMinute ?? 10,
       }),
       maxEventsPerScan: this.options.maxEventsPerScan,
     });
@@ -78,6 +79,7 @@ export class Daemon {
       store: options.store,
       registry: options.registry,
       serviceRegistry: this.serviceRegistry,
+      dbPath: options.dbPath,
       scanService: this.scanService,
       getProvider: (project) => {
         if (project.gitlab) {
@@ -128,11 +130,14 @@ export class Daemon {
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
     // MR Agent 调度服务（ClassicService）不随 daemon 启动，由 UI 的“启动服务”按钮控制。
     setImmediate(() => {
-      const projects = this.options.registry.list();
-      // 错开每个项目 watcher 的启动时间，避免多个 chokidar 同时扫描目录阻塞事件循环
-      projects.forEach((project, index) => {
-        setTimeout(() => this.watchProject(project), index * 500);
-      });
+      // 进一步延迟 watcher 启动 3 秒，避免 App 启动瞬间的 IO 峰值阻塞主进程事件循环
+      setTimeout(() => {
+        const projects = this.options.registry.list();
+        // 错开每个项目 watcher 的启动时间，避免多个 chokidar 同时扫描目录阻塞事件循环
+        projects.forEach((project, index) => {
+          setTimeout(() => this.watchProject(project), index * 500);
+        });
+      }, 3000);
     });
 
     const cron = this.options.scanCron ?? '*/5 * * * *';

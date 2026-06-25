@@ -73,6 +73,15 @@ export class GitLabProvider implements IGitProvider {
     return branches.map((b) => b.name);
   }
 
+  async listBranches(): Promise<string[]> {
+    const branches = await this.client.listBranches();
+    return branches.map((b) => b.name);
+  }
+
+  async verify(): Promise<void> {
+    await this.client.verifyProject();
+  }
+
   constructor(config: GitlabConfig) {
     // 构造最小化的 ProjectConfig 对象，满足 GitLabClient 构造要求
     // id / name / localPath 为占位值，gitlab 配置使用真实值
@@ -276,14 +285,23 @@ export class GitLabProvider implements IGitProvider {
       )
       .map((d) => ({
         id: d.id,
-        resolvable: d.resolvable,
-        resolved: d.resolved,
+        // 某些 GitLab 实例/版本对普通 note discussion 不返回 resolvable/resolved，默认视为可处理
+        resolvable: d.resolvable ?? true,
+        resolved: d.resolved ?? false,
         notes: d.notes.map((note) => ({
           author: note.author.username,
           body: note.body,
           createdAt: note.created_at,
           resolved: note.resolved ?? false,
         })),
+        position: d.position
+          ? {
+              newPath: d.position.new_path,
+              newLine: d.position.new_line,
+              oldPath: d.position.old_path,
+              oldLine: d.position.old_line,
+            }
+          : undefined,
       }));
   }
 

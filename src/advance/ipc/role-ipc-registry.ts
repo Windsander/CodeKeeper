@@ -35,7 +35,8 @@ export function registerRoleIPCHandlers(context: RoleIPCContext): void {
   ipc.handle('project.role.config.get', async (_event, { projectId, role }: { projectId: string; role: Role }) => {
     const manager = managers.get(role);
     if (!manager) throw new Error(`未知角色: ${role}`);
-    return manager.getConfig(projectId);
+    const config = await manager.getConfig(projectId);
+    return { config };
   });
 
   ipc.handle('project.role.config.update', async (_event, { projectId, role, config }: { projectId: string; role: Role; config: RoleConfig }) => {
@@ -64,10 +65,9 @@ export function registerRoleIPCHandlers(context: RoleIPCContext): void {
 
   ipc.handle('role.service.restart', async (_event, { role, projectId }: { role: Role; projectId?: string }) => {
     if (projectId) {
-      serviceRegistry.restartProject(role, projectId);
+      await serviceRegistry.restartProject(role, projectId);
     } else {
-      serviceRegistry.stop(role);
-      serviceRegistry.start(role);
+      await serviceRegistry.restartProject(role, '');
     }
     return { success: true };
   });

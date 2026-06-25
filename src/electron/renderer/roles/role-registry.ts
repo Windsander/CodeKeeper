@@ -11,9 +11,9 @@ type RoleConfigOf<R extends Role> = R extends 'reviewer'
     : never;
 
 /**
- * 字段类型：文本输入、开关、定时调度
+ * 字段类型：文本输入、开关、定时调度、风险等级多选
  */
-export type FieldType = 'text' | 'toggle' | 'schedule';
+export type FieldType = 'text' | 'toggle' | 'schedule' | 'risk-levels';
 
 /**
  * 角色字段配置：描述 UI 中一个配置项的元数据

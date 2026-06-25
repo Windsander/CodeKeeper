@@ -223,8 +223,8 @@ export class MetadataStore {
        ON CONFLICT(id) DO UPDATE SET
          archive_root = excluded.archive_root,
          name = excluded.name,
-         gitlab_config = excluded.gitlab_config,
-         roles_config = excluded.roles_config`
+         gitlab_config = COALESCE(excluded.gitlab_config, projects.gitlab_config),
+         roles_config = COALESCE(excluded.roles_config, projects.roles_config)`
     );
     stmt.run(
       project.id,
@@ -234,7 +234,7 @@ export class MetadataStore {
       project.registeredAt,
       project.lastScannedAt,
       project.gitlab ? JSON.stringify(project.gitlab) : null,
-      project.roles ? JSON.stringify(project.roles) : '{}'
+      project.roles ? JSON.stringify(project.roles) : null
     );
   }
 
@@ -779,7 +779,7 @@ export class MetadataStore {
 
   getRoleEnabledProjects(role: Role): Project[] {
     return this.listProjects().filter(
-      (p) => p.gitlab !== undefined && (p.roles?.[role]?.enabled === true)
+      (p) => p.gitlab !== null && p.roles?.[role]?.enabled === true
     );
   }
 

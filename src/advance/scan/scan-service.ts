@@ -25,6 +25,7 @@ export interface ScanServiceOptions {
     provider: 'anthropic' | 'openai';
     model: string;
     headers: Record<string, string>;
+    llmRequestsPerMinute: number;
   };
   /** 每次扫描最多处理事件数 */
   maxEventsPerScan?: number;
@@ -110,10 +111,10 @@ export class ScanService {
     this.child = child;
 
     child.stdout?.on('data', (data) => {
-      logger.info({ msg: data.toString().trim() }, '[Scan Worker]');
+      logger.info({ output: data.toString().trim() }, '[Scan Worker]');
     });
     child.stderr?.on('data', (data) => {
-      logger.warn({ msg: data.toString().trim() }, '[Scan Worker]');
+      logger.warn({ output: data.toString().trim() }, '[Scan Worker]');
     });
 
     child.on('message', (msg: ScanWorkerMessage) => {

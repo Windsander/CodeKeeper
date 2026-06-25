@@ -1,17 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '../api/electron-api';
-import { useIpc } from '../hooks/useIpc';
 import { Dropdown } from '../components/Dropdown';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { getRoleUI, type RoleFieldConfig } from '../roles/role-registry.js';
-import type { Role, RoleConfig, Project, GitlabConfig } from '../../shared/types.js';
-
-interface ClassicStatus {
-  running: boolean;
-  enabledProjects: number;
-  runningProjects: string[];
-}
+import type { Role, RoleConfig, Project, GitlabConfig, MaintainerConfig } from '../../shared/types.js';
 
 type FilterField = 'author' | 'assignee' | 'reviewer' | 'label' | 'sourceBranch' | 'targetBranch' | 'draft';
 
@@ -64,6 +57,13 @@ const DRAFT_OPTIONS = [
   { value: 'false', label: '否' },
 ];
 
+const RISK_LEVEL_OPTIONS = [
+  { value: 'LOW', label: '低' },
+  { value: 'MEDIUM', label: '中' },
+  { value: 'HIGH', label: '高' },
+  { value: 'CRITICAL', label: '致命' },
+] as const;
+
 function buildGitlabUrl(gitlab?: GitlabConfig | null): string {
   if (!gitlab || !gitlab.baseUrl) return '';
   const base = gitlab.baseUrl.replace(/\/$/, '');
@@ -100,6 +100,12 @@ function getAutocompleteOptions(
   }
 }
 
+function configsEqualIgnoringFilter(a: RoleConfig, b: RoleConfig): boolean {
+  const { filter: _a, ...restA } = a;
+  const { filter: _b, ...restB } = b;
+  return JSON.stringify(restA) === JSON.stringify(restB);
+}
+
 /**
  * 角色项目配置面板
  *
@@ -109,11 +115,16 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   const ui = getRoleUI(role);
   const gitlab = project.gitlab ?? DEFAULT_GITLAB;
 
-  const { data: serviceStatus } = useIpc<ClassicStatus>('role.service.status', { role });
-
   const [gitlabUrl, setGitlabUrl] = useState(buildGitlabUrl(gitlab));
   const [token, setToken] = useState(gitlab.token);
   const [showToken, setShowToken] = useState(false);
+
+  // 当 project.gitlab 从外部更新时（如首次打开 App 后项目数据才加载完成），同步输入框状态
+  useEffect(() => {
+    const updatedGitlab = project.gitlab ?? DEFAULT_GITLAB;
+    setGitlabUrl(buildGitlabUrl(updatedGitlab));
+    setToken(updatedGitlab.token);
+  }, [project.gitlab?.baseUrl, project.gitlab?.projectPath, project.gitlab?.token]);
 
   const [config, setConfig] = useState<RoleConfig>(() => ui.defaultConfig);
   const [filterConditions, setFilterConditions] = useState<FilterCondition[]>([]);
@@ -121,7 +132,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   const [members, setMembers] = useState<Array<{ username: string; name?: string }>>([]);
   const [labels, setLabels] = useState<string[]>([]);
   const [protectedBranches, setProtectedBranches] = useState<string[]>([]);
-  const [allBranches, setAllBranches] = useState<string[]>([]);
+  const [branches, setBranches] = useState<string[]>([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
 
   const [soulContent, setSoulContent] = useState('');
@@ -132,20 +143,58 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   const [detecting, setDetecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [tokenError, setTokenError] = useState(false);
 
   const reviewSchedule = config.reviewSchedule;
   const learningEnabled = config.learningEnabled;
   const isCustom = !REVIEW_INTERVALS.some((i) => i.cron === reviewSchedule && i.cron !== 'custom');
   const [customSchedule, setCustomSchedule] = useState(reviewSchedule);
 
-  // 加载角色配置
+  const parsedGitlab = parseGitlabUrl(gitlabUrl);
+  const isGitlabValid = Boolean(parsedGitlab);
+  // 基于已保存的配置判断 Git 仓库是否已配置（URL 和 token 都非空）
+  const isGitlabConfigured = Boolean(
+    project.gitlab?.baseUrl && project.gitlab?.projectPath && project.gitlab?.token
+  );
+  const isFilterConfigured = filterConditions.length > 0;
+  // 当前输入框中的 GitLab 配置是否与已保存的一致
+  const currentGitlabConfig = parsedGitlab
+    ? { baseUrl: parsedGitlab.baseUrl, projectPath: parsedGitlab.projectPath, token: token.trim() }
+    : null;
+  const savedGitlabConfig = project.gitlab
+    ? {
+        baseUrl: project.gitlab.baseUrl.replace(/\/$/, ''),
+        projectPath: project.gitlab.projectPath.replace(/^\//, '').replace(/\.git$/, ''),
+        token: project.gitlab.token,
+      }
+    : null;
+  const isGitlabDirty = JSON.stringify(currentGitlabConfig) !== JSON.stringify(savedGitlabConfig);
+  // GitLab 已保存且当前输入未修改，其他组才可使用
+  const isGitlabReady = isGitlabConfigured && !isGitlabDirty;
+
+  // 各组展开状态（受控）：已配 Git 则默认折叠，未配则 Git 仓库展开
+  const [gitExpanded, setGitExpanded] = useState(!isGitlabReady);
+  const [filterExpanded, setFilterExpanded] = useState(false);
+  const [agentExpanded, setAgentExpanded] = useState(false);
+  const [soulExpanded, setSoulExpanded] = useState(false);
+
+  const isAgentDefault = configsEqualIgnoringFilter(config, ui.defaultConfig);
+  const soulConfigStatus =
+    soulContent.trim().length === 0
+      ? 'none'
+      : soulContent.trim() === ui.defaultSoulTemplate.trim()
+        ? 'partial'
+        : 'full';
+
+  // 加载角色配置（缺失字段用默认值补齐，方便新增配置项时向后兼容）
   useEffect(() => {
     let cancelled = false;
     invoke<{ config: RoleConfig }>('project.role.config.get', { projectId: project.id, role })
       .then((res) => {
         if (cancelled) return;
         const loaded = res.config;
-        setConfig(loaded);
+        const merged = { ...ui.defaultConfig, ...loaded };
+        setConfig(merged);
         setFilterConditions(loaded.filter?.conditions ?? []);
         setCustomSchedule(loaded.reviewSchedule);
       })
@@ -156,7 +205,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
     return () => {
       cancelled = true;
     };
-  }, [project.id, role]);
+  }, [project.id, role, ui.defaultConfig]);
 
   // 加载 Soul 内容
   useEffect(() => {
@@ -181,31 +230,61 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
     };
   }, [project.id]);
 
-  // 加载过滤提示数据
+  // 打开配置面板时校验 GitLab Token：若过期/无效则展开 Git 仓库组并红色闪烁提示
   useEffect(() => {
+    if (!isGitlabConfigured || !project.gitlab) return;
     let cancelled = false;
-    setSuggestLoading(true);
-    Promise.all([
-      invoke('project.members', { projectId: project.id }),
-      invoke('project.labels', { projectId: project.id }),
-      invoke('project.protected-branches', { projectId: project.id }),
-      invoke('project.branches', { projectId: project.id }),
-    ])
-      .then(([membersRes, labelsRes, protectedRes, branchesRes]) => {
-        if (cancelled) return;
-        setMembers((membersRes as { members: Array<{ username: string; name?: string }> }).members);
-        setLabels((labelsRes as { labels: string[] }).labels);
-        setProtectedBranches((protectedRes as { branches: string[] }).branches);
-        setAllBranches((branchesRes as { branches: string[] }).branches);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        console.error('加载过滤提示数据失败:', err);
-      })
-      .finally(() => {
-        if (!cancelled) setSuggestLoading(false);
-      });
+    invoke('project.gitlab.verify', {
+      projectId: project.id,
+      gitlab: project.gitlab,
+    }).catch((err) => {
+      if (cancelled) return;
+      const message = err instanceof Error ? err.message : String(err);
+      if (/\b(401|403)\b/.test(message)) {
+        setGitExpanded(true);
+        setTokenError(true);
+        setTimeout(() => setTokenError(false), 2000);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [project.id]);
+
+  // 当已保存的 Git 配置被修改（isGitlabReady 从 true 变 false）时，自动展开 Git 仓库组
+  const prevGitlabReadyRef = useRef(isGitlabReady);
+  useEffect(() => {
+    if (prevGitlabReadyRef.current && !isGitlabReady) {
+      setGitExpanded(true);
+    }
+    prevGitlabReadyRef.current = isGitlabReady;
+  }, [isGitlabReady]);
+
+  // 加载过滤提示数据
+  const loadSuggestions = useCallback(async () => {
+    setSuggestLoading(true);
+    try {
+      const [membersRes, labelsRes, protectedBranchesRes, branchesRes] = await Promise.all([
+        invoke('project.members', { projectId: project.id }),
+        invoke('project.labels', { projectId: project.id }),
+        invoke('project.protected-branches', { projectId: project.id }),
+        invoke('project.branches', { projectId: project.id }),
+      ]);
+      setMembers((membersRes as { members: Array<{ username: string; name?: string }> }).members);
+      setLabels((labelsRes as { labels: string[] }).labels);
+      setProtectedBranches((protectedBranchesRes as { branches: string[] }).branches);
+      setBranches((branchesRes as { branches: string[] }).branches);
+    } catch (err) {
+      console.error('加载过滤提示数据失败:', err);
+    } finally {
+      setSuggestLoading(false);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    if (!isGitlabReady) return;
+    loadSuggestions();
+  }, [isGitlabReady, loadSuggestions]);
 
   const handleIntervalChange = (value: string) => {
     if (value === 'custom') {
@@ -343,6 +422,34 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
           </div>
         );
       }
+      case 'risk-levels': {
+        const levels = Array.isArray(value) ? (value as string[]) : [];
+        return (
+          <div key={String(field.key)} className="form-group">
+            <label>{field.label}</label>
+            <div className="form-row" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+              {RISK_LEVEL_OPTIONS.map((opt) => (
+                <label key={opt.value} className="form-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={levels.includes(opt.value)}
+                    onChange={() => {
+                      const next = levels.includes(opt.value)
+                        ? levels.filter((v) => v !== opt.value)
+                        : [...levels, opt.value];
+                      updateConfigField(
+                        field.key as keyof RoleConfig,
+                        next as unknown as RoleConfig[keyof RoleConfig]
+                      );
+                    }}
+                  />
+                  <span>{opt.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      }
       default:
         return null;
     }
@@ -352,27 +459,61 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
     setSaving(true);
     setError(null);
     setSaved(false);
+    setTokenError(false);
+
+    const parsed = parseGitlabUrl(gitlabUrl);
+    if (!parsed) {
+      setSaving(false);
+      setError('GitLab 项目 URL 格式不正确，示例：https://gitlab.com/group/project');
+      return;
+    }
+    if (!token.trim()) {
+      setSaving(false);
+      setTokenError(true);
+      setTimeout(() => setTokenError(false), 2000);
+      return;
+    }
+
     try {
-      const parsed = parseGitlabUrl(gitlabUrl);
-      if (!parsed) {
-        throw new Error('GitLab 项目 URL 格式不正确，示例：https://gitlab.com/group/project');
-      }
+      const gitlabConfig = {
+        baseUrl: parsed.baseUrl,
+        projectPath: parsed.projectPath,
+        token: token.trim(),
+        defaultBranch: 'main',
+      };
+
+      // 先验证 GitLab 配置可用，验证通过后再落库，避免无效配置污染数据库
+      await invoke('project.gitlab.verify', {
+        projectId: project.id,
+        gitlab: gitlabConfig,
+      });
+
       await invoke('project.gitlab.config.update', {
         projectId: project.id,
-        gitlab: {
-          baseUrl: parsed.baseUrl,
-          projectPath: parsed.projectPath,
-          token: token.trim(),
-          defaultBranch: 'main',
-        },
+        gitlab: gitlabConfig,
       });
+
+      await loadSuggestions();
+
+      // 从 project 中读取当前启用状态，避免保存时覆盖用户在卡片上切换的启停开关
+      const currentEnabled = project.roles?.[role]?.enabled ?? false;
 
       const nextConfig: RoleConfig = {
         ...config,
+        enabled: currentEnabled,
         reviewSchedule: reviewSchedule.trim(),
         learningEnabled,
         filter: { conditions: filterConditions },
       };
+
+      // 自动维护角色强制开启自动修复，并补齐风险等级默认值
+      if (role === 'maintainer') {
+        const mc = config as MaintainerConfig;
+        (nextConfig as MaintainerConfig).autoFixEnabled = true;
+        (nextConfig as MaintainerConfig).autoFixRiskLevels = Array.isArray(mc.autoFixRiskLevels)
+          ? mc.autoFixRiskLevels
+          : ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+      }
 
       await invoke('project.role.config.update', {
         projectId: project.id,
@@ -386,27 +527,35 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
       });
 
       setSaved(true);
+      // 保存成功后只折叠 Git 仓库组，其他组保持当前折叠状态
+      setGitExpanded(false);
       onSaved();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      if (/\b(401|403)\b/.test(message)) {
+        setTokenError(true);
+        setTimeout(() => setTokenError(false), 2000);
+      }
     } finally {
       setSaving(false);
     }
   };
 
-  const isGitlabValid = Boolean(parseGitlabUrl(gitlabUrl));
   const displaySoulFileName = ui.soulFileName;
 
   return (
     <div className="card" style={{ marginTop: 16, background: 'var(--main-bg)' }}>
       {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
-      {saved && serviceStatus?.running && (
-        <div className="project-meta" style={{ marginBottom: 16, color: 'var(--success)' }}>
-          配置已保存，对应项目的 Agent 将自动重启以应用新配置。
-        </div>
-      )}
 
-      <CollapsibleSection title="Git 仓库">
+      <CollapsibleSection
+        title="Git 仓库"
+        defaultExpanded={true}
+        expanded={gitExpanded}
+        onToggle={() => setGitExpanded((prev) => !prev)}
+        collapsible={isGitlabReady}
+        headerExtra={isGitlabReady ? <span className="badge badge-info">已配置</span> : null}
+      >
         <div className="form-group">
           <label>GitLab 项目 URL</label>
           <div className="form-row">
@@ -429,17 +578,20 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
 
         <div className="form-group">
           <label>Access Token</label>
-          <div className="input-group">
+          <div className="input-wrapper">
             <input
               type={showToken ? 'text' : 'password'}
-              className="input"
+              className={`input input-with-btn ${tokenError ? 'input-error input-flash' : ''}`}
               value={token}
               placeholder="请输入 GitLab Access Token"
-              onChange={(e) => setToken(e.target.value)}
+              onChange={(e) => {
+                setToken(e.target.value);
+                if (tokenError) setTokenError(false);
+              }}
             />
             <button
               type="button"
-              className="input-group-btn"
+              className="input-inline-btn"
               onClick={() => setShowToken((prev) => !prev)}
               aria-label={showToken ? '隐藏 Access Token' : '显示 Access Token'}
               title={showToken ? '隐藏' : '显示'}
@@ -457,149 +609,189 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               )}
             </button>
           </div>
-          <div className="project-meta" style={{ marginTop: 6 }}>
-            需要 api、read_repository、write_repository 权限以读取 MR 并发表评论
+          <div className={`input-hint ${tokenError ? 'input-hint-error' : ''}`} style={{ marginTop: 6 }}>
+            {tokenError
+              ? 'Access Token 不能为空'
+              : '需要 api、read_repository、write_repository 权限以读取 MR 并发表评论'}
           </div>
         </div>
       </CollapsibleSection>
 
-      <CollapsibleSection title="过滤条件">
-        {filterConditions.length === 0 && (
-          <div className="project-meta" style={{ marginBottom: 12 }}>
-            未设置过滤条件，将处理所有开放 MR
-          </div>
-        )}
-        {filterConditions.map((condition, index) => (
-          <div
-            key={index}
-            className="form-row filter-condition-row"
-            style={{ marginBottom: 8, alignItems: 'center' }}
+      {isGitlabReady && (
+        <>
+          <CollapsibleSection
+            title="过滤条件"
+            defaultExpanded={false}
+            expanded={filterExpanded}
+            onToggle={() => setFilterExpanded((prev) => !prev)}
+            headerExtra={
+              <span className={`badge ${isFilterConfigured ? 'badge-success' : 'badge-warning'}`}>
+                {isFilterConfigured ? '有过滤' : '无过滤'}
+              </span>
+            }
           >
-            <Dropdown
-              value={condition.field}
-              options={FILTER_FIELD_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-              onChange={(value) => updateFilterField(index, value as FilterField)}
-              className="filter-field-dropdown"
-            />
-            {condition.field === 'draft' ? (
-              <Dropdown
-                value={condition.values[0] ?? 'false'}
-                options={DRAFT_OPTIONS}
-                onChange={(value) => updateDraftValue(index, value)}
-              />
-            ) : condition.field === 'sourceBranch' || condition.field === 'targetBranch' ? (
-              <AutocompleteInput
-                value={condition.values[0] ?? ''}
-                options={condition.field === 'sourceBranch' ? allBranches : protectedBranches}
-                placeholder={condition.field === 'sourceBranch' ? '输入源分支名称' : '输入目标分支名称'}
-                loading={suggestLoading}
-                onChange={(value) => updateFilterValues(index, value)}
-              />
-            ) : (
-              <AutocompleteInput
-                value={condition.values.join(', ')}
-                options={getAutocompleteOptions(condition.field, members, labels)}
-                placeholder={
-                  condition.field === 'label'
-                    ? '输入标签，多个用英文逗号分隔'
-                    : '输入用户名，多个用英文逗号分隔'
-                }
-                loading={suggestLoading}
-                onChange={(value) => updateFilterValues(index, value)}
-              />
+            {filterConditions.length === 0 && (
+              <div className="project-meta" style={{ marginBottom: 12 }}>
+                未设置过滤条件，将处理所有开放 MR
+              </div>
             )}
-            <button
-              type="button"
-              className="btn btn-danger btn-sm"
-              onClick={() => removeFilterCondition(index)}
-            >
-              删除
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className="btn btn-primary btn-sm"
-          onClick={addFilterCondition}
-        >
-          + 添加条件
-        </button>
-      </CollapsibleSection>
-
-      <CollapsibleSection title="Agent 策略">
-        <div className="form-group">
-          <label>启用状态</label>
-          <Dropdown
-            value={config.enabled ? 'on' : 'off'}
-            options={[
-              { value: 'on', label: '启用' },
-              { value: 'off', label: '禁用' },
-            ]}
-            onChange={(value) => updateConfigField('enabled', value === 'on')}
-          />
-        </div>
-
-        <div className="form-group">
-          <label>自动学习模式</label>
-          <Dropdown
-            value={learningEnabled ? 'on' : 'off'}
-            options={LEARNING_OPTIONS}
-            onChange={(value) => updateConfigField('learningEnabled', value === 'on')}
-          />
-          <div className="project-meta" style={{ marginTop: 6 }}>
-            开启后，Agent 会从人工 review、resolve/comment 行为中学习并优化后续策略。
-          </div>
-        </div>
-
-        <div className="form-group">
-          <label>调度间隔</label>
-          <Dropdown
-            value={isCustom ? 'custom' : reviewSchedule}
-            options={REVIEW_INTERVALS.map((i) => ({ value: i.cron, label: i.label }))}
-            onChange={(value) => handleIntervalChange(value)}
-          />
-          {isCustom && (
-            <input
-              className="input"
-              style={{ marginTop: 8 }}
-              value={customSchedule}
-              placeholder="*/10 * * * *"
-              onChange={(e) => handleCustomScheduleChange(e.target.value)}
-            />
-          )}
-          <div className="project-meta" style={{ marginTop: 6 }}>
-            当前 cron: {reviewSchedule}
-          </div>
-        </div>
-
-        {ui.projectConfigFields.map(renderRoleField)}
-      </CollapsibleSection>
-
-      <CollapsibleSection title={`Agent 个性配置（${displaySoulFileName}）`}>
-        <div className="form-group">
-          <div className="form-row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <label style={{ marginBottom: 0 }}>SOUL.md 内容</label>
+            {filterConditions.map((condition, index) => (
+              <div
+                key={index}
+                className="form-row filter-condition-row"
+                style={{ marginBottom: 8, alignItems: 'center' }}
+              >
+                <Dropdown
+                  value={condition.field}
+                  options={FILTER_FIELD_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                  onChange={(value) => updateFilterField(index, value as FilterField)}
+                  className="filter-field-dropdown"
+                />
+                {condition.field === 'draft' ? (
+                  <Dropdown
+                    value={condition.values[0] ?? 'false'}
+                    options={DRAFT_OPTIONS}
+                    onChange={(value) => updateDraftValue(index, value)}
+                  />
+                ) : condition.field === 'sourceBranch' ? (
+                  <AutocompleteInput
+                    value={condition.values[0] ?? ''}
+                    options={branches}
+                    placeholder="输入分支名，如 feature/my-branch"
+                    loading={suggestLoading}
+                    onChange={(value) => updateFilterValues(index, value)}
+                  />
+                ) : condition.field === 'targetBranch' ? (
+                  <Dropdown
+                    value={condition.values[0] ?? ''}
+                    options={protectedBranches.map((b) => ({ value: b, label: b }))}
+                    onChange={(value) => updateFilterValues(index, value)}
+                  />
+                ) : (
+                  <AutocompleteInput
+                    value={condition.values.join(', ')}
+                    options={getAutocompleteOptions(condition.field, members, labels)}
+                    placeholder={
+                      condition.field === 'label'
+                        ? '输入标签，多个用英文逗号分隔'
+                        : '输入用户名，多个用英文逗号分隔'
+                    }
+                    loading={suggestLoading}
+                    onChange={(value) => updateFilterValues(index, value)}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  onClick={() => removeFilterCondition(index)}
+                >
+                  删除
+                </button>
+              </div>
+            ))}
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              onClick={applySoulTemplate}
-              disabled={soulLoading}
+              onClick={addFilterCondition}
             >
-              使用默认模板
+              + 添加条件
             </button>
-          </div>
-          <textarea
-            className="input"
-            style={{ minHeight: 240, fontFamily: 'monospace', lineHeight: 1.5, resize: 'vertical' }}
-            value={soulContent}
-            placeholder="# Agent 个性配置&#10;## 风格&#10;..."
-            onChange={(e) => setSoulContent(e.target.value)}
-          />
-          <div className="project-meta" style={{ marginTop: 6 }}>
-            保存位置: {soulSourcePath}
-          </div>
-        </div>
-      </CollapsibleSection>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="Agent 策略"
+            defaultExpanded={false}
+            expanded={agentExpanded}
+            onToggle={() => setAgentExpanded((prev) => !prev)}
+            headerExtra={
+              <span className={`badge ${isAgentDefault ? 'badge-info' : 'badge-success'}`}>
+                {isAgentDefault ? '默认值' : '已配置'}
+              </span>
+            }
+          >
+            {ui.projectConfigFields.map(renderRoleField)}
+
+            <div className="form-group">
+              <label>自动学习模式</label>
+              <Dropdown
+                value={learningEnabled ? 'on' : 'off'}
+                options={LEARNING_OPTIONS}
+                onChange={(value) => updateConfigField('learningEnabled', value === 'on')}
+              />
+              <div className="project-meta" style={{ marginTop: 6 }}>
+                开启后，Agent 会从人工 review、resolve/comment 行为中学习并优化后续策略。
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>调度间隔</label>
+              <Dropdown
+                value={isCustom ? 'custom' : reviewSchedule}
+                options={REVIEW_INTERVALS.map((i) => ({ value: i.cron, label: i.label }))}
+                onChange={(value) => handleIntervalChange(value)}
+              />
+              {isCustom && (
+                <input
+                  className="input"
+                  style={{ marginTop: 8 }}
+                  value={customSchedule}
+                  placeholder="*/10 * * * *"
+                  onChange={(e) => handleCustomScheduleChange(e.target.value)}
+                />
+              )}
+              <div className="project-meta" style={{ marginTop: 6 }}>
+                当前 cron: {reviewSchedule}
+              </div>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title={`Agent 个性配置（${displaySoulFileName}）`}
+            defaultExpanded={false}
+            expanded={soulExpanded}
+            onToggle={() => setSoulExpanded((prev) => !prev)}
+            headerExtra={
+              <span
+                className={`badge ${
+                  soulConfigStatus === 'full'
+                    ? 'badge-success'
+                    : 'badge-warning'
+                }`}
+              >
+                {soulConfigStatus === 'full'
+                  ? '有设定'
+                  : soulConfigStatus === 'partial'
+                    ? '仅部分'
+                    : '无设定'}
+              </span>
+            }
+          >
+            <div className="form-group">
+              <div className="form-row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <label style={{ marginBottom: 0 }}>SOUL.md 内容</label>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={applySoulTemplate}
+                  disabled={soulLoading}
+                >
+                  使用默认模板
+                </button>
+              </div>
+              <textarea
+                className="input"
+                style={{ minHeight: 240, fontFamily: 'monospace', lineHeight: 1.5, resize: 'vertical' }}
+                value={soulContent}
+                placeholder="# Agent 个性配置&#10;## 风格&#10;..."
+                onChange={(e) => setSoulContent(e.target.value)}
+              />
+              <div className="project-meta" style={{ marginTop: 6 }}>
+                保存位置: {soulSourcePath}
+              </div>
+            </div>
+          </CollapsibleSection>
+        </>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <button

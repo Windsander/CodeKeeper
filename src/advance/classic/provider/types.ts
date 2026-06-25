@@ -110,6 +110,23 @@ export interface ReviewResult {
 }
 
 /**
+ * MR discussion（讨论线程）
+ */
+export interface Discussion {
+  id: string;
+  resolvable: boolean;
+  resolved: boolean;
+  notes: ReviewerComment[];
+  /** diff discussion 的代码位置信息（可选） */
+  position?: {
+    newPath: string;
+    newLine?: number;
+    oldPath?: string;
+    oldLine?: number;
+  };
+}
+
+/**
  * 合并选项
  */
 export interface MergeOptions {
@@ -162,6 +179,12 @@ export interface IGitProvider {
   /** 列出项目保护分支 */
   listProtectedBranches(): Promise<string[]>;
 
+  /** 列出项目所有分支 */
+  listBranches(): Promise<string[]>;
+
+  /** 验证当前仓库配置是否可连通 */
+  verify(): Promise<void>;
+
   /** 获取指定 MR 的 diff 列表 */
   getMRDiff(iid: number): Promise<MrDiff[]>;
 
@@ -175,7 +198,7 @@ export interface IGitProvider {
   createDiscussion(iid: number, body: string, position?: GitLabDiffPosition): Promise<string>;
 
   /** 获取指定 MR 的所有 discussions */
-  getDiscussions(iid: number): Promise<Array<{ id: string; resolvable: boolean; resolved: boolean; notes: ReviewerComment[] }>>;
+  getDiscussions(iid: number): Promise<Discussion[]>;
 
   /** resolve 或 unresolve 指定 discussion */
   resolveDiscussion(iid: number, discussionId: string, resolved?: boolean): Promise<void>;

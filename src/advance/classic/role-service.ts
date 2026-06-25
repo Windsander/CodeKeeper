@@ -30,7 +30,9 @@ export class RoleService {
 
   /**
    * 启动角色服务
-   * 若该角色没有启用项目，则跳过启动
+   * 总管服务始终 fork 子进程，由子进程周期性读取数据库中的启用项目，
+   * 动态启动或停止对应项目的 Agent 循环。
+   * 即使当前没有启用项目，监控服务本身也应保持运行，以便后续动态响应项目启用/禁用变化。
    */
   start(): void {
     if (this.child) {
@@ -38,20 +40,35 @@ export class RoleService {
       return;
     }
 
-    const enabledProjects = this.context.store.getRoleEnabledProjects(this.role);
-    if (enabledProjects.length === 0) {
-      logger.info(`角色 ${this.role} 没有启用项目，跳过启动`);
-      return;
-    }
-
-    this.child = fork(this.runnerPath, [], {
-      env: { ...process.env, ROLE: this.role },
+    const child = fork(this.runnerPath, [], {
+      env: {
+        ...process.env,
+        ROLE: this.role,
+        CK_DB_PATH: this.context.dbPath,
+        CK_LLM_API_KEY: this.context.getDaemonConfig?.().apiKey ?? '',
+        CK_LLM_PROVIDER: this.context.getDaemonConfig?.().provider ?? 'anthropic',
+        CK_LLM_MODEL: this.context.getDaemonConfig?.().model ?? '',
+        CK_LLM_API_URL: this.context.getDaemonConfig?.().apiUrl ?? '',
+        CK_LLM_HEADERS: this.context.getDaemonConfig?.().headers ?? '{}',
+        CK_LLM_RPM: String(this.context.getDaemonConfig?.().llmRequestsPerMinute ?? 10),
+      },
       stdio: 'pipe',
     });
+    this.child = child;
 
-    this.child.on('exit', (code) => {
+    child.stdout?.on('data', (data) => {
+      logger.info({ role: this.role, output: data.toString().trim() }, '[Role Agent]');
+    });
+    child.stderr?.on('data', (data) => {
+      logger.warn({ role: this.role, output: data.toString().trim() }, '[Role Agent]');
+    });
+
+    child.on('exit', (code) => {
       logger.info(`角色 ${this.role} 子进程退出，code=${code}`);
-      this.child = null;
+      // 防止旧子进程的 exit 事件在 restart 后把新子进程引用清空
+      if (this.child === child) {
+        this.child = null;
+      }
     });
   }
 
@@ -66,10 +83,33 @@ export class RoleService {
 
   /**
    * 重启指定项目的服务
-   * 当前实现：停止并重启整个角色服务
+   * 当前实现：停止并重启整个角色服务，等待旧子进程退出后再启动新子进程，
+   * 避免数据库锁或端口等资源冲突。
    */
-  restartProject(_projectId: string): void {
-    this.stop();
+  async restartProject(_projectId: string): Promise<void> {
+    if (!this.child) {
+      this.start();
+      return;
+    }
+
+    const oldChild = this.child;
+    // 先清空引用，防止旧子进程的 exit 事件误清掉后续新子进程
+    this.child = null;
+    oldChild.kill('SIGTERM');
+
+    // 等待旧子进程退出，最多 3 秒；超时则强制结束
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        logger.warn(`角色 ${this.role} 旧子进程未在 3 秒内退出，强制结束`);
+        oldChild.kill('SIGKILL');
+        resolve();
+      }, 3000);
+      oldChild.on('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+
     this.start();
   }
 

@@ -8,6 +8,7 @@ import { RoleService, type RoleServiceStatus } from './role-service.js';
  */
 export class RoleServiceRegistry {
   private services = new Map<Role, RoleService>();
+  private registeredRoles = new Set<Role>();
   public context: HandlerContext;
 
   constructor(
@@ -22,7 +23,7 @@ export class RoleServiceRegistry {
    * @param role 角色标识
    */
   register(role: Role): void {
-    this.services.set(role, new RoleService(role, this.context, this.runnerPath));
+    this.registeredRoles.add(role);
   }
 
   /**
@@ -46,8 +47,8 @@ export class RoleServiceRegistry {
    * @param role 角色标识
    * @param projectId 项目 ID（可选）
    */
-  restartProject(role: Role, projectId: string): void {
-    this.getService(role).restartProject(projectId);
+  async restartProject(role: Role, projectId: string): Promise<void> {
+    await this.getService(role).restartProject(projectId);
   }
 
   /**
@@ -66,8 +67,15 @@ export class RoleServiceRegistry {
    * @throws 若角色未注册则抛出错误
    */
   private getService(role: Role): RoleService {
-    const service = this.services.get(role);
-    if (!service) throw new Error(`角色 ${role} 服务未注册`);
+    let service = this.services.get(role);
+    if (!service) {
+      if (!this.registeredRoles.has(role)) {
+        throw new Error(`角色 ${role} 服务未注册`);
+      }
+      // 懒创建：确保此时 context 已被回设为完整的 handlerContext
+      service = new RoleService(role, this.context, this.runnerPath);
+      this.services.set(role, service);
+    }
     return service;
   }
 }

@@ -24,11 +24,27 @@ export interface PostedDiscussion {
 }
 
 /**
+ * 交互式 discussion 追踪项
+ */
+export interface InteractiveThread {
+  /** 当前状态 */
+  status: 'awaiting-reply';
+  /** 提问时间戳 */
+  askedAt: number;
+  /** 上次提问内容 */
+  question: string;
+  /** 关联文件路径 */
+  filePath?: string;
+}
+
+/**
  * MR Agent 状态文件结构
  */
 export interface MrAgentState {
   version: number;
   discussions: Record<string, PostedDiscussion[]>;
+  /** 交互式 discussion 追踪 */
+  interactiveThreads: Record<string, InteractiveThread>;
 }
 
 export function getStatePath(project: Project): string {
@@ -39,17 +55,20 @@ export function getStatePath(project: Project): string {
 export function loadState(project: Project): MrAgentState {
   const path = getStatePath(project);
   if (!existsSync(path)) {
-    return { version: 1, discussions: {} };
+    return { version: 1, discussions: {}, interactiveThreads: {} };
   }
   try {
     const raw = readFileSync(path, 'utf-8');
     const parsed = JSON.parse(raw) as MrAgentState;
     if (!parsed || typeof parsed !== 'object' || !parsed.discussions) {
-      return { version: 1, discussions: {} };
+      return { version: 1, discussions: {}, interactiveThreads: {} };
+    }
+    if (!parsed.interactiveThreads) {
+      parsed.interactiveThreads = {};
     }
     return parsed;
   } catch {
-    return { version: 1, discussions: {} };
+    return { version: 1, discussions: {}, interactiveThreads: {} };
   }
 }
 

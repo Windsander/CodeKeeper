@@ -63,6 +63,16 @@ export class GitLabClient {
   }
 
   /**
+   * Verify that the project is reachable with current credentials
+   */
+  async verifyProject(): Promise<void> {
+    await this.request<GitLabMR>(
+      'GET',
+      `/projects/${this.projectId}`
+    );
+  }
+
+  /**
    * List open merge requests
    */
   async listMergeRequests(params?: {
@@ -119,11 +129,27 @@ export class GitLabClient {
 
   /**
    * List protected branches
+   *
+   * 当前固定 per_page=100，对 UI 下拉选择足够；若项目保护分支超过 100 个，
+   * 后续可改用分页或 Link header 遍历。
    */
   async listProtectedBranches(): Promise<GitLabProtectedBranch[]> {
     return this.request<GitLabProtectedBranch[]>(
       'GET',
       `/projects/${this.projectId}/protected_branches?per_page=100`
+    );
+  }
+
+  /**
+   * List repository branches
+   *
+   * 当前固定 per_page=100，对 Source Branch 自动补全足够；若项目分支极多，
+   * 后续可改用分页或 Link header 遍历。
+   */
+  async listBranches(): Promise<GitLabBranch[]> {
+    return this.request<GitLabBranch[]>(
+      'GET',
+      `/projects/${this.projectId}/repository/branches?per_page=100`
     );
   }
 
@@ -301,6 +327,10 @@ export interface GitLabProtectedBranch {
   name: string;
 }
 
+export interface GitLabBranch {
+  name: string;
+}
+
 export interface GitLabMRChanges {
   changes: Array<{
     old_path: string;
@@ -324,8 +354,18 @@ export interface GitLabNote {
 export interface GitLabDiscussion {
   id: string;
   notes: GitLabNote[];
-  resolvable: boolean;
-  resolved: boolean;
+  resolvable?: boolean;
+  resolved?: boolean;
+  position?: {
+    base_sha: string;
+    head_sha: string;
+    start_sha: string;
+    position_type: string;
+    old_path?: string;
+    new_path: string;
+    new_line?: number;
+    old_line?: number;
+  };
 }
 
 export interface GitLabDiffPosition {

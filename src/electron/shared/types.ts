@@ -116,6 +116,8 @@ export interface MaintainerConfig {
   learningEnabled: boolean;
   maintainerName: string;
   autoFixEnabled: boolean;
+  /** 允许自动修复的风险等级，未配置时默认全部允许 */
+  autoFixRiskLevels?: Array<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>;
   resolveOthersDiscussions: boolean;
   filter?: RoleFilter;
 }

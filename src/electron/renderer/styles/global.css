@@ -239,9 +239,9 @@ body {
 .form-group label {
   display: block;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   margin-bottom: 6px;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .input,
@@ -284,6 +284,35 @@ select.input:hover {
 
 select.input:focus {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%234f46e5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+}
+
+.input-error,
+.input-error:focus {
+  border-color: var(--danger, #ef4444);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.input-flash {
+  animation: input-flash 0.8s ease-in-out;
+}
+
+@keyframes input-flash {
+  0%, 100% {
+    background-color: transparent;
+  }
+  30%, 70% {
+    background-color: rgba(239, 68, 68, 0.12);
+  }
+}
+
+.input-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.input-hint-error {
+  color: var(--danger, #ef4444);
 }
 
 .dropdown {
@@ -529,12 +558,14 @@ select.input:focus {
 }
 
 .config-section {
-  margin-bottom: 24px;
-  padding-bottom: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
   border-bottom: 1px solid var(--border-color);
 }
 
 .config-section:last-of-type {
+  margin-bottom: 0;
+  padding-bottom: 0;
   border-bottom: none;
 }
 
@@ -550,17 +581,20 @@ select.input:focus {
   color: inherit;
 }
 
+.config-section-header.locked {
+  cursor: default;
+}
+
 .config-section-header:hover .config-section-title {
   color: var(--primary);
 }
 
 .config-section-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
   margin: 0;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.3px;
 }
 
 .config-section-arrow {
@@ -589,6 +623,23 @@ select.input:focus {
   max-height: 0;
   opacity: 0;
   margin-top: 0;
+}
+
+.config-section.disabled .config-section-title,
+.config-section.disabled .config-section-arrow {
+  color: var(--text-muted);
+}
+
+.config-section-header-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.config-section-tip {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .toggle {
@@ -639,6 +690,40 @@ select.input:focus {
 
 .form-row .input {
   flex: 1;
+}
+
+.input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-with-btn {
+  padding-right: 42px;
+}
+
+.input-inline-btn {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s ease;
+  z-index: 1;
+}
+
+.input-inline-btn:hover,
+.input-inline-btn:focus {
+  color: var(--text-primary);
+  outline: none;
 }
 
 .input-group {
@@ -769,10 +854,11 @@ select.input:focus {
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 9999px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 
 .badge-success {
@@ -958,4 +1044,75 @@ select.input:focus {
 
 .file-tree-children .file-tree-row:last-child {
   border-bottom: none;
+}
+
+/* 日志页卡片：选项卡 + 行数控制 + 日志查看器 */
+.logs-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.logs-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--main-bg);
+}
+
+.logs-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.logs-tab-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.logs-tab-btn:hover {
+  background: #fff;
+  color: var(--text-primary);
+}
+
+.logs-tab-btn.active {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
+}
+
+.logs-lines-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.logs-lines-control label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.logs-lines-control input {
+  width: 80px;
+}
+
+.logs-card-body {
+  padding: 20px;
+}
+
+.logs-card-body .log-viewer {
+  max-height: 60vh;
+  margin: 0;
 }

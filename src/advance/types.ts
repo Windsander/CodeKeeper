@@ -44,6 +44,8 @@ export interface MaintainerConfig extends BaseRoleConfig {
   role: 'maintainer';
   maintainerName: string;
   autoFixEnabled: boolean;
+  /** 允许自动修复的风险等级，未配置时默认全部允许 */
+  autoFixRiskLevels?: Array<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>;
   resolveOthersDiscussions: boolean;
 }
 
@@ -67,6 +69,14 @@ export type RoleConfigOf<R extends Role> = R extends 'reviewer'
 export interface RoleProjectStatus {
   running: boolean;
   lastRunAt: number | null;
+  lastError?: {
+    type: 'missing-token' | 'invalid-token' | 'gitlab-api' | 'unknown';
+    message: string;
+    at: number;
+  };
+  lastSuccessAt?: number;
+  agentStartedAt?: number;
+  agentStoppedAt?: number;
 }
 
 // ---------- 兼容类型（后续任务将逐步迁移）----------

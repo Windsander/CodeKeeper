@@ -1,12 +1,9 @@
 import { LlmClient } from '../../llm/client.js';
 import type { MergeRequest, MrDiff, ReviewFinding, ReviewResult } from '../provider/types.js';
 
-/**
- * ClassicReviewer 构造选项
- */
-export interface ClassicReviewerOptions {
+export interface ReviewerBrainOptions {
   /** LLM 客户端实例 */
-  client: LlmClient;
+  llmClient: LlmClient;
   /** Token 预算上限 */
   tokenBudget: number;
   /** 评审规则文本 */
@@ -18,20 +15,16 @@ export interface ClassicReviewerOptions {
 }
 
 /**
- * 基于 LlmClient 的 MR 代码评审器
+ * ReviewerBrain
  *
- * 使用 LLM 对 Merge Request 的 diff 进行自动化评审，
- * 输出结构化的发现项列表与总结。
+ * Reviewer 的决策大脑：根据 MR diff、评审规则、项目背景，
+ * 由 LLM 输出结构化的 findings 和整体 summary。
  */
-export class ClassicReviewer {
-  constructor(private options: ClassicReviewerOptions) {}
+export class ReviewerBrain {
+  constructor(private readonly options: ReviewerBrainOptions) {}
 
   /**
    * 对 MR 的 diff 列表执行评审
-   *
-   * @param mr - 合并请求基本信息
-   * @param diffs - 变更文件 diff 列表
-   * @returns 评审结果
    */
   async review(mr: MergeRequest, diffs: MrDiff[]): Promise<ReviewResult> {
     if (diffs.length === 0) {
@@ -39,7 +32,7 @@ export class ClassicReviewer {
     }
 
     const prompt = this.buildReviewPrompt(mr, diffs);
-    const response = await this.options.client.complete(
+    const response = await this.options.llmClient.complete(
       prompt,
       '你是严格的代码评审助手。请只输出 JSON。'
     );
@@ -47,29 +40,6 @@ export class ClassicReviewer {
     return this.parseReviewResponse(response);
   }
 
-  /**
-   * 为指定发现项生成自动修复代码
-   *
-   * @param filePath - 文件路径
-   * @param originalContent - 原始文件内容
-   * @param finding - 评审发现项
-   * @returns 修复后的代码，或 null 表示无法生成
-   */
-  async generateFix(
-    filePath: string,
-    originalContent: string,
-    finding: ReviewFinding
-  ): Promise<string | null> {
-    const prompt = this.buildFixPrompt(filePath, originalContent, finding);
-    const response = await this.options.client.complete(prompt, undefined);
-    return this.cleanFixOutput(response);
-  }
-
-  // ---------- 私有辅助方法 ----------
-
-  /**
-   * 构建评审 prompt
-   */
   private buildReviewPrompt(mr: MergeRequest, diffs: MrDiff[]): string {
     const diffText = diffs
       .map(
@@ -121,30 +91,6 @@ ${diffText}
 如果没有发现问题，findings 为空数组，summary 简要说明。`;
   }
 
-  /**
-   * 构建修复 prompt
-   */
-  private buildFixPrompt(filePath: string, originalContent: string, finding: ReviewFinding): string {
-    return `请为以下代码问题生成修复后的代码。
-
-文件: ${filePath}
-问题: ${finding.message}
-严重程度: ${finding.severity}
-建议: ${finding.suggestion}
-
-原始代码:
-\`\`\`
-${originalContent}
-\`\`\`
-
-请只输出修复后的完整文件内容，不要包含任何解释或 markdown 代码块标记。`;
-  }
-
-  /**
-   * 解析 LLM 返回的 JSON 评审结果
-   *
-   * 解析失败时返回降级结果，包含原始响应以便排查。
-   */
   private parseReviewResponse(rawResponse: string): ReviewResult {
     try {
       const cleaned = this.extractJsonFromMarkdown(rawResponse);
@@ -173,9 +119,6 @@ ${originalContent}
     }
   }
 
-  /**
-   * 从 markdown 代码块中提取 JSON 文本
-   */
   private extractJsonFromMarkdown(text: string): string {
     const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (codeBlockMatch) {
@@ -184,9 +127,6 @@ ${originalContent}
     return text.trim();
   }
 
-  /**
-   * 规范化 findings 数组，确保每个元素符合 ReviewFinding 结构
-   */
   private normalizeFindings(rawFindings: unknown[]): ReviewFinding[] {
     return rawFindings
       .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
@@ -201,21 +141,12 @@ ${originalContent}
       }));
   }
 
-  /**
-   * 规范化 severity 值，确保为有效枚举值
-   */
   private normalizeSeverity(severity: string): ReviewFinding['severity'] {
     const valid: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
     const upper = severity.toUpperCase();
     return valid.includes(upper as ReviewFinding['severity']) ? (upper as ReviewFinding['severity']) : 'LOW';
   }
 
-  /**
-   * 提取可自动修复的索引列表
-   *
-   * 优先使用 LLM 返回的 autoFixable 数组，
-   * 若未提供则根据 finding.autoFixable 字段推导。
-   */
   private extractAutoFixableIndices(
     findings: ReviewFinding[],
     explicitIndices?: number[]
@@ -226,22 +157,5 @@ ${originalContent}
     return findings
       .map((f, i) => (f.autoFixable ? i : -1))
       .filter((i) => i !== -1);
-  }
-
-  /**
-   * 清理修复输出，去除 markdown 代码块包装
-   */
-  private cleanFixOutput(rawResponse: string): string | null {
-    const trimmed = rawResponse.trim();
-    if (!trimmed) {
-      return null;
-    }
-
-    const codeBlockMatch = trimmed.match(/```(?:\w+)?\s*\n?([\s\S]*?)```/);
-    if (codeBlockMatch) {
-      return codeBlockMatch[1].trim();
-    }
-
-    return trimmed;
   }
 }

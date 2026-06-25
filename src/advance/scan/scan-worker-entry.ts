@@ -9,7 +9,6 @@
  */
 
 import { MetadataStore } from '../store/metadata-store.js';
-import { ProjectRegistry } from '../project-registry.js';
 import { ArchivePipeline } from '../pipeline/archive-pipeline.js';
 import { LlmClient } from '../llm/client.js';
 import { scanExistingFiles } from '../project-scanner.js';
@@ -28,6 +27,7 @@ export interface ScanWorkerTask {
     provider: 'anthropic' | 'openai';
     model: string;
     headers: Record<string, string>;
+    llmRequestsPerMinute: number;
   };
   /** 每次扫描最多处理事件数 */
   maxEventsPerScan: number;
@@ -48,19 +48,16 @@ async function runScan(task: ScanWorkerTask): Promise<void> {
   console.log('[Scan Worker] 启动归档扫描任务');
 
   const store = new MetadataStore(task.dbPath);
-  const registry = new ProjectRegistry({ store });
 
-  // 重新注册传入的项目，确保子进程中的 registry 与主进程一致
-  for (const project of task.projects) {
-    registry.register(project.rootPath, project.archiveRoot);
-  }
-
+  const rpm = task.daemonConfig.llmRequestsPerMinute ?? 10;
+  const minRequestInterval = rpm <= 0 ? 6000 : Math.ceil(60000 / rpm);
   const client = new LlmClient({
     apiKey: task.daemonConfig.apiKey,
     baseURL: task.daemonConfig.apiUrl,
     provider: task.daemonConfig.provider,
     model: task.daemonConfig.model,
     headers: task.daemonConfig.headers,
+    minRequestInterval,
   });
 
   const pipeline = new ArchivePipeline({

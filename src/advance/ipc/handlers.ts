@@ -11,13 +11,13 @@ import { loadProjectConfig } from '../config/project-config';
 import { UndoExecutor } from '../archive/undo-executor';
 import { detectGitInfo } from '../utils/git-info';
 import { loadSoulContent, saveSoulContent } from '../classic/soul/soul-loader.js';
-import { loadProjectStatus } from '../classic/status/project-status-store.js';
+import { loadProjectStatus, clearProjectError, recordProjectError } from '../classic/status/project-status-store.js';
 import type { ScanService } from '../scan/scan-service.js';
 import type { IGitProvider } from '../classic/provider/types.js';
 import type { RoleServiceRegistry } from '../classic/role-service-registry.js';
 import { ReviewerManager } from '../classic/roles/reviewer-manager.js';
 import { MaintainerManager } from '../classic/roles/maintainer-manager.js';
-import type { Role, RoleConfig } from '../types.js';
+import type { Role, RoleConfig, GitlabConfig } from '../types.js';
 import type { IRoleManager } from '../classic/roles/role-manager.js';
 
 import { readDirectoryTree } from '../utils/file-tree';
@@ -26,6 +26,8 @@ export interface HandlerContext {
   store: MetadataStore;
   registry: ProjectRegistry;
   serviceRegistry: RoleServiceRegistry;
+  /** 数据库文件路径，供子进程独立打开 metadata store */
+  dbPath: string;
   scanService?: ScanService;
   getProvider?: (project: Project) => IGitProvider | null;
   getClient: () => LlmClient | null;
@@ -245,6 +247,19 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { lines: all.slice(-count) };
   },
 
+  'role.service.logs': async (_ctx, params) => {
+    const logPath = join(getLogDir(), 'codekeeper.log');
+    if (!existsSync(logPath)) {
+      return { lines: [] };
+    }
+    const role = (params.role as string) ?? '';
+    const roleLower = role.toLowerCase();
+    const all = readFileSync(logPath, 'utf-8').split('\n');
+    const filtered = all.filter((line) => line.toLowerCase().includes(roleLower));
+    const count = params.lines ?? 100;
+    return { lines: filtered.slice(-count) };
+  },
+
   'daemon.config.update': async (ctx, params) => {
     const config: {
       apiKey?: string;
@@ -342,10 +357,42 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       oldGitlab?.token !== updated.token;
     // GitLab 配置变更且调度服务正在运行时，立即对账以应用变化
     if (changed) {
-      ctx.serviceRegistry.restartProject('reviewer', params.projectId);
+      await ctx.serviceRegistry.restartProject('reviewer', params.projectId);
     }
 
     return { success: true };
+  },
+
+  'project.gitlab.verify': async (ctx, params) => {
+    const { projectId, gitlab } = params as { projectId: string; gitlab: GitlabConfig };
+    if (!gitlab || !gitlab.baseUrl || !gitlab.projectPath || !gitlab.token) {
+      throw new Error('GitLab 配置缺少必要字段');
+    }
+
+    const project = ctx.registry.get(projectId);
+
+    const { GitLabProvider } = await import('../classic/provider/gitlab-provider.js');
+    try {
+      const provider = new GitLabProvider(gitlab);
+      await provider.verify();
+      // 验证成功时清除该项目的 Token/API 错误标记
+      if (project) {
+        clearProjectError(project);
+      }
+      return { valid: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const statusMatch = message.match(/\b(401|403)\b/);
+      if (project) {
+        if (statusMatch) {
+          recordProjectError(project, err, 'invalid-token');
+        } else if (message.includes('GitLab API')) {
+          recordProjectError(project, err, 'gitlab-api');
+        }
+      }
+      logger.warn({ err: message, gitlab: { baseUrl: gitlab.baseUrl, projectPath: gitlab.projectPath } }, 'GitLab 配置验证失败');
+      throw new Error(`GitLab 配置验证失败：${message}`);
+    }
   },
 
   'project.mrreview.config.get': async (ctx, params) => {
@@ -399,6 +446,19 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     }
   },
 
+  'project.branches': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project || !ctx.getProvider) return { branches: [] };
+    const provider = ctx.getProvider(project);
+    if (!provider) return { branches: [] };
+    try {
+      return { branches: await provider.listBranches() };
+    } catch (err) {
+      logger.warn({ err, projectId: project.id }, '获取项目分支失败');
+      return { branches: [] };
+    }
+  },
+
   'project.mrreview.config.update': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
@@ -424,7 +484,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
     if (oldEnabled !== newEnabled) {
       // 启用状态变化后，若调度服务运行中则立即对账
-      ctx.serviceRegistry.restartProject('reviewer', params.projectId);
+      await ctx.serviceRegistry.restartProject('reviewer', params.projectId);
     } else {
       // 其他字段变化且调度服务运行中，热重启该项目 Agent
       const otherChanged =
@@ -436,7 +496,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         oldMrReview.maxAutoMergeRisk !== updated.maxAutoMergeRisk ||
         JSON.stringify(oldMrReview.filter) !== JSON.stringify(updated.filter);
       if (otherChanged) {
-        ctx.serviceRegistry.restartProject('reviewer', params.projectId);
+        await ctx.serviceRegistry.restartProject('reviewer', params.projectId);
       }
     }
 
@@ -468,7 +528,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.role.config.get': async (ctx, params) => {
     const { projectId, role } = params as { projectId: string; role: Role };
     const manager = createRoleManager(role, ctx.store);
-    return manager.getConfig(projectId);
+    const config = await manager.getConfig(projectId);
+    return { config };
   },
 
   'project.role.config.update': async (ctx, params) => {
@@ -502,12 +563,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'role.service.restart': async (ctx, params) => {
     const { role, projectId } = params as { role: Role; projectId?: string };
     if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
-    if (projectId) {
-      ctx.serviceRegistry.restartProject(role, projectId);
-    } else {
-      ctx.serviceRegistry.stop(role);
-      ctx.serviceRegistry.start(role);
-    }
+    await ctx.serviceRegistry.restartProject(role, projectId ?? '');
     return { success: true };
   },
 
