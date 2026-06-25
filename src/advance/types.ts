@@ -3,12 +3,12 @@ import { join } from 'node:path';
 /**
  * 角色标识
  */
-export type Role = 'reviewer' | 'maintainer';
+export type Role = 'reviewer' | 'maintainer' | 'archiver';
 
 /**
  * 所有注册角色列表
  */
-export const ROLES: Role[] = ['reviewer', 'maintainer'];
+export const ROLES: Role[] = ['reviewer', 'maintainer', 'archiver'];
 
 /**
  * 角色过滤条件
@@ -50,9 +50,16 @@ export interface MaintainerConfig extends BaseRoleConfig {
 }
 
 /**
+ * Archiver 专属配置
+ */
+export interface ArchiverConfig extends BaseRoleConfig {
+  role: 'archiver';
+}
+
+/**
  * 角色配置联合类型
  */
-export type RoleConfig = ReviewerConfig | MaintainerConfig;
+export type RoleConfig = ReviewerConfig | MaintainerConfig | ArchiverConfig;
 
 /**
  * 角色配置的类型映射，用于按角色窄化
@@ -61,7 +68,9 @@ export type RoleConfigOf<R extends Role> = R extends 'reviewer'
   ? ReviewerConfig
   : R extends 'maintainer'
     ? MaintainerConfig
-    : never;
+    : R extends 'archiver'
+      ? ArchiverConfig
+      : never;
 
 /**
  * 角色项目运行状态

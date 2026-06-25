@@ -205,6 +205,7 @@ export class MetadataStore {
     const defaults: Record<Role, RoleConfig> = {
       reviewer: { role: 'reviewer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true },
       maintainer: { role: 'maintainer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true, maintainerName: 'CodeKeeper Maintainer', autoFixEnabled: true, resolveOthersDiscussions: true },
+      archiver: { role: 'archiver', enabled: false, reviewSchedule: '0 2 * * *', learningEnabled: true },
     };
     if (!raw || typeof raw !== 'object') return defaults;
     return { ...defaults, ...(raw as Record<Role, RoleConfig>) };
