@@ -108,19 +108,28 @@ describe('ReviewerBrain', () => {
     expect(result.summary).toContain('解析失败');
   });
 
-  it('评审后调用 memoryClient.recordReview', async () => {
-    const memoryClient = { recordReview: vi.fn() } as unknown as NonNullable<
+  it('评审前召回项目知识并拼入 prompt', async () => {
+    const complete = vi.fn().mockResolvedValue(
+      JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] })
+    );
+    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const memoryClient = {
+      recallForReview: vi.fn().mockResolvedValue(['项目使用 TypeScript 严格模式']),
+      recordReview: vi.fn(),
+    } as unknown as NonNullable<
       import('../../../../src/advance/classic/review/reviewer-brain.js').ReviewerBrainOptions['memoryClient']
     >;
+
     const brain = new ReviewerBrain({
-      llmClient: createMockLlmClient(
-        JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] })
-      ),
+      llmClient,
       tokenBudget: 4000,
       rules: 'rule1',
       memoryClient,
     });
     await brain.review(mockMR, mockDiffs);
-    expect(memoryClient.recordReview).toHaveBeenCalled();
+
+    expect(memoryClient.recallForReview).toHaveBeenCalled();
+    const prompt = complete.mock.calls[0][0] as string;
+    expect(prompt).toContain('项目使用 TypeScript 严格模式');
   });
 });

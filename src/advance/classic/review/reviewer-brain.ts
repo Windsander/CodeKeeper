@@ -34,7 +34,8 @@ export class ReviewerBrain {
       return { findings: [], summary: 'No changes to review', autoFixable: [] };
     }
 
-    const prompt = this.buildReviewPrompt(mr, diffs);
+    const recalledContext = await this.recallContext(mr, diffs);
+    const prompt = this.buildReviewPrompt(mr, diffs, recalledContext);
     const response = await this.options.llmClient.complete(
       prompt,
       '你是严格的代码评审助手。请只输出 JSON。'
@@ -48,13 +49,23 @@ export class ReviewerBrain {
         title: mr.title,
         findingsCount: result.findings.length,
         summary: result.summary,
+        findings: result.findings as Array<Record<string, unknown>>,
       });
     }
 
     return result;
   }
 
-  private buildReviewPrompt(mr: MergeRequest, diffs: MrDiff[]): string {
+  private async recallContext(mr: MergeRequest, diffs: MrDiff[]): Promise<string> {
+    if (!this.options.memoryClient) return '';
+    const diffSummary = diffs.map((d) => `${d.newPath}\n${d.diff}`).join('\n');
+    const query = `${mr.title}\n${mr.description ?? ''}\n${diffSummary}`.slice(0, 2000);
+    const memories = await this.options.memoryClient.recallForReview(query);
+    if (memories.length === 0) return '';
+    return `\n\n相关历史记忆：\n${memories.map((m) => `- ${m}`).join('\n')}`;
+  }
+
+  private buildReviewPrompt(mr: MergeRequest, diffs: MrDiff[], recalledContext: string): string {
     const diffText = diffs
       .map(
         (d) =>
@@ -77,7 +88,7 @@ MR 描述: ${mr.description}
 源分支: ${mr.sourceBranch} -> 目标分支: ${mr.targetBranch}
 
 评审规则:
-${this.options.rules}${soulSection}${contextSection}
+${this.options.rules}${soulSection}${contextSection}${recalledContext}
 
 变更内容:
 \`\`\`diff
