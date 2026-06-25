@@ -1,0 +1,3 @@
+[submodule "vendor/everos"]
+	path = vendor/everos
+	url = https://github.com/EverMind-AI/EverOS.git
