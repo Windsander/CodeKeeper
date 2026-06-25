@@ -301,18 +301,18 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'classic.start': async (ctx) => {
-    ctx.serviceRegistry.start('reviewer');
+    await ctx.serviceRegistry.start('reviewer');
     return { running: true };
   },
 
   'classic.stop': async (ctx) => {
-    ctx.serviceRegistry.stop('reviewer');
+    await ctx.serviceRegistry.stop('reviewer');
     return { running: false };
   },
 
   'classic.restart': async (ctx) => {
-    ctx.serviceRegistry.stop('reviewer');
-    ctx.serviceRegistry.start('reviewer');
+    await ctx.serviceRegistry.stop('reviewer');
+    await ctx.serviceRegistry.start('reviewer');
     return { running: true };
   },
 
@@ -549,14 +549,14 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'role.service.start': async (ctx, params) => {
     const { role } = params as { role: Role };
     if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
-    ctx.serviceRegistry.start(role);
+    await ctx.serviceRegistry.start(role);
     return { success: true };
   },
 
   'role.service.stop': async (ctx, params) => {
     const { role } = params as { role: Role };
     if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
-    ctx.serviceRegistry.stop(role);
+    await ctx.serviceRegistry.stop(role);
     return { success: true };
   },
 

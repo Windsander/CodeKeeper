@@ -1,6 +1,6 @@
 import type { Role } from '../types.js';
 import type { HandlerContext } from '../ipc/handlers.js';
-import { RoleService, type RoleServiceStatus } from './role-service.js';
+import { RoleService, type RoleServiceOptions, type RoleServiceStatus } from './role-service.js';
 
 /**
  * 角色服务注册表
@@ -14,6 +14,7 @@ export class RoleServiceRegistry {
   constructor(
     context: HandlerContext,
     private runnerPath: string,
+    private options: RoleServiceOptions = {},
   ) {
     this.context = context;
   }
@@ -30,16 +31,16 @@ export class RoleServiceRegistry {
    * 启动指定角色的服务
    * @param role 角色标识
    */
-  start(role: Role): void {
-    this.getService(role).start();
+  async start(role: Role): Promise<void> {
+    await this.getService(role).start();
   }
 
   /**
    * 停止指定角色的服务
    * @param role 角色标识
    */
-  stop(role: Role): void {
-    this.getService(role).stop();
+  async stop(role: Role): Promise<void> {
+    await this.getService(role).stop();
   }
 
   /**
@@ -73,7 +74,7 @@ export class RoleServiceRegistry {
         throw new Error(`角色 ${role} 服务未注册`);
       }
       // 懒创建：确保此时 context 已被回设为完整的 handlerContext
-      service = new RoleService(role, this.context, this.runnerPath);
+      service = new RoleService(role, this.context, this.runnerPath, this.options);
       this.services.set(role, service);
     }
     return service;

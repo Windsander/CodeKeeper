@@ -1,6 +1,7 @@
 import type { IpcMain } from 'electron';
 import { ReviewerManager } from '../classic/roles/reviewer-manager.js';
 import { MaintainerManager } from '../classic/roles/maintainer-manager.js';
+import { ArchiverManager } from '../classic/roles/archiver-manager.js';
 import type { MetadataStore } from '../store/metadata-store.js';
 import type { RoleServiceRegistry } from '../classic/role-service-registry.js';
 import type { Role, RoleConfig } from '../types.js';
@@ -18,6 +19,8 @@ function createRoleManager(role: Role, store: MetadataStore): IRoleManager {
       return new ReviewerManager(store);
     case 'maintainer':
       return new MaintainerManager(store);
+    case 'archiver':
+      return new ArchiverManager(store);
     default:
       throw new Error(`未支持的角色: ${role}`);
   }
@@ -26,7 +29,7 @@ function createRoleManager(role: Role, store: MetadataStore): IRoleManager {
 export function registerRoleIPCHandlers(context: RoleIPCContext): void {
   const { ipc, store, serviceRegistry } = context;
   const managers = new Map<Role, IRoleManager>();
-  const roles: Role[] = ['reviewer', 'maintainer'];
+  const roles: Role[] = ['reviewer', 'maintainer', 'archiver'];
 
   for (const role of roles) {
     managers.set(role, createRoleManager(role, store));
@@ -54,12 +57,12 @@ export function registerRoleIPCHandlers(context: RoleIPCContext): void {
   });
 
   ipc.handle('role.service.start', async (_event, { role }: { role: Role }) => {
-    serviceRegistry.start(role);
+    await serviceRegistry.start(role);
     return { success: true };
   });
 
   ipc.handle('role.service.stop', async (_event, { role }: { role: Role }) => {
-    serviceRegistry.stop(role);
+    await serviceRegistry.stop(role);
     return { success: true };
   });
 

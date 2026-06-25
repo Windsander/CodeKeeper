@@ -1,7 +1,19 @@
 import { fork, type ChildProcess } from 'node:child_process';
+import { join } from 'node:path';
 import { logger } from '../../core/logger.js';
 import type { Role } from '../types.js';
 import type { HandlerContext } from '../ipc/handlers.js';
+import { EverOSService } from './memory/everos-service.js';
+import { EverOSMcpServer } from './memory/everos-mcp-server.js';
+
+export interface RoleServiceOptions {
+  /** EverOS MCP Server URL；若提供则不再本地启动 EverOS */
+  mcpUrl?: string;
+  /** EverOS submodule 路径 */
+  submodulePath?: string;
+  /** EverOS 数据目录 */
+  everosDataDir?: string;
+}
 
 /**
  * 角色服务运行状态
@@ -21,11 +33,15 @@ export interface RoleServiceStatus {
  */
 export class RoleService {
   private child: ChildProcess | null = null;
+  private everosService: EverOSService | null = null;
+  private mcpServer: EverOSMcpServer | null = null;
+  private mcpUrl: string | null = null;
 
   constructor(
     private role: Role,
     private context: HandlerContext,
     private runnerPath: string,
+    private options: RoleServiceOptions = {},
   ) {}
 
   /**
@@ -34,10 +50,14 @@ export class RoleService {
    * 动态启动或停止对应项目的 Agent 循环。
    * 即使当前没有启用项目，监控服务本身也应保持运行，以便后续动态响应项目启用/禁用变化。
    */
-  start(): void {
+  async start(): Promise<void> {
     if (this.child) {
       logger.warn(`角色 ${this.role} 服务已在运行`);
       return;
+    }
+
+    if (!this.mcpUrl) {
+      this.mcpUrl = this.options.mcpUrl ?? (await this.startMemoryInfrastructure());
     }
 
     const child = fork(this.runnerPath, [], {
@@ -45,6 +65,7 @@ export class RoleService {
         ...process.env,
         ROLE: this.role,
         CK_DB_PATH: this.context.dbPath,
+        CK_EVEROS_MCP_URL: this.mcpUrl ?? '',
         CK_LLM_API_KEY: this.context.getDaemonConfig?.().apiKey ?? '',
         CK_LLM_PROVIDER: this.context.getDaemonConfig?.().provider ?? 'anthropic',
         CK_LLM_MODEL: this.context.getDaemonConfig?.().model ?? '',
@@ -75,10 +96,16 @@ export class RoleService {
   /**
    * 停止角色服务
    */
-  stop(): void {
-    if (!this.child) return;
-    this.child.kill('SIGTERM');
-    this.child = null;
+  async stop(): Promise<void> {
+    if (this.child) {
+      this.child.kill('SIGTERM');
+      this.child = null;
+    }
+    await this.mcpServer?.stop();
+    this.everosService?.stop();
+    this.mcpServer = null;
+    this.everosService = null;
+    this.mcpUrl = null;
   }
 
   /**
@@ -88,7 +115,7 @@ export class RoleService {
    */
   async restartProject(_projectId: string): Promise<void> {
     if (!this.child) {
-      this.start();
+      await this.start();
       return;
     }
 
@@ -110,7 +137,7 @@ export class RoleService {
       });
     });
 
-    this.start();
+    await this.start();
   }
 
   /**
@@ -123,5 +150,14 @@ export class RoleService {
       enabledProjects: enabledProjects.length,
       runningProjects: enabledProjects.map((p) => p.id),
     };
+  }
+
+  private async startMemoryInfrastructure(): Promise<string> {
+    const submodulePath = this.options.submodulePath ?? join(process.cwd(), 'vendor', 'everos');
+    this.everosService = new EverOSService({ submodulePath, dataDir: this.options.everosDataDir });
+    const everosUrl = await this.everosService.start();
+
+    this.mcpServer = new EverOSMcpServer({ everosUrl });
+    return this.mcpServer.start();
   }
 }
