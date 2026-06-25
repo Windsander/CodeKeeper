@@ -41,6 +41,7 @@ export class EverOSService {
 
     await this.ensureVenv();
     await mkdir(this.dataDir, { recursive: true });
+    await this.checkCompatibility();
     await this.ensureInitialized();
 
     const everosCli = this.everosCliPath();
@@ -105,11 +106,15 @@ export class EverOSService {
   }
 
   private async ensureVenv(): Promise<void> {
-    if (existsSync(this.venvPath())) return;
+    const cli = this.everosCliPath();
+    if (existsSync(this.venvPath()) && existsSync(cli)) return;
+
     const python = await this.findPython();
     const venvPath = this.venvPath();
-    logger.info({ python, venvPath }, '创建 EverOS 虚拟环境');
-    await this.runCommand(python, ['-m', 'venv', venvPath]);
+    if (!existsSync(venvPath)) {
+      logger.info({ python, venvPath }, '创建 EverOS 虚拟环境');
+      await this.runCommand(python, ['-m', 'venv', venvPath]);
+    }
 
     const pip = this.pipPath();
     logger.info({ pip }, '安装 EverOS 依赖');
@@ -120,8 +125,21 @@ export class EverOSService {
     const configPath = join(this.dataDir, 'everos.toml');
     if (existsSync(configPath)) return;
     const everosCli = this.everosCliPath();
-    logger.info({ dataDir: this.dataDir }, '初始化 EverOS 配置');
+    logger.info({ dataDir: this.dataDir }, '初始化 Ever OS 配置');
     await this.runCommand(everosCli, ['init', '--root', this.dataDir]);
+  }
+
+  /**
+   * 检查当前环境是否能运行 EverOS（依赖 Unix-only 的 fcntl）
+   */
+  private async checkCompatibility(): Promise<void> {
+    try {
+      await this.runCommand(this.pythonPath(), ['-c', 'import fcntl']);
+    } catch {
+      throw new Error(
+        'EverOS 当前运行环境不兼容（缺少 Unix-only 依赖 fcntl），请在 Linux/macOS/WSL 下使用本地记忆功能'
+      );
+    }
   }
 
   private async findPython(): Promise<string> {
@@ -150,6 +168,10 @@ export class EverOSService {
 
   private venvPath(): string {
     return join(getAppStorageDir(), 'everos-venv');
+  }
+
+  private pythonPath(): string {
+    return join(this.venvPath(), process.platform === 'win32' ? 'python.exe' : 'bin/python');
   }
 
   private pipPath(): string {
