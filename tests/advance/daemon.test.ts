@@ -37,7 +37,7 @@ describe('Daemon', () => {
 
   it('启动和停止状态正确', async () => {
     expect(daemon.isRunning()).toBe(false);
-    daemon.start();
+    await daemon.start();
     expect(daemon.isRunning()).toBe(true);
     await daemon.stop();
     expect(daemon.isRunning()).toBe(false);
@@ -49,10 +49,10 @@ describe('Daemon', () => {
     writeFileSync(join(projectDir, '.codekeeper', 'config.yaml'), 'include:\n  - "**/*.md"\n');
     registry.register(projectDir);
 
-    daemon.start();
+    await daemon.start();
     await waitCondition(() => daemon.isRunning(), 1000);
-    // 等待 watcher 就绪后再写入文件
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // 等待 watcher 就绪后再写入文件（daemon 内部延迟 3s 启动 watcher）
+    await new Promise((resolve) => setTimeout(resolve, 4000));
     writeFileSync(join(projectDir, 'note.md'), 'hello');
     await waitCondition(
       () => store.listPendingEvents().some((e) => e.filePath.endsWith('note.md')),

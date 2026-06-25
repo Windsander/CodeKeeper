@@ -1,5 +1,5 @@
 import { createRoleRunner } from '../runners/role-runner.js';
-import type { Role } from '../../types.js';
+import type { Role, Project } from '../../types.js';
 import { LlmClient } from '../../llm/client.js';
 import { MetadataStore } from '../../store/metadata-store.js';
 
@@ -17,6 +17,7 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): {
     headers: string;
     rpm: number;
   };
+  projects: Project[];
 } {
   const role = env.ROLE as Role;
   const dbPath = env.CK_DB_PATH ?? '';
@@ -26,12 +27,29 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): {
   const apiUrl = env.CK_LLM_API_URL ?? '';
   const headers = env.CK_LLM_HEADERS ?? '{}';
   const rpm = Number(env.CK_LLM_RPM ?? '10');
+  const projects = parseProjectsJson(env.CK_PROJECTS_JSON);
+
+  if (!apiKey || !provider || !model || !apiUrl) {
+    throw new Error('缺少必要的环境变量');
+  }
 
   return {
     role,
     dbPath,
     llm: { apiKey, provider, model, apiUrl, headers, rpm },
+    projects,
   };
+}
+
+function parseProjectsJson(raw?: string): Project[] {
+  if (!raw || raw.trim() === '') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed as Project[];
+  } catch {
+    throw new Error('CK_PROJECTS_JSON 解析失败');
+  }
 }
 
 /**

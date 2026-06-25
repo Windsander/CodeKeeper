@@ -18,6 +18,7 @@ describe('ArchivePipeline', () => {
     dbPath = join(tmp, 'metadata.db');
     projectRoot = join(tmp, 'project');
     archiveRoot = join(tmp, 'archive');
+    mkdirSync(projectRoot, { recursive: true });
     mkdirSync(archiveRoot, { recursive: true });
   });
 

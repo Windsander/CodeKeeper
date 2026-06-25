@@ -48,6 +48,8 @@ export class Daemon {
   private scanJob: ReturnType<typeof schedule> | null = null;
   private running = false;
   private ipcServer: IpcServer | null = null;
+  private watcherInitImmediate: NodeJS.Immediate | null = null;
+  private watcherTimeout: NodeJS.Timeout | null = null;
   private handlerContext: HandlerContext;
   private serviceRegistry: RoleServiceRegistry;
   private scanService: ScanService;
@@ -150,9 +152,9 @@ export class Daemon {
     // IPC server 启动后，把文件监控等非关键初始化推迟到下一个事件循环，
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
     // MR Agent 调度服务（ClassicService）不随 daemon 启动，由 UI 的“启动服务”按钮控制。
-    setImmediate(() => {
+    this.watcherInitImmediate = setImmediate(() => {
       // 进一步延迟 watcher 启动 3 秒，避免 App 启动瞬间的 IO 峰值阻塞主进程事件循环
-      setTimeout(() => {
+      this.watcherTimeout = setTimeout(() => {
         const projects = this.options.registry.list();
         // 错开每个项目 watcher 的启动时间，避免多个 chokidar 同时扫描目录阻塞事件循环
         projects.forEach((project, index) => {
@@ -168,9 +170,17 @@ export class Daemon {
   async stop(): Promise<void> {
     if (!this.running) return;
     this.running = false;
+    if (this.watcherInitImmediate) {
+      clearImmediate(this.watcherInitImmediate);
+      this.watcherInitImmediate = null;
+    }
+    if (this.watcherTimeout) {
+      clearTimeout(this.watcherTimeout);
+      this.watcherTimeout = null;
+    }
     // 停止所有角色服务
     for (const role of ROLES) {
-      this.serviceRegistry.stop(role);
+      await this.serviceRegistry.stop(role);
     }
     this.scanService.stop();
     this.scanJob?.stop();
