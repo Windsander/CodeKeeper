@@ -49,7 +49,7 @@ export class ReviewerBrain {
         title: mr.title,
         findingsCount: result.findings.length,
         summary: result.summary,
-        findings: result.findings as Array<Record<string, unknown>>,
+        findings: result.findings as unknown as Array<Record<string, unknown>>,
       });
     }
 

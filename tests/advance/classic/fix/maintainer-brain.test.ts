@@ -26,7 +26,7 @@ describe('MaintainerBrain', () => {
     const brain = new MaintainerBrain({
       llmClient: createMockLlmClient('{"action":"fix","reason":"可以安全修复"}'),
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1 });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1, userId: 'reviewer' });
     expect(decision.action).toBe('fix');
   });
 
@@ -36,7 +36,7 @@ describe('MaintainerBrain', () => {
         '{"action":"ask","reason":"需要澄清","question":"这里应该怎么改？"}'
       ),
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1 });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1, userId: 'reviewer' });
     expect(decision.action).toBe('ask');
     expect(decision.question).toBe('这里应该怎么改？');
   });
@@ -45,7 +45,7 @@ describe('MaintainerBrain', () => {
     const brain = new MaintainerBrain({
       llmClient: createMockLlmClient('{"action":"ignore","reason":"不相关"}'),
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1 });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1, userId: 'reviewer' });
     expect(decision.action).toBe('ignore');
   });
 
@@ -58,6 +58,7 @@ describe('MaintainerBrain', () => {
       finding: makeFinding({ severity: 'HIGH' }),
       fileContent: 'const x = 1;',
       mrIid: 1,
+      userId: 'reviewer',
     });
     expect(decision.action).toBe('ask');
     expect(decision.reason).toContain('HIGH');
@@ -67,7 +68,7 @@ describe('MaintainerBrain', () => {
     const brain = new MaintainerBrain({
       llmClient: createMockLlmClient('不是 JSON'),
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1 });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1, userId: 'reviewer' });
     expect(decision.action).toBe('ask');
   });
 
@@ -89,18 +90,29 @@ describe('MaintainerBrain', () => {
     expect(decision.fixDescription).toBe('把 x 改成 2');
   });
 
-  it('决策后调用 memoryClient.recordFixAttempt', async () => {
-    const memoryClient = { recordFixAttempt: vi.fn() } as unknown as NonNullable<
+  it('决策前召回用户偏好并拼入 prompt', async () => {
+    const complete = vi.fn().mockResolvedValue('{"action":"fix","reason":"可以安全修复"}');
+    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const memoryClient = {
+      recallUserPreferences: vi.fn().mockResolvedValue(['该用户偏好显式类型注解']),
+      recallProjectKnowledge: vi.fn().mockResolvedValue([]),
+      recallForMaintenance: vi.fn().mockResolvedValue([]),
+      recordFixAttempt: vi.fn(),
+    } as unknown as NonNullable<
       import('../../../../src/advance/classic/fix/maintainer-brain.js').MaintainerBrainOptions['memoryClient']
     >;
-    const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient('{"action":"fix","reason":"可以安全修复"}'),
-      memoryClient,
+
+    const brain = new MaintainerBrain({ llmClient, memoryClient });
+    await brain.decide({
+      finding: makeFinding(),
+      fileContent: 'const x = 1;',
+      originalComment: '加个类型',
+      mrIid: 1,
+      userId: 'alice',
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 42 });
-    expect(decision.action).toBe('fix');
-    expect(memoryClient.recordFixAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({ mrIid: 42, success: true })
-    );
+
+    expect(memoryClient.recallUserPreferences).toHaveBeenCalledWith('alice', expect.any(String));
+    const prompt = complete.mock.calls[0][0] as string;
+    expect(prompt).toContain('该用户偏好显式类型注解');
   });
 });

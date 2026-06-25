@@ -281,6 +281,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         fileContent,
         originalComment: firstNote.body,
         mrIid: mr.iid,
+        userId: firstNote.author,
       });
       console.log(
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
@@ -312,6 +313,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         fileContent,
         originalComment: firstNote.body,
         mrIid: mr.iid,
+        userId: firstNote.author,
       });
       console.log(
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`

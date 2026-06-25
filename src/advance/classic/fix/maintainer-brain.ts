@@ -60,8 +60,10 @@ export class MaintainerBrain {
     originalComment?: string;
     /** MR 在 GitLab 中的 IID，用于记忆关联 */
     mrIid: number;
+    /** discussion 发起者（远端 Reviewer / 用户），用于召回用户偏好 */
+    userId: string;
   }): Promise<MaintainerDecision> {
-    const { finding, fileContent, originalComment, mrIid } = params;
+    const { finding, fileContent, originalComment, mrIid, userId } = params;
 
     // 风险等级未开启时，不直接修复，而是询问 Reviewer 如何处理
     if (!this.allowedRiskLevels.includes(finding.severity)) {
@@ -72,7 +74,8 @@ export class MaintainerBrain {
       };
     }
 
-    const prompt = this.buildInitialPrompt(finding, fileContent, originalComment);
+    const recalledMemories = await this.recallMemories(userId, finding, originalComment);
+    const prompt = this.buildInitialPrompt(finding, fileContent, originalComment, recalledMemories);
     const raw = await this.options.llmClient.complete(prompt, this.systemPrompt());
     const decision = this.parseDecision(raw);
 
@@ -87,6 +90,36 @@ export class MaintainerBrain {
     }
 
     return decision;
+  }
+
+  private async recallMemories(
+    userId: string,
+    finding: ReviewFinding,
+    originalComment?: string
+  ): Promise<string> {
+    if (!this.options.memoryClient) return '';
+    const query = `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(
+      0,
+      2000
+    );
+    const [userPrefs, projectKnowledge, maintenanceMemories] = await Promise.all([
+      this.options.memoryClient.recallUserPreferences(userId, query),
+      this.options.memoryClient.recallProjectKnowledge(query),
+      this.options.memoryClient.recallForMaintenance(query),
+    ]);
+
+    const sections: string[] = [];
+    if (userPrefs.length > 0) {
+      sections.push(`用户偏好：\n${userPrefs.map((m) => `- ${m}`).join('\n')}`);
+    }
+    if (projectKnowledge.length > 0) {
+      sections.push(`项目知识：\n${projectKnowledge.map((m) => `- ${m}`).join('\n')}`);
+    }
+    if (maintenanceMemories.length > 0) {
+      sections.push(`维护历史：\n${maintenanceMemories.map((m) => `- ${m}`).join('\n')}`);
+    }
+    if (sections.length === 0) return '';
+    return `\n\n## 相关记忆\n\n${sections.join('\n\n')}`;
   }
 
   /**
@@ -131,7 +164,8 @@ export class MaintainerBrain {
   private buildInitialPrompt(
     finding: ReviewFinding,
     fileContent: string,
-    originalComment?: string
+    originalComment?: string,
+    recalledMemories?: string
   ): string {
     return [
       '## 文件路径',
@@ -151,6 +185,7 @@ export class MaintainerBrain {
       `- 行号：${finding.line}`,
       `- 问题描述：${finding.message}`,
       `- 修改建议：${finding.suggestion}`,
+      recalledMemorySection(recalledMemories),
       '',
       '请输出 JSON：',
       '{',
@@ -249,4 +284,9 @@ export class MaintainerBrain {
       };
     }
   }
+}
+
+function recalledMemorySection(memories?: string): string {
+  if (!memories || memories.trim().length === 0) return '';
+  return `${memories}`;
 }
