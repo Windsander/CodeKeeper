@@ -15,7 +15,10 @@ import { RoleServiceRegistry } from './classic/role-service-registry.js';
 import { ROLES } from './types.js';
 import { ScanService } from './scan/scan-service.js';
 import { GitLabProvider } from './classic/provider/gitlab-provider.js';
+import { EverOSService } from './classic/memory/everos-service.js';
+import { EverOSMcpServer } from './classic/memory/everos-mcp-server.js';
 import path from 'node:path';
+import { join } from 'node:path';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -48,6 +51,9 @@ export class Daemon {
   private handlerContext: HandlerContext;
   private serviceRegistry: RoleServiceRegistry;
   private scanService: ScanService;
+  private everosService: EverOSService | null = null;
+  private everosMcpServer: EverOSMcpServer | null = null;
+  private everosMcpUrl: string | null = null;
 
   constructor(private options: DaemonOptions) {
     // 初始化角色服务注册表，注册所有支持的角色
@@ -126,6 +132,21 @@ export class Daemon {
     });
     await this.ipcServer.start();
 
+    // 启动 EverOS 本地记忆基础设施，所有角色服务共享同一套实例
+    try {
+      const submodulePath = join(__dirname, '..', '..', 'vendor', 'everos');
+      this.everosService = new EverOSService({ submodulePath });
+      const everosUrl = await this.everosService.start();
+      this.everosMcpServer = new EverOSMcpServer({ everosUrl });
+      this.everosMcpUrl = await this.everosMcpServer.start();
+      this.serviceRegistry.setMemoryMcpUrl(this.everosMcpUrl);
+      logger.info({ everosUrl, mcpUrl: this.everosMcpUrl }, 'EverOS 记忆基础设施已启动');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, `EverOS 启动失败: ${message}`);
+      // 记忆基础设施失败不应阻塞 daemon 其余功能
+    }
+
     // IPC server 启动后，把文件监控等非关键初始化推迟到下一个事件循环，
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
     // MR Agent 调度服务（ClassicService）不随 daemon 启动，由 UI 的“启动服务”按钮控制。
@@ -154,6 +175,11 @@ export class Daemon {
     this.scanService.stop();
     this.scanJob?.stop();
     this.scanJob = null;
+    await this.everosMcpServer?.stop();
+    this.everosService?.stop();
+    this.everosMcpServer = null;
+    this.everosService = null;
+    this.everosMcpUrl = null;
     for (const watchers of this.watchers.values()) {
       for (const watcher of watchers) {
         watcher.stop();

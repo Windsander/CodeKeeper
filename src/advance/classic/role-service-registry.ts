@@ -62,6 +62,13 @@ export class RoleServiceRegistry {
   }
 
   /**
+   * 设置 EverOS MCP Server URL，供后续懒创建的角色服务使用
+   */
+  setMemoryMcpUrl(url: string): void {
+    this.options = { ...this.options, mcpUrl: url };
+  }
+
+  /**
    * 获取已注册的服务实例
    * @param role 角色标识
    * @returns RoleService 实例
