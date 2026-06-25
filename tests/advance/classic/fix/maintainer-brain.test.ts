@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { MaintainerBrain } from '../../../../src/advance/classic/fix/maintainer-brain.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { ReviewFinding } from '../../../../src/advance/classic/provider/types.js';
@@ -86,5 +86,20 @@ describe('MaintainerBrain', () => {
     });
     expect(decision.action).toBe('fix');
     expect(decision.fixDescription).toBe('把 x 改成 2');
+  });
+
+  it('决策后调用 memoryClient.recordFixAttempt', async () => {
+    const memoryClient = { recordFixAttempt: vi.fn() } as unknown as NonNullable<
+      import('../../../../src/advance/classic/fix/maintainer-brain.js').MaintainerBrainOptions['memoryClient']
+    >;
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient('{"action":"fix","reason":"可以安全修复"}'),
+      memoryClient,
+    });
+    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 42 });
+    expect(decision.action).toBe('fix');
+    expect(memoryClient.recordFixAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ mrIid: 42, success: true })
+    );
   });
 });

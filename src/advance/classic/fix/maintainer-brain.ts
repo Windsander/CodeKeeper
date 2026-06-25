@@ -1,5 +1,6 @@
 import type { ReviewFinding } from '../provider/types.js';
 import { LlmClient } from '../../llm/client.js';
+import type { IMemoryClient } from '../memory/types.js';
 
 /**
  * Maintainer 对单条 finding/discussion 可执行的最终动作
@@ -29,6 +30,8 @@ export interface MaintainerBrainOptions {
   soulContent?: string;
   /** 项目自动归纳的智库内容（context.md 摘要） */
   projectContext?: string;
+  /** 可选的记忆客户端，用于记录修复尝试 */
+  memoryClient?: IMemoryClient;
 }
 
 /**
@@ -55,8 +58,10 @@ export class MaintainerBrain {
     fileContent: string;
     /** 原始评论内容，优先于 finding.message 用于理解 Reviewer 意图 */
     originalComment?: string;
+    /** MR 在 GitLab 中的 IID，用于记忆关联 */
+    mrIid?: number;
   }): Promise<MaintainerDecision> {
-    const { finding, fileContent, originalComment } = params;
+    const { finding, fileContent, originalComment, mrIid } = params;
 
     // 风险等级未开启时，不直接修复，而是询问 Reviewer 如何处理
     if (!this.allowedRiskLevels.includes(finding.severity)) {
@@ -69,7 +74,19 @@ export class MaintainerBrain {
 
     const prompt = this.buildInitialPrompt(finding, fileContent, originalComment);
     const raw = await this.options.llmClient.complete(prompt, this.systemPrompt());
-    return this.parseDecision(raw);
+    const decision = this.parseDecision(raw);
+
+    if (this.options.memoryClient) {
+      await this.options.memoryClient.recordFixAttempt({
+        mrIid: mrIid ?? 0,
+        file: finding.file,
+        line: finding.line,
+        success: decision.action === 'fix',
+        reason: decision.reason,
+      });
+    }
+
+    return decision;
   }
 
   /**
