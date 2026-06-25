@@ -29,6 +29,15 @@ export interface ProjectKnowledgeItem {
 }
 
 /**
+ * 将任意 ID 清洗为 EverOS 路径安全字符集
+ * 允许：字母、数字、_.@+-；替换其他字符为下划线，并排除 ".."
+ */
+export function sanitizeEverOSId(id: string): string {
+  const safe = id.replace(/[^a-zA-Z0-9_.@+-]/g, '_');
+  return safe === '.' || safe === '..' ? '_' : safe;
+}
+
+/**
  * 记忆客户端接口
  * Reviewer/Maintainer/Archiver 通过它读写记忆
  */
