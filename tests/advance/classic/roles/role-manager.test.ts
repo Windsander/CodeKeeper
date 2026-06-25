@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ReviewerManager } from '../../../../src/advance/classic/roles/reviewer-manager.js';
 import { MaintainerManager } from '../../../../src/advance/classic/roles/maintainer-manager.js';
+import { ArchiverManager } from '../../../../src/advance/classic/roles/archiver-manager.js';
 import { MetadataStore } from '../../../../src/advance/store/metadata-store.js';
 import type { Role, RoleConfig } from '../../../../src/advance/types.js';
 
@@ -29,5 +30,17 @@ describe('RoleManager', () => {
   it('MaintainerManager Soul 文件名正确', () => {
     const manager = new MaintainerManager(store);
     expect(manager.getSoulFileName()).toBe('MAINTAINER-SOUL.md');
+  });
+
+  it('ArchiverManager 返回默认 archiver 配置', async () => {
+    const manager = new ArchiverManager(store);
+    const config = await manager.getConfig('p1');
+    expect(config.role).toBe('archiver');
+    expect(config.enabled).toBe(false);
+  });
+
+  it('ArchiverManager Soul 文件名正确', () => {
+    const manager = new ArchiverManager(store);
+    expect(manager.getSoulFileName()).toBe('ARCHIVER-SOUL.md');
   });
 });
