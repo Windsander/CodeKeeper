@@ -152,7 +152,7 @@ export class Daemon {
       logger.info({ everosUrl, mcpUrl: this.everosMcpUrl }, 'EverOS 记忆基础设施已启动');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.error({ err }, `EverOS 启动失败: ${message}`);
+      logger.warn({ err }, `EverOS 未启动: ${message}`);
       // 记忆基础设施失败不应阻塞 daemon 其余功能
     }
 
