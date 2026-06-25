@@ -14,6 +14,7 @@ import { MaintainerBrain } from '../fix/maintainer-brain.js';
 import { MaintainerActor } from '../fix/maintainer-actor.js';
 import { loadSoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
+import { MemoryClient } from '../memory/memory-client.js';
 import { getArchiveRoot } from '../../types.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
@@ -55,6 +56,20 @@ export class MaintainerRunner extends BaseRoleRunner {
     const soul = loadSoulContent(project, 'maintainer');
     const projectContext = loadProjectContext(getArchiveRoot(project));
 
+    const mcpUrl = process.env.CK_EVEROS_MCP_URL ?? '';
+    const memoryClient = mcpUrl
+      ? new MemoryClient({
+          mcpUrl,
+          context: {
+            appId: 'codekeeper-advance',
+            projectId: project.id,
+            agentId: 'maintainer',
+            userId: 'codekeeper-system',
+            sessionId: `maintainer-${project.id}-${Date.now()}`,
+          },
+        })
+      : undefined;
+
     const allowedRiskLevels = maintainerConfig.autoFixRiskLevels ?? ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
     const maintainerName = maintainerConfig.maintainerName || 'CodeKeeper Maintainer';
     const worktreeManager = new WorktreeManager({
@@ -68,8 +83,11 @@ export class MaintainerRunner extends BaseRoleRunner {
       allowedRiskLevels,
       soulContent: soul.content || undefined,
       projectContext,
+      memoryClient,
     });
     const actor = new MaintainerActor({ provider, fixAgent, maintainerName });
+
+    await memoryClient?.connect().catch(() => undefined);
 
     const state = loadState(project);
     state.interactiveThreads ??= {};
@@ -152,6 +170,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
 
     saveState(project, state);
+    await memoryClient?.disconnect().catch(() => undefined);
   }
 
   /**
@@ -261,6 +280,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         finding,
         fileContent,
         originalComment: firstNote.body,
+        mrIid: mr.iid,
       });
       console.log(
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
@@ -291,6 +311,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         finding,
         fileContent,
         originalComment: firstNote.body,
+        mrIid: mr.iid,
       });
       console.log(
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`

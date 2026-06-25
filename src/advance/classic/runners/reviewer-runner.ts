@@ -11,6 +11,7 @@ import { ReviewerBrain } from '../review/reviewer-brain.js';
 import { ReviewerActor } from '../review/reviewer-actor.js';
 import { loadSoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
+import { MemoryClient } from '../memory/memory-client.js';
 import { getArchiveRoot } from '../../types.js';
 import type { Project, RoleConfig } from '../../types.js';
 import type { MergeRequest, MrDiff } from '../provider/types.js';
@@ -46,14 +47,31 @@ export class ReviewerRunner extends BaseRoleRunner {
     const soul = loadSoulContent(project, 'reviewer');
     const projectContext = loadProjectContext(getArchiveRoot(project));
 
+    const mcpUrl = process.env.CK_EVEROS_MCP_URL ?? '';
+    const memoryClient = mcpUrl
+      ? new MemoryClient({
+          mcpUrl,
+          context: {
+            appId: 'codekeeper-advance',
+            projectId: project.id,
+            agentId: 'reviewer',
+            userId: 'codekeeper-system',
+            sessionId: `reviewer-${project.id}-${Date.now()}`,
+          },
+        })
+      : undefined;
+
     const brain = new ReviewerBrain({
       llmClient: this.llmClient,
       tokenBudget: 4000,
       rules: soul.content || '默认评审规则：检查代码质量、安全性、性能问题',
       soulContent: soul.content || undefined,
       projectContext,
+      memoryClient,
     });
     const actor = new ReviewerActor({ provider });
+
+    await memoryClient?.connect().catch(() => undefined);
 
     console.log(`[ReviewerRunner] 扫描项目 ${project.name} 的 open MRs...`);
     console.log(`[ReviewerRunner] 项目 ${project.name} 使用 filter: ${JSON.stringify(config.filter ?? {})}`);
@@ -111,5 +129,7 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       await actor.postReview(mr, result);
     }
+
+    await memoryClient?.disconnect().catch(() => undefined);
   }
 }
