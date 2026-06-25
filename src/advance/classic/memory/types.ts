@@ -38,6 +38,20 @@ export function sanitizeEverOSId(id: string): string {
 }
 
 /**
+ * 写入记忆时的 finding 快照
+ * 与 provider 层的 ReviewFinding 保持字段兼容，但不直接依赖 provider 类型。
+ */
+export interface MemoryFinding {
+  severity: string;
+  file: string;
+  line: number;
+  message: string;
+  suggestion?: string;
+  ruleId?: string;
+  autoFixable?: boolean;
+}
+
+/**
  * 记忆客户端接口
  * Reviewer/Maintainer/Archiver 通过它读写记忆
  */
@@ -50,7 +64,7 @@ export interface IMemoryClient {
     findingsCount: number;
     summary: string;
     /** 评审发现的简要列表（可选） */
-    findings?: Array<Record<string, unknown>>;
+    findings?: Array<MemoryFinding>;
   }): Promise<void>;
 
   recordFixAttempt(input: {
