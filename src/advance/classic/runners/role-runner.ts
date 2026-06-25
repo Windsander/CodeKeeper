@@ -1,6 +1,7 @@
 import type { Role } from '../../types.js';
 import { ReviewerRunner } from './reviewer-runner.js';
 import { MaintainerRunner } from './maintainer-runner.js';
+import { ArchiverRunner } from './archiver-runner.js';
 import { LlmClient } from '../../llm/client.js';
 
 /**
@@ -31,19 +32,26 @@ export interface IRoleRunner {
   stopProjectLoop(projectId: string): void;
 }
 
+export interface CreateRoleRunnerOptions {
+  llmClient: LlmClient;
+  mcpUrl?: string;
+}
+
 /**
  * 根据角色创建对应的 Runner 实例
  * @param role - 角色标识
- * @param llmClient - LLM 客户端实例
+ * @param options - Runner 构造选项
  * @returns 对应角色的 Runner 实例
  * @throws 当传入未支持的角色时抛出错误
  */
-export function createRoleRunner(role: Role, llmClient: LlmClient): IRoleRunner {
+export function createRoleRunner(role: Role, options: CreateRoleRunnerOptions): IRoleRunner {
   switch (role) {
     case 'reviewer':
-      return new ReviewerRunner({ llmClient });
+      return new ReviewerRunner({ llmClient: options.llmClient });
     case 'maintainer':
-      return new MaintainerRunner({ llmClient });
+      return new MaintainerRunner({ llmClient: options.llmClient });
+    case 'archiver':
+      return new ArchiverRunner({ llmClient: options.llmClient, mcpUrl: options.mcpUrl ?? process.env.CK_EVEROS_MCP_URL ?? '' });
     default:
       throw new Error(`未支持的角色: ${role}`);
   }

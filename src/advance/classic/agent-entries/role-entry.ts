@@ -91,7 +91,10 @@ async function main() {
     minRequestInterval,
   });
 
-  const runner = createRoleRunner(config.role, llmClient);
+  const runner = createRoleRunner(config.role, {
+    llmClient,
+    mcpUrl: process.env.CK_EVEROS_MCP_URL,
+  });
 
   // 子进程独立打开数据库，周期性读取启用项目并同步 Agent 循环
   const store = new MetadataStore(config.dbPath);
