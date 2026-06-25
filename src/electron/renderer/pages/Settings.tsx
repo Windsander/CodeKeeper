@@ -208,7 +208,6 @@ export function Settings() {
   const [saving, setSaving] = useState(false);
 
   const [everos, setEveros] = useState<EverOSConfig>({});
-  const [agentExpanded, setAgentExpanded] = useState(true);
   const [everosExpanded, setEverosExpanded] = useState(false);
 
   useEffect(() => {
@@ -308,110 +307,110 @@ export function Settings() {
       </div>
 
       <div className="card" style={{ maxWidth: 720 }}>
-        <CollapsibleSection
-          title="Agent 通用配置"
-          expanded={agentExpanded}
-          onToggle={() => setAgentExpanded((prev) => !prev)}
-          headerExtra={apiKey ? <span className="badge badge-success">已配置</span> : <span className="badge badge-warning">未配置</span>}
-        >
-          <div className="form-group">
-            <label>Provider</label>
-            <Dropdown
-              value={provider}
-              options={PROVIDER_OPTIONS}
-              onChange={(value) => setProvider(value)}
-            />
+        <div className="config-section expanded">
+          <div className="config-section-header locked">
+            <h5 className="config-section-title">Agent 通用配置</h5>
           </div>
-
-          <div className="form-group">
-            <label>API Key</label>
-            <SecretInput
-              value={apiKey}
-              onChange={setApiKey}
-              placeholder="请输入 API Key"
-              ariaLabel="Agent API Key 可见性切换"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>API Base URL（可选）</label>
-            <input
-              className="input"
-              value={apiUrl}
-              placeholder="留空使用默认"
-              onChange={(e) => setApiUrl(e.target.value)}
-            />
-            <div className="input-hint" style={{ marginTop: 6 }}>
-              OpenAI 兼容示例：https://your-openai-proxy.example.com/v1
+          <div className="config-section-body">
+            <div className="form-group">
+              <label>Provider</label>
+              <Dropdown
+                value={provider}
+                options={PROVIDER_OPTIONS}
+                onChange={(value) => setProvider(value)}
+              />
             </div>
-          </div>
 
-          <div className="form-group">
-            <label>Model</label>
-            <input
-              className="input"
-              value={model}
-              placeholder={provider === 'openai' ? 'gpt-4o-mini' : 'claude-3-5-sonnet-20241022'}
-              onChange={(e) => setModel(e.target.value)}
-            />
-          </div>
+            <div className="form-group">
+              <label>API Key</label>
+              <SecretInput
+                value={apiKey}
+                onChange={setApiKey}
+                placeholder="请输入 API Key"
+                ariaLabel="Agent API Key 可见性切换"
+              />
+            </div>
 
-          <div className="form-group">
-            <label>自定义 Headers</label>
-            {headerEntries.map((entry, index) => (
-              <div key={index} className="form-row" style={{ marginBottom: 8 }}>
-                <input
-                  className="input"
-                  placeholder="Header 名称"
-                  value={entry.key}
-                  onChange={(e) => updateHeader(index, 'key', e.target.value)}
-                />
-                <input
-                  className="input"
-                  placeholder="Header 值"
-                  value={entry.value}
-                  onChange={(e) => updateHeader(index, 'value', e.target.value)}
-                />
-                <button className="btn btn-danger btn-sm" onClick={() => removeHeader(index)}>删除</button>
-              </div>
-            ))}
-            <button className="btn btn-primary btn-sm" onClick={addHeader}>+ 添加 Header</button>
-          </div>
-
-          <div className="form-group">
-            <label>扫描间隔</label>
-            <Dropdown
-              value={isCustomCron ? 'custom' : scanCron}
-              options={SCAN_INTERVALS.map((i) => ({ value: i.cron, label: i.label }))}
-              onChange={(value) => handleIntervalChange(value)}
-            />
-            {isCustomCron && (
+            <div className="form-group">
+              <label>API Base URL（可选）</label>
               <input
                 className="input"
-                style={{ marginTop: 8 }}
-                value={customCron}
-                placeholder="*/5 * * * *"
-                onChange={(e) => handleCustomCronChange(e.target.value)}
+                value={apiUrl}
+                placeholder="留空使用默认"
+                onChange={(e) => setApiUrl(e.target.value)}
               />
-            )}
-            <div className="input-hint" style={{ marginTop: 6 }}>当前 cron: {scanCron}</div>
-          </div>
+              <div className="input-hint" style={{ marginTop: 6 }}>
+                OpenAI 兼容示例：https://your-openai-proxy.example.com/v1
+              </div>
+            </div>
 
-          <div className="form-group">
-            <label>LLM 每分钟请求数限制</label>
-            <input
-              type="number"
-              className="input"
-              min={1}
-              max={600}
-              value={llmRequestsPerMinute}
-              onChange={(e) => setLlmRequestsPerMinute(Math.max(1, Number(e.target.value) || 10))}
-            />
-            <div className="input-hint" style={{ marginTop: 6 }}>
-              请求间隔约 {Math.ceil(60000 / llmRequestsPerMinute)}ms
+            <div className="form-group">
+              <label>Model</label>
+              <input
+                className="input"
+                value={model}
+                placeholder={provider === 'openai' ? 'gpt-4o-mini' : 'claude-3-5-sonnet-20241022'}
+                onChange={(e) => setModel(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>自定义 Headers</label>
+              {headerEntries.map((entry, index) => (
+                <div key={index} className="form-row" style={{ marginBottom: 8 }}>
+                  <input
+                    className="input"
+                    placeholder="Header 名称"
+                    value={entry.key}
+                    onChange={(e) => updateHeader(index, 'key', e.target.value)}
+                  />
+                  <input
+                    className="input"
+                    placeholder="Header 值"
+                    value={entry.value}
+                    onChange={(e) => updateHeader(index, 'value', e.target.value)}
+                  />
+                  <button className="btn btn-danger btn-sm" onClick={() => removeHeader(index)}>删除</button>
+                </div>
+              ))}
+              <button className="btn btn-primary btn-sm" onClick={addHeader}>+ 添加 Header</button>
+            </div>
+
+            <div className="form-group">
+              <label>扫描间隔</label>
+              <Dropdown
+                value={isCustomCron ? 'custom' : scanCron}
+                options={SCAN_INTERVALS.map((i) => ({ value: i.cron, label: i.label }))}
+                onChange={(value) => handleIntervalChange(value)}
+              />
+              {isCustomCron && (
+                <input
+                  className="input"
+                  style={{ marginTop: 8 }}
+                  value={customCron}
+                  placeholder="*/5 * * * *"
+                  onChange={(e) => handleCustomCronChange(e.target.value)}
+                />
+              )}
+              <div className="input-hint" style={{ marginTop: 6 }}>当前 cron: {scanCron}</div>
+            </div>
+
+            <div className="form-group">
+              <label>LLM 每分钟请求数限制</label>
+              <input
+                type="number"
+                className="input"
+                min={1}
+                max={600}
+                value={llmRequestsPerMinute}
+                onChange={(e) => setLlmRequestsPerMinute(Math.max(1, Number(e.target.value) || 10))}
+              />
+              <div className="input-hint" style={{ marginTop: 6 }}>
+                请求间隔约 {Math.ceil(60000 / llmRequestsPerMinute)}ms
+              </div>
             </div>
           </div>
-        </CollapsibleSection>
+        </div>
 
         <CollapsibleSection
           title="EverOS 记忆配置"
