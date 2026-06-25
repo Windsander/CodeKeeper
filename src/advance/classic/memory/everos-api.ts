@@ -56,7 +56,6 @@ export interface EverOSSearchParams {
   owner: EverOSSearchOwner;
   query: string;
   topK?: number;
-  filters?: Record<string, unknown>;
 }
 
 /**
@@ -79,6 +78,61 @@ export interface EverOSSearchResult {
   items: EverOSSearchItem[];
 }
 
+interface SearchAgentCaseItem {
+  id?: string;
+  agent_id?: string;
+  app_id?: string;
+  project_id?: string;
+  session_id?: string;
+  task_intent?: string;
+  approach?: string;
+  key_insight?: string | null;
+  quality_score?: number;
+  timestamp?: string;
+  score?: number;
+}
+
+interface SearchEpisodeItem {
+  id?: string;
+  user_id?: string;
+  app_id?: string;
+  project_id?: string;
+  session_id?: string;
+  summary?: string;
+  subject?: string;
+  episode?: string;
+  timestamp?: string;
+  score?: number;
+}
+
+interface SearchAgentSkillItem {
+  id?: string;
+  agent_id?: string;
+  app_id?: string;
+  project_id?: string;
+  name?: string;
+  description?: string;
+  content?: string;
+  confidence?: number;
+  maturity_score?: number;
+  score?: number;
+}
+
+interface SearchProfileItem {
+  id?: string;
+  user_id?: string;
+  app_id?: string;
+  project_id?: string;
+  profile_data?: Record<string, string | number | boolean | null>;
+}
+
+interface EverOSSearchResponse {
+  agent_cases?: SearchAgentCaseItem[];
+  episodes?: SearchEpisodeItem[];
+  agent_skills?: SearchAgentSkillItem[];
+  profiles?: SearchProfileItem[];
+}
+
 /**
  * 从 EverOS 召回记忆
  *
@@ -88,7 +142,7 @@ export async function everosMemorySearch(
   everosUrl: string,
   params: EverOSSearchParams
 ): Promise<EverOSSearchResult> {
-  const body: Record<string, unknown> = {
+  const body: Record<string, string | number | boolean> = {
     app_id: sanitizeEverOSId(params.appId),
     project_id: sanitizeEverOSId(params.projectId),
     query: params.query,
@@ -103,10 +157,6 @@ export async function everosMemorySearch(
     body.agent_id = sanitizeEverOSId(params.owner.agentId);
   }
 
-  if (params.filters) {
-    body.filters = params.filters;
-  }
-
   const res = await fetch(`${everosUrl}/api/v1/memory/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -116,81 +166,66 @@ export async function everosMemorySearch(
     throw new Error(`EverOS memory/search 失败: ${res.status} ${await res.text()}`);
   }
 
-  const json = (await res.json()) as { data?: Record<string, unknown> };
+  const json = (await res.json()) as { data?: EverOSSearchResponse };
   const data = json.data ?? {};
   const items: EverOSSearchItem[] = [];
 
-  const pushItems = (arr: unknown, type: string) => {
-    if (!Array.isArray(arr)) return;
-    for (const raw of arr) {
-      const item = raw as Record<string, unknown> | undefined;
-      if (!item) continue;
-      const content = extractSearchContent(item, type);
-      if (!content || content.trim().length === 0) continue;
-      items.push({
-        id: String(item.id ?? `${type}-${items.length}`),
-        type,
-        content,
-        source: extractSource(item, type),
-        timestamp: item.timestamp ? String(item.timestamp) : undefined,
-        score: typeof item.score === 'number' ? item.score : undefined,
-        sessionId: item.session_id ? String(item.session_id) : undefined,
-      });
-    }
-  };
+  for (const agentCase of data.agent_cases ?? []) {
+    const content = agentCase.key_insight ?? agentCase.approach ?? agentCase.task_intent ?? '';
+    if (!content) continue;
+    items.push({
+      id: agentCase.id ?? `agent_case-${items.length}`,
+      type: 'agent_case',
+      content,
+      source: agentCase.task_intent,
+      timestamp: agentCase.timestamp,
+      score: agentCase.score,
+      sessionId: agentCase.session_id,
+    });
+  }
 
-  pushItems(data.agent_cases, 'agent_case');
-  pushItems(data.episodes, 'episode');
-  pushItems(data.agent_skills, 'agent_skill');
-  pushItems(data.profiles, 'profile');
+  for (const episode of data.episodes ?? []) {
+    const content = episode.summary ?? episode.episode ?? '';
+    if (!content) continue;
+    items.push({
+      id: episode.id ?? `episode-${items.length}`,
+      type: 'episode',
+      content,
+      source: episode.subject,
+      timestamp: episode.timestamp,
+      score: episode.score,
+      sessionId: episode.session_id,
+    });
+  }
+
+  for (const skill of data.agent_skills ?? []) {
+    const content = skill.description ?? skill.name ?? skill.content ?? '';
+    if (!content) continue;
+    items.push({
+      id: skill.id ?? `agent_skill-${items.length}`,
+      type: 'agent_skill',
+      content,
+      source: skill.name,
+      timestamp: undefined,
+      score: skill.score,
+      sessionId: undefined,
+    });
+  }
+
+  for (const profile of data.profiles ?? []) {
+    const profileData = profile.profile_data;
+    if (!profileData) continue;
+    items.push({
+      id: profile.id ?? `profile-${items.length}`,
+      type: 'profile',
+      content: JSON.stringify(profileData),
+      source: undefined,
+      timestamp: undefined,
+      score: undefined,
+      sessionId: undefined,
+    });
+  }
 
   items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   return { items };
-}
-
-function extractSearchContent(item: Record<string, unknown>, type: string): string {
-  switch (type) {
-    case 'agent_case':
-      return (
-        [item.key_insight, item.approach, item.task_intent]
-          .map((v) => (typeof v === 'string' ? v : ''))
-          .find((v) => v.length > 0) ?? ''
-      );
-    case 'episode':
-      return (
-        [item.summary, item.episode]
-          .map((v) => (typeof v === 'string' ? v : ''))
-          .find((v) => v.length > 0) ?? ''
-      );
-    case 'agent_skill':
-      return (
-        [item.description, item.name, item.content]
-          .map((v) => (typeof v === 'string' ? v : ''))
-          .find((v) => v.length > 0) ?? ''
-      );
-    case 'profile': {
-      const profileData = item.profile_data;
-      if (profileData && typeof profileData === 'object') {
-        return JSON.stringify(profileData);
-      }
-      return '';
-    }
-    default:
-      return '';
-  }
-}
-
-function extractSource(item: Record<string, unknown>, type: string): string | undefined {
-  switch (type) {
-    case 'agent_case':
-      return typeof item.task_intent === 'string' && item.task_intent.length > 0
-        ? item.task_intent
-        : undefined;
-    case 'episode':
-      return typeof item.subject === 'string' && item.subject.length > 0 ? item.subject : undefined;
-    case 'agent_skill':
-      return typeof item.name === 'string' && item.name.length > 0 ? item.name : undefined;
-    default:
-      return undefined;
-  }
 }
