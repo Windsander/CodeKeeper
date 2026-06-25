@@ -12,6 +12,7 @@ import { logger } from '../../../core/logger.js';
 import { SecretSanitizer } from './secret-sanitizer.js';
 import type { MemoryContext, ProjectKnowledgeItem } from './types.js';
 import { sanitizeEverOSId } from './types.js';
+import { everosMemoryAdd, everosMemorySearch, type EverOSSearchItem } from './everos-api.js';
 
 export interface EverOSMcpServerOptions {
   /** EverOS HTTP API URL */
@@ -113,6 +114,7 @@ export class EverOSMcpServer {
               title: { type: 'string' },
               findingsCount: { type: 'number' },
               summary: { type: 'string' },
+              findings: { type: 'array' },
             },
             required: ['context', 'mrIid', 'title', 'findingsCount', 'summary'],
           },
@@ -127,6 +129,86 @@ export class EverOSMcpServer {
               items: { type: 'array' },
             },
             required: ['context', 'items'],
+          },
+        },
+        {
+          name: 'record_fix_attempt',
+          description: 'Maintainer 记录一次修复尝试',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              mrIid: { type: 'number' },
+              file: { type: 'string' },
+              line: { type: 'number' },
+              success: { type: 'boolean' },
+              reason: { type: 'string' },
+            },
+            required: ['context', 'mrIid', 'file', 'line', 'success'],
+          },
+        },
+        {
+          name: 'record_interaction',
+          description: '记录 Maintainer 与远端用户的交互',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              discussionId: { type: 'string' },
+              userId: { type: 'string' },
+              decision: { type: 'string' },
+              outcome: { type: 'string' },
+            },
+            required: ['context', 'discussionId', 'userId', 'decision', 'outcome'],
+          },
+        },
+        {
+          name: 'recall_for_review',
+          description: 'Reviewer 召回与本次 MR 相关的历史评审经验',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              query: { type: 'string' },
+            },
+            required: ['context', 'query'],
+          },
+        },
+        {
+          name: 'recall_for_maintenance',
+          description: 'Maintainer 召回与本次维护相关的历史经验',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              query: { type: 'string' },
+            },
+            required: ['context', 'query'],
+          },
+        },
+        {
+          name: 'recall_project_knowledge',
+          description: '召回与查询相关的项目知识',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              query: { type: 'string' },
+            },
+            required: ['context', 'query'],
+          },
+        },
+        {
+          name: 'recall_user_preferences',
+          description: '召回指定用户的历史偏好与交互',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              userId: { type: 'string' },
+              query: { type: 'string' },
+            },
+            required: ['context', 'userId', 'query'],
           },
         },
       ],
@@ -148,6 +230,36 @@ export class EverOSMcpServer {
           );
           return this.okResult();
         }
+        if (name === 'record_fix_attempt') {
+          await this.handleRecordFixAttempt(args as { context: MemoryContext } & Record<string, unknown>);
+          return this.okResult();
+        }
+        if (name === 'record_interaction') {
+          await this.handleRecordInteraction(args as { context: MemoryContext } & Record<string, unknown>);
+          return this.okResult();
+        }
+        if (name === 'recall_for_review') {
+          return this.recallResult(
+            await this.handleRecallForReview(args as { context: MemoryContext; query: string })
+          );
+        }
+        if (name === 'recall_for_maintenance') {
+          return this.recallResult(
+            await this.handleRecallForMaintenance(args as { context: MemoryContext; query: string })
+          );
+        }
+        if (name === 'recall_project_knowledge') {
+          return this.recallResult(
+            await this.handleRecallProjectKnowledge(args as { context: MemoryContext; query: string })
+          );
+        }
+        if (name === 'recall_user_preferences') {
+          return this.recallResult(
+            await this.handleRecallUserPreferences(
+              args as { context: MemoryContext; userId: string; query: string }
+            )
+          );
+        }
         throw new Error(`未知 tool: ${name}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -161,6 +273,16 @@ export class EverOSMcpServer {
     return { content: [{ type: 'text', text: 'ok' } as TextContent] };
   }
 
+  private recallResult(items: EverOSSearchItem[]): CallToolResult {
+    const maxResults = 5;
+    const results = items
+      .slice(0, maxResults)
+      .map((item) => (item.source ? `${item.source}\n${item.content}` : item.content));
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ results }) } as TextContent],
+    };
+  }
+
   private errorResult(message: string): CallToolResult {
     return { content: [{ type: 'text', text: `error: ${message}` } as TextContent], isError: true };
   }
@@ -168,8 +290,16 @@ export class EverOSMcpServer {
   private async handleRecordReview(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
     const ctx = args.context;
     const summary = this.sanitizer.sanitize(String(args.summary ?? ''));
-    const content = `Reviewer 评审 MR !${String(args.mrIid ?? 0)}: ${String(args.title ?? '')}。发现 ${String(args.findingsCount ?? 0)} 个问题。总结：${summary}`;
-    await this.everosMemoryAdd(ctx, content);
+    const findings = Array.isArray(args.findings) ? args.findings : [];
+    const content = `Reviewer 评审 MR !${String(args.mrIid ?? 0)}: ${String(args.title ?? '')}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${JSON.stringify(findings, null, 2)}`;
+    await everosMemoryAdd(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      sessionId: ctx.sessionId,
+      senderId: ctx.agentId,
+      role: 'assistant',
+      content,
+    });
   }
 
   private async handleRecordProjectKnowledge(ctx: MemoryContext, items: ProjectKnowledgeItem[]): Promise<void> {
@@ -179,31 +309,107 @@ export class EverOSMcpServer {
       content: this.sanitizer.sanitize(item.content),
     }));
     const content = `整理项目知识：\n${JSON.stringify(sanitized, null, 2)}`;
-    await this.everosMemoryAdd(ctx, content);
+    await everosMemoryAdd(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      sessionId: ctx.sessionId,
+      senderId: ctx.agentId,
+      role: 'assistant',
+      content,
+    });
   }
 
-  private async everosMemoryAdd(ctx: MemoryContext, content: string): Promise<void> {
-    const body = {
-      app_id: sanitizeEverOSId(ctx.appId),
-      project_id: sanitizeEverOSId(ctx.projectId),
-      session_id: sanitizeEverOSId(ctx.sessionId),
-      messages: [
-        {
-          sender_id: sanitizeEverOSId(ctx.agentId),
-          role: 'assistant',
-          timestamp: Date.now(),
-          content,
-        },
-      ],
-    };
-
-    const res = await fetch(`${this.everosUrl}/api/v1/memory/add`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+  private async handleRecordFixAttempt(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+    const ctx = args.context;
+    const content = `Maintainer 在 MR !${String(args.mrIid ?? 0)} 尝试修复 ${String(args.file ?? '')}:${String(args.line ?? 0)}，结果=${args.success === true ? '成功' : '失败'}，理由=${String(args.reason ?? '')}`;
+    await everosMemoryAdd(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      sessionId: ctx.sessionId,
+      senderId: ctx.agentId,
+      role: 'assistant',
+      content,
     });
-    if (!res.ok) {
-      throw new Error(`EverOS memory/add 失败: ${res.status} ${await res.text()}`);
-    }
+  }
+
+  private async handleRecordInteraction(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+    const ctx = args.context;
+    const discussionId = String(args.discussionId ?? '');
+    const userId = sanitizeEverOSId(String(args.userId ?? ''));
+    const decision = String(args.decision ?? '');
+    const outcome = String(args.outcome ?? '');
+    const sessionId = `interaction-${discussionId}`;
+
+    // Agent track：记录 Maintainer 视角的交互
+    await everosMemoryAdd(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      sessionId,
+      senderId: ctx.agentId,
+      role: 'assistant',
+      content: `与 ${userId} 的 discussion ${discussionId} 交互：决策=${decision}，结果=${outcome}`,
+    });
+
+    // User track：记录用户视角的交互
+    await everosMemoryAdd(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      sessionId,
+      senderId: userId,
+      role: 'user',
+      content: `在 discussion ${discussionId} 中，Maintainer 决策=${decision}，结果=${outcome}`,
+    });
+  }
+
+  private async handleRecallForReview(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
+    const ctx = args.context;
+    const result = await everosMemorySearch(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      owner: { kind: 'agent', agentId: 'reviewer' },
+      query: args.query,
+      topK: 5,
+    });
+    return result.items;
+  }
+
+  private async handleRecallForMaintenance(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
+    const ctx = args.context;
+    const result = await everosMemorySearch(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      owner: { kind: 'agent', agentId: 'maintainer' },
+      query: args.query,
+      topK: 5,
+    });
+    return result.items;
+  }
+
+  private async handleRecallProjectKnowledge(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
+    const ctx = args.context;
+    const result = await everosMemorySearch(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      owner: { kind: 'agent', agentId: 'archiver' },
+      query: args.query,
+      topK: 5,
+    });
+    return result.items;
+  }
+
+  private async handleRecallUserPreferences(args: {
+    context: MemoryContext;
+    userId: string;
+    query: string;
+  }): Promise<EverOSSearchItem[]> {
+    const ctx = args.context;
+    const result = await everosMemorySearch(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      owner: { kind: 'user', userId: args.userId },
+      query: args.query,
+      topK: 5,
+    });
+    return result.items;
   }
 }

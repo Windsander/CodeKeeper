@@ -49,6 +49,8 @@ export interface IMemoryClient {
     title: string;
     findingsCount: number;
     summary: string;
+    /** 评审发现的简要列表（可选） */
+    findings?: Array<Record<string, unknown>>;
   }): Promise<void>;
 
   recordFixAttempt(input: {

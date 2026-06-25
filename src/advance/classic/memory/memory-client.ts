@@ -47,6 +47,7 @@ export class MemoryClient implements IMemoryClient {
     title: string;
     findingsCount: number;
     summary: string;
+    findings?: Array<Record<string, unknown>>;
   }): Promise<void> {
     await this.callTool('record_review', { ...input, context: this.context });
   }
@@ -58,7 +59,7 @@ export class MemoryClient implements IMemoryClient {
     success: boolean;
     reason?: string;
   }): Promise<void> {
-    logger.debug(input, 'recordFixAttempt 待阶段二实现');
+    await this.callTool('record_fix_attempt', { ...input, context: this.context });
   }
 
   async recordInteraction(input: {
@@ -67,7 +68,7 @@ export class MemoryClient implements IMemoryClient {
     decision: string;
     outcome: string;
   }): Promise<void> {
-    logger.debug(input, 'recordInteraction 待阶段二实现');
+    await this.callTool('record_interaction', { ...input, context: this.context });
   }
 
   async recordProjectKnowledge(items: ProjectKnowledgeItem[]): Promise<void> {
@@ -75,33 +76,47 @@ export class MemoryClient implements IMemoryClient {
   }
 
   async recallForReview(query: string): Promise<string[]> {
-    logger.debug({ query }, 'recallForReview 待阶段二实现');
-    return [];
+    return this.parseRecallResult(await this.callTool('recall_for_review', { context: this.context, query }));
   }
 
   async recallForMaintenance(query: string): Promise<string[]> {
-    logger.debug({ query }, 'recallForMaintenance 待阶段二实现');
-    return [];
+    return this.parseRecallResult(await this.callTool('recall_for_maintenance', { context: this.context, query }));
   }
 
   async recallProjectKnowledge(query: string): Promise<string[]> {
-    logger.debug({ query }, 'recallProjectKnowledge 待阶段二实现');
-    return [];
+    return this.parseRecallResult(await this.callTool('recall_project_knowledge', { context: this.context, query }));
   }
 
   async recallUserPreferences(userId: string, query: string): Promise<string[]> {
-    logger.debug({ userId, query }, 'recallUserPreferences 待阶段二实现');
-    return [];
+    return this.parseRecallResult(
+      await this.callTool('recall_user_preferences', { context: this.context, userId, query })
+    );
   }
 
-  private async callTool(name: string, args: Record<string, unknown>): Promise<void> {
+  private async callTool(
+    name: string,
+    args: Record<string, unknown>
+  ): Promise<{ content?: Array<{ type: string; text?: string }> } | undefined> {
     try {
-      await this.client.callTool({ name, arguments: args });
+      const result = await this.client.callTool({ name, arguments: args });
+      return result as { content?: Array<{ type: string; text?: string }> };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, tool: name }, `MemoryClient 调用 ${name} 失败`);
       // 记忆写入失败不阻断主流程
       logger.warn({ tool: name, error: message }, '记忆写入失败，继续执行主流程');
+      return undefined;
+    }
+  }
+
+  private parseRecallResult(result: { content?: Array<{ type: string; text?: string }> } | undefined): string[] {
+    const text = result?.content?.[0]?.text ?? '';
+    if (!text) return [];
+    try {
+      const parsed = JSON.parse(text) as { results?: string[] };
+      return Array.isArray(parsed.results) ? parsed.results : [];
+    } catch {
+      return [];
     }
   }
 }
