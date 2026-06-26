@@ -1153,3 +1153,120 @@ select.input:focus {
   color: var(--text-primary);
 }
 
+/* ---------- 右侧服务状态面板 ---------- */
+
+.service-status-panel {
+  padding: 20px;
+}
+
+.service-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.service-status-header .service-status-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.service-status-refresh {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--card-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.service-status-refresh:hover:not(:disabled) {
+  background: var(--main-bg);
+  color: var(--text-primary);
+}
+
+.service-status-refresh:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.service-status-top-error {
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  background: #fee2e2;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.service-status-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.service-status-node {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.service-status-children {
+  position: relative;
+  margin-left: 12px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.service-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--main-bg);
+  font-size: 14px;
+}
+
+.service-status-row--error {
+  cursor: pointer;
+}
+
+.service-status-row--error:hover {
+  background: #fee2e2;
+}
+
+.service-status-title {
+  font-weight: 500;
+}
+
+.service-status-url {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.service-status-error {
+  margin-left: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: #fee2e2;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.service-status-error-hint {
+  margin-left: 6px;
+  opacity: 0.8;
+}
+
