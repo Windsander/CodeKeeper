@@ -19,7 +19,9 @@ import { EverOSService } from './classic/memory/everos-service.js';
 import { EverOSMcpServer } from './classic/memory/everos-mcp-server.js';
 import { LocalModelServiceManager } from './classic/memory/local-model-service.js';
 import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL } from './classic/memory/local-model-catalog.js';
+import { RemoteModelChecker } from './classic/memory/remote-model-checker.js';
 import type { EverosStatus } from '../electron/shared/service-status.js';
+import type { RemoteModelStatus } from '../electron/shared/service-status.js';
 import path from 'node:path';
 import { join } from 'node:path';
 
@@ -70,6 +72,12 @@ export class Daemon {
   private everosHttpUrl: string | null = null;
   private everosError: string | null = null;
   private localModelManager: LocalModelServiceManager;
+  private remoteModelChecker = new RemoteModelChecker();
+  private remoteModelStatus: RemoteModelStatus = {
+    llm: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
+    multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
+  };
+  private remoteModelCheckTimer: NodeJS.Timeout | null = null;
 
   constructor(private options: DaemonOptions) {
     // 初始化角色服务注册表，注册所有支持的角色
@@ -109,6 +117,8 @@ export class Daemon {
       dbPath: options.dbPath,
       scanService: this.scanService,
       localModelManager: this.localModelManager,
+      remoteModelChecker: this.remoteModelChecker,
+      getRemoteModelStatus: () => this.remoteModelStatus,
       getProvider: (project) => {
         if (project.gitlab) {
           return new GitLabProvider(project.gitlab);
@@ -174,6 +184,10 @@ export class Daemon {
         logger.warn('本地模型服务未就绪，EverOS 将不会自动启动，Agent 子进程会等待就绪');
       });
 
+    // 初始检测一次远端模型连通性，并启动 30s 轮询
+    this.checkRemoteModels().catch((err) => logger.warn({ err }, '初始远端模型检测失败'));
+    this.startRemoteModelChecks();
+
     // IPC server 启动后，把文件监控等非关键初始化推迟到下一个事件循环，
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
     // MR Agent 调度服务（ClassicService）不随 daemon 启动，由 UI 的“启动服务”按钮控制。
@@ -211,6 +225,10 @@ export class Daemon {
     this.scanJob?.stop();
     this.scanJob = null;
     this.localModelManager.stop();
+    if (this.remoteModelCheckTimer) {
+      clearInterval(this.remoteModelCheckTimer);
+      this.remoteModelCheckTimer = null;
+    }
     await this.everosMcpServer?.stop();
     this.everosService?.stop();
     this.everosMcpServer = null;
@@ -239,6 +257,29 @@ export class Daemon {
       url: this.everosHttpUrl,
       error: this.everosError,
     };
+  }
+
+  private async checkRemoteModels(): Promise<void> {
+    const [llm, multimodal] = await Promise.all([
+      this.remoteModelChecker.checkLlm({
+        apiKey: this.options.apiKey,
+        apiUrl: this.options.apiUrl,
+        provider: this.options.provider,
+        model: this.options.model,
+      }),
+      this.remoteModelChecker.checkMultimodal(this.options.everos ?? {}),
+    ]);
+    this.remoteModelStatus = { llm, multimodal };
+  }
+
+  private startRemoteModelChecks(): void {
+    if (this.remoteModelCheckTimer) return;
+    this.remoteModelCheckTimer = setInterval(() => {
+      if (!this.running) return;
+      this.checkRemoteModels().catch((err) => {
+        logger.warn({ err }, '远端模型状态检测失败');
+      });
+    }, 30000);
   }
 
   /**
@@ -384,6 +425,20 @@ export class Daemon {
           const message = err instanceof Error ? err.message : String(err);
           logger.warn({ err }, `配置更新后本地模型服务/EverOS 启动失败: ${message}`);
         });
+    }
+
+    // 远端模型配置变化后刷新连通性检测
+    if (
+      this.running &&
+      (config.apiKey !== undefined ||
+        config.apiUrl !== undefined ||
+        config.provider !== undefined ||
+        config.model !== undefined ||
+        config.everos !== undefined)
+    ) {
+      this.checkRemoteModels().catch((err) =>
+        logger.warn({ err }, '配置更新后远端模型检测失败')
+      );
     }
   }
 

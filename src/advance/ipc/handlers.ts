@@ -24,7 +24,8 @@ import type { IRoleManager } from '../classic/roles/role-manager.js';
 import { readDirectoryTree } from '../utils/file-tree';
 import { everosMemorySearch, type EverOSSearchItem } from '../classic/memory/everos-api.js';
 import type { MemoryEntry, MemorySearchParams, MemoryDeleteParams } from '../../electron/shared/types.js';
-import type { DaemonStatus, EverosStatus, LocalModelStatus } from '../../electron/shared/service-status.js';
+import type { DaemonStatus, EverosStatus, LocalModelStatus, RemoteModelStatus } from '../../electron/shared/service-status.js';
+import type { RemoteModelChecker } from '../classic/memory/remote-model-checker.js';
 
 export interface HandlerContext {
   store: MetadataStore;
@@ -61,6 +62,10 @@ export interface HandlerContext {
   everosUrl?: string;
   /** 本地 Embedding/Rerank 模型服务管理器 */
   localModelManager?: LocalModelServiceManager;
+  /** 远端模型连通性检测器 */
+  remoteModelChecker?: RemoteModelChecker;
+  /** 获取远端模型当前状态 */
+  getRemoteModelStatus?: () => RemoteModelStatus;
   /** 判断 Daemon 是否正在运行 */
   isDaemonRunning?: () => boolean;
   /** 获取 EverOS 当前状态 */
@@ -600,10 +605,21 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'localModel.status': async (ctx) => {
     return (
       ctx.localModelManager?.getStatus() ?? {
-        embedding: { state: 'idle', url: null, error: null },
-        rerank: { state: 'idle', url: null, error: null },
+        embedding: { state: 'idle', url: null, error: null, progress: null },
+        rerank: { state: 'idle', url: null, error: null, progress: null },
       }
     ) satisfies LocalModelStatus;
+  },
+
+  // ---------- 远端模型服务 IPC Handler ----------
+
+  'remoteModel.status': async (ctx) => {
+    return (
+      ctx.getRemoteModelStatus?.() ?? {
+        llm: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
+        multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
+      }
+    ) satisfies RemoteModelStatus;
   },
 
   // ---------- 角色 IPC Handler ----------

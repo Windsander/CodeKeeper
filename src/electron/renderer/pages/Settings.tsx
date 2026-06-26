@@ -71,7 +71,7 @@ function stringifyEverOS(cfg: EverOSConfig): string {
   (Object.keys(cfg) as Array<keyof EverOSConfig>).forEach((key) => {
     const value = cfg[key];
     if (typeof value === 'string' && value.trim()) {
-      cleaned[key] = value.trim();
+      (cleaned[key] as string | undefined) = value.trim();
     }
   });
   return JSON.stringify(cleaned);

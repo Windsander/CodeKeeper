@@ -32,7 +32,7 @@ export class ModelServer {
   private started = false;
   private urlValue: string | null = null;
   private exitHandler?: () => void;
-  private statusValue: ModelServiceStatus = { state: 'idle', url: null, error: null };
+  private statusValue: ModelServiceStatus = { state: 'idle', url: null, error: null, progress: null };
   private stderrBuffer = '';
 
   constructor(private readonly options: ModelServerOptions) {}
