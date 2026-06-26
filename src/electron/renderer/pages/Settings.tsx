@@ -2,6 +2,13 @@ import { useState, useEffect } from 'react';
 import { useIpc } from '../hooks/useIpc';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { Dropdown } from '../components/Dropdown';
+import {
+  DEFAULT_EMBEDDING_MODEL,
+  DEFAULT_RERANK_MODEL,
+  EMBEDDING_MODELS,
+  RERANK_MODELS,
+  isValidHuggingFaceModelId,
+} from '../../shared/local-model-catalog.js';
 
 interface DaemonConfig {
   apiKey: string;
@@ -75,7 +82,12 @@ function stringifyEverOS(cfg: EverOSConfig): string {
 }
 
 function hasCustomEverOS(cfg: EverOSConfig): boolean {
-  return Object.values(cfg).some((v) => typeof v === 'string' && v.trim());
+  return Object.entries(cfg).some(([key, value]) => {
+    if (typeof value !== 'string' || !value.trim()) return false;
+    if (key === 'embeddingModel' && value === DEFAULT_EMBEDDING_MODEL) return false;
+    if (key === 'rerankModel' && value === DEFAULT_RERANK_MODEL) return false;
+    return true;
+  });
 }
 
 const SCAN_INTERVALS = [
@@ -210,6 +222,18 @@ export function Settings() {
   const [everos, setEveros] = useState<EverOSConfig>({});
   const [everosExpanded, setEverosExpanded] = useState(false);
 
+  const [embeddingModel, setEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
+  const [rerankModel, setRerankModel] = useState(DEFAULT_RERANK_MODEL);
+  const [embeddingCustom, setEmbeddingCustom] = useState('');
+  const [rerankCustom, setRerankCustom] = useState('');
+  const [localModelStatus, setLocalModelStatus] = useState({
+    embeddingUrl: null as string | null,
+    rerankUrl: null as string | null,
+    embeddingHealthy: false,
+    rerankHealthy: false,
+  });
+  const [localModelError, setLocalModelError] = useState<string | null>(null);
+
   useEffect(() => {
     if (data) {
       setScanCron(data.scanCron);
@@ -221,9 +245,27 @@ export function Settings() {
       setLlmRequestsPerMinute(data.llmRequestsPerMinute ?? 10);
       const entries = parseHeaders(data.headers ?? '');
       setHeaderEntries(entries.length > 0 ? entries : [{ key: '', value: '' }]);
-      setEveros(parseEverOS(data.everos ?? ''));
+      const everos = parseEverOS(data.everos ?? '');
+      setEveros(everos);
+      setEmbeddingModel(everos.embeddingModel ?? DEFAULT_EMBEDDING_MODEL);
+      setRerankModel(everos.rerankModel ?? DEFAULT_RERANK_MODEL);
     }
   }, [data]);
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      const status = (await window.electronAPI.invoke('localModel.status')) as {
+        embeddingUrl: string | null;
+        rerankUrl: string | null;
+        embeddingHealthy: boolean;
+        rerankHealthy: boolean;
+      };
+      setLocalModelStatus(status);
+    };
+    fetchStatus();
+    const id = setInterval(fetchStatus, 3000);
+    return () => clearInterval(id);
+  }, []);
 
   const isCustomCron = !SCAN_INTERVALS.some((i) => i.cron === scanCron && i.cron !== 'custom');
   const everosCustom = hasCustomEverOS(everos);
@@ -268,6 +310,24 @@ export function Settings() {
   const save = async () => {
     setSaved(false);
     setSaving(true);
+    setLocalModelError(null);
+
+    const finalEmbedding = EMBEDDING_MODELS.includes(embeddingModel)
+      ? embeddingModel
+      : embeddingModel || embeddingCustom;
+    const finalRerank = RERANK_MODELS.includes(rerankModel) ? rerankModel : rerankModel || rerankCustom;
+
+    if (!isValidHuggingFaceModelId(finalEmbedding)) {
+      setLocalModelError(`Embedding 模型名不合法: ${finalEmbedding}`);
+      setSaving(false);
+      return;
+    }
+    if (!isValidHuggingFaceModelId(finalRerank)) {
+      setLocalModelError(`Rerank 模型名不合法: ${finalRerank}`);
+      setSaving(false);
+      return;
+    }
+
     const payload: {
       apiKey: string;
       apiUrl?: string;
@@ -286,7 +346,12 @@ export function Settings() {
     const headers = stringifyHeaders(headerEntries);
     if (headers !== '{}') payload.headers = headers;
 
-    const everosJson = stringifyEverOS(everos);
+    const everosCfg: EverOSConfig = {
+      ...everos,
+      embeddingModel: finalEmbedding,
+      rerankModel: finalRerank,
+    };
+    const everosJson = stringifyEverOS(everosCfg);
     if (everosJson !== '{}') payload.everos = everosJson;
 
     try {
@@ -412,11 +477,103 @@ export function Settings() {
           </div>
         </div>
 
+        <div className="config-section" style={{ marginTop: 16 }}>
+          <div className="config-section-header locked">
+            <h5 className="config-section-title">本地 Embedding/Rerank 模型</h5>
+            {localModelStatus.embeddingHealthy && localModelStatus.rerankHealthy ? (
+              <span className="badge badge-success">运行中</span>
+            ) : (
+              <span className="badge badge-info">本地推理</span>
+            )}
+          </div>
+          <div className="config-section-body">
+            <div className="form-group">
+              <label>Embedding 模型</label>
+              <Dropdown
+                value={EMBEDDING_MODELS.includes(embeddingModel) ? embeddingModel : 'custom'}
+                options={[
+                  ...EMBEDDING_MODELS.map((m) => ({ value: m, label: m })),
+                  { value: 'custom', label: '自定义' },
+                ]}
+                onChange={(value) => {
+                  if (value === 'custom') {
+                    setEmbeddingModel(embeddingCustom || '');
+                  } else {
+                    setEmbeddingModel(value);
+                  }
+                }}
+              />
+              {(!EMBEDDING_MODELS.includes(embeddingModel) || embeddingCustom) && (
+                <input
+                  className="input"
+                  style={{ marginTop: 8 }}
+                  placeholder="HuggingFace 模型名，例如 organization/model-name"
+                  value={EMBEDDING_MODELS.includes(embeddingModel) ? embeddingCustom : embeddingModel}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (EMBEDDING_MODELS.includes(embeddingModel)) {
+                      setEmbeddingCustom(value);
+                    } else {
+                      setEmbeddingModel(value);
+                    }
+                  }}
+                />
+              )}
+              <div className="input-hint" style={{ marginTop: 6 }}>
+                状态: {localModelStatus.embeddingHealthy ? `运行中 ${localModelStatus.embeddingUrl}` : '未启动'}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Rerank 模型</label>
+              <Dropdown
+                value={RERANK_MODELS.includes(rerankModel) ? rerankModel : 'custom'}
+                options={[
+                  ...RERANK_MODELS.map((m) => ({ value: m, label: m })),
+                  { value: 'custom', label: '自定义' },
+                ]}
+                onChange={(value) => {
+                  if (value === 'custom') {
+                    setRerankModel(rerankCustom || '');
+                  } else {
+                    setRerankModel(value);
+                  }
+                }}
+              />
+              {(!RERANK_MODELS.includes(rerankModel) || rerankCustom) && (
+                <input
+                  className="input"
+                  style={{ marginTop: 8 }}
+                  placeholder="HuggingFace 模型名"
+                  value={RERANK_MODELS.includes(rerankModel) ? rerankCustom : rerankModel}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (RERANK_MODELS.includes(rerankModel)) {
+                      setRerankCustom(value);
+                    } else {
+                      setRerankModel(value);
+                    }
+                  }}
+                />
+              )}
+              <div className="input-hint" style={{ marginTop: 6 }}>
+                状态: {localModelStatus.rerankHealthy ? `运行中 ${localModelStatus.rerankUrl}` : '未启动'}
+              </div>
+            </div>
+
+            {localModelError && (
+              <div className="input-hint" style={{ marginTop: 6, color: 'var(--danger)' }}>
+                {localModelError}
+              </div>
+            )}
+          </div>
+        </div>
+
         <CollapsibleSection
           title="EverOS 记忆配置"
           expanded={everosExpanded}
           onToggle={() => setEverosExpanded((prev) => !prev)}
-          tip="留空表示继承上方 Agent 通用配置。Windows 原生环境暂不支持本地 EverOS，请在 Linux / macOS / WSL 下使用记忆功能。"
+          tip="留空表示继承上方 Agent 通用配置。Windows / macOS / Linux 均可使用本地 EverOS（Windows 会自动生成兼容层）。"
           headerExtra={
             everosCustom ? (
               <span className="badge badge-success">已自定义</span>
