@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -79,7 +79,40 @@ export class LocalModelServiceManager {
     const python = await this.findPython();
     await this.runCommand(python, ['-m', 'venv', this.venvDir]);
     const pip = join(this.venvDir, process.platform === 'win32' ? 'Scripts\\pip.exe' : 'bin/pip');
-    await this.runCommand(pip, ['install', '-U', 'infinity-emb[optimum]']);
+    // 使用 [server,torch] 而不是 [optimum]，避免 optimum 2.x 移除 bettertransformer 导致不兼容
+    await this.runCommand(pip, ['install', '-U', 'infinity-emb[server,torch]', 'click<8.2']);
+    this.ensureOptimumStub();
+  }
+
+  /**
+   * infinity_emb 0.0.77 在未安装 optimum 时会因 BetterTransformer 导入失败。
+   * 提供一个空 stub，使检查返回 False，从而跳过 bettertransformer 转换。
+   */
+  private ensureOptimumStub(): void {
+    const sitePackages = join(this.venvDir, process.platform === 'win32' ? 'Lib\\site-packages' : 'lib/python3.12/site-packages');
+    const optimumDir = join(sitePackages, 'optimum');
+    if (existsSync(join(optimumDir, '__init__.py'))) return;
+
+    mkdirSync(optimumDir, { recursive: true });
+    writeFileSync(
+      join(optimumDir, '__init__.py'),
+      "# 占位 stub：让 infinity_emb 的 CHECK_OPTIMUM.is_available 返回 True，\\n" +
+        "# 但实际只提供空的 BetterTransformerManager，使 bettertransformer 转换不会触发。\\n" +
+        "from .bettertransformer import BetterTransformer, BetterTransformerManager\\n\\n" +
+        "__all__ = ['BetterTransformer', 'BetterTransformerManager']\\n"
+    );
+    writeFileSync(
+      join(optimumDir, 'bettertransformer.py'),
+      "# 占位 stub：避免 infinity_emb 在 optimum 未安装时触发 ModuleNotFoundError。\\n" +
+        "# 实际不会使用 BetterTransformer，因为 MODEL_MAPPING 为空。\\n" +
+        "class BetterTransformerManager:\\n" +
+        "    MODEL_MAPPING: dict = {}\\n\\n" +
+        "class BetterTransformer:\\n" +
+        "    @staticmethod\\n" +
+        "    def transform(model):\\n" +
+        "        return model\\n"
+    );
+    logger.info({ optimumDir }, '已创建 optimum bettertransformer 占位 stub');
   }
 
   private async startCapability(capability: ModelCapability, model: string, force = false): Promise<void> {

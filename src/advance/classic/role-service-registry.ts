@@ -29,10 +29,25 @@ export class RoleServiceRegistry {
 
   /**
    * 启动指定角色的服务
+   * 若 Daemon 正在初始化 EverOS，会等待 MCP URL 就绪后再 fork Agent 子进程。
    * @param role 角色标识
    */
   async start(role: Role): Promise<void> {
+    await this.waitForMemoryMcpUrl(60000);
     await this.getService(role).start();
+  }
+
+  /**
+   * 等待 Daemon 设置 EverOS MCP URL，最多等待 timeoutMs 毫秒。
+   */
+  private async waitForMemoryMcpUrl(timeoutMs = 60000): Promise<void> {
+    const start = Date.now();
+    while (!this.options.mcpUrl) {
+      if (Date.now() - start > timeoutMs) {
+        throw new Error('等待 EverOS MCP URL 超时，无法启动角色服务');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
   }
 
   /**

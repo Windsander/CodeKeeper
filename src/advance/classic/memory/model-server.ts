@@ -69,6 +69,11 @@ export class ModelServer {
     return new Promise((resolve, reject) => {
       const child = spawn(python, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          DO_NOT_TRACK: '1',
+          HF_HUB_DISABLE_TELEMETRY: '1',
+        },
       });
       this.process = child;
       if (this.exitHandler) {
