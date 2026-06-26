@@ -73,6 +73,7 @@ export class ModelServer {
           ...process.env,
           DO_NOT_TRACK: '1',
           HF_HUB_DISABLE_TELEMETRY: '1',
+          INFINITY_BETTERTRANSFORMER: 'false',
         },
       });
       this.process = child;

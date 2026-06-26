@@ -52,7 +52,7 @@ describe('ModelServer', () => {
     expect(server.isHealthy()).toBe(true);
   });
 
-  it('进程提前退出则启动失败', async () => {
+  it('启动时禁用 bettertransformer 并设置对应环境变量', async () => {
     const fake = new EventEmitter() as ChildProcess;
     fake.stdout = new EventEmitter();
     fake.stderr = new EventEmitter();
@@ -66,9 +66,10 @@ describe('ModelServer', () => {
 
     const startPromise = server.start();
     await waitForSpawnCall();
-    fake.emit('exit', 3);
+    fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:12345'));
+    await startPromise;
 
-    await expect(startPromise).rejects.toThrow('code=3');
-    expect(server.isHealthy()).toBe(false);
+    const [, , options] = vi.mocked(spawn).mock.calls[0];
+    expect(options?.env).toMatchObject({ INFINITY_BETTERTRANSFORMER: 'false' });
   });
 });
