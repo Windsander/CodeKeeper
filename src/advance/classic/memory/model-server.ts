@@ -109,10 +109,12 @@ export class ModelServer {
       });
 
       child.on('exit', (code) => {
-        this.cleanup();
         if (!this.started) {
           const tail = this.stderrBuffer.slice(-500);
           this.setError(`${this.options.capability} 进程退出 code=${code}，stderr=${tail}`);
+        }
+        this.cleanup();
+        if (!this.started) {
           reject(new Error(`${this.options.capability} 进程退出 code=${code}, stdout=${stdout}, stderr=${this.stderrBuffer}`));
         }
       });

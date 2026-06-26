@@ -72,4 +72,78 @@ describe('ModelServer', () => {
     const [, , options] = vi.mocked(spawn).mock.calls[0];
     expect(options?.env).toMatchObject({ INFINITY_BETTERTRANSFORMER: 'false' });
   });
+
+  it('stderr 出现下载进度时状态变为 downloading', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'embedding',
+      model: 'intfloat/multilingual-e5-small',
+      venvDir: '/venv',
+    });
+
+    const startPromise = server.start();
+    await waitForSpawnCall();
+
+    expect(server.getStatus().state).toBe('starting');
+
+    fake.stderr.emit('data', Buffer.from('Downloading model... 45%'));
+    expect(server.getStatus().state).toBe('downloading');
+
+    fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:12345'));
+    await startPromise;
+
+    expect(server.getStatus().state).toBe('running');
+    expect(server.getStatus().url).toBe('http://127.0.0.1:12345');
+  });
+
+  it('stderr 出现 warmup 时状态变为 loading', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'rerank',
+      model: 'Xenova/ms-marco-MiniLM-L-6-v2',
+      venvDir: '/venv',
+    });
+
+    const startPromise = server.start();
+    await waitForSpawnCall();
+
+    fake.stderr.emit('data', Buffer.from('warmup forward pass'));
+    expect(server.getStatus().state).toBe('loading');
+
+    fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:54321'));
+    await startPromise;
+
+    expect(server.getStatus().state).toBe('running');
+  });
+
+  it('进程异常退出时状态变为 error 并记录 stderr 摘要', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'embedding',
+      model: 'intfloat/multilingual-e5-small',
+      venvDir: '/venv',
+    });
+
+    const startPromise = server.start();
+    await waitForSpawnCall();
+
+    fake.stderr.emit('data', Buffer.from('CUDA out of memory'));
+    fake.emit('exit', 1);
+
+    await expect(startPromise).rejects.toThrow('embedding 进程退出');
+    expect(server.getStatus().state).toBe('error');
+    expect(server.getStatus().error).toContain('CUDA out of memory');
+  });
 });
