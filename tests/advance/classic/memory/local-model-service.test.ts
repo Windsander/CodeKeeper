@@ -10,8 +10,12 @@ vi.mock('node:fs', async (importOriginal) => ({
 }));
 
 vi.mock('../../../../src/advance/classic/memory/model-server.js', () => ({
-  ModelServer: vi.fn().mockImplementation(({ capability }) => ({
-    start: vi.fn().mockResolvedValue(`http://127.0.0.1:8000/${capability}`),
+  ModelServer: vi.fn().mockImplementation(({ capability, onStatusChange }) => ({
+    start: vi.fn().mockImplementation(async () => {
+      const url = `http://127.0.0.1:8000/${capability}`;
+      onStatusChange?.({ state: 'running', url, error: null, progress: null });
+      return url;
+    }),
     stop: vi.fn(),
     isHealthy: vi.fn().mockReturnValue(true),
     url: `http://127.0.0.1:8000/${capability}`,
@@ -26,18 +30,29 @@ describe('LocalModelServiceManager', () => {
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
-  it('start 后返回两个本地 URL', async () => {
+  it('start 后聚合 embedding/rerank 运行状态', async () => {
     const manager = new LocalModelServiceManager({
       venvDir: '/venv',
       embeddingModel: 'intfloat/multilingual-e5-small',
       rerankModel: 'BAAI/bge-reranker-base',
     });
     await manager.start();
-    expect(manager.getEmbeddingUrl()).toBe('http://127.0.0.1:8000/embedding');
-    expect(manager.getRerankUrl()).toBe('http://127.0.0.1:8000/rerank');
+    const status = manager.getStatus();
+    expect(status.embedding.state).toBe('running');
+    expect(status.embedding.url).toBe('http://127.0.0.1:8000/embedding');
+    expect(status.rerank.state).toBe('running');
     manager.stop();
+  });
+
+  it('停止后状态回到 idle', async () => {
+    const manager = new LocalModelServiceManager({ venvDir: '/venv' });
+    await manager.start();
+    manager.stop();
+    const status = manager.getStatus();
+    expect(status.embedding.state).toBe('idle');
+    expect(status.rerank.state).toBe('idle');
   });
 });

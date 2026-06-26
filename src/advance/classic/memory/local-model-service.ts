@@ -23,6 +23,8 @@ export class LocalModelServiceManager {
   private readonly rerankModel: string;
   private embeddingServer: ModelServer | null = null;
   private rerankServer: ModelServer | null = null;
+  private embeddingStatus: ModelServiceStatus = { state: 'idle', url: null, error: null, progress: null };
+  private rerankStatus: ModelServiceStatus = { state: 'idle', url: null, error: null, progress: null };
   private starting = false;
   private stopping = false;
 
@@ -38,12 +40,23 @@ export class LocalModelServiceManager {
     this.stopping = false;
     try {
       await this.ensureVenv();
+      this.setCapabilityStatus('embedding', { state: 'starting' });
       await this.startCapability('embedding', this.embeddingModel);
+      this.setCapabilityStatus('rerank', { state: 'starting' });
       await this.startCapability('rerank', this.rerankModel);
       logger.info(
         { embeddingUrl: this.getEmbeddingUrl(), rerankUrl: this.getRerankUrl() },
         '本地 Embedding/Rerank 模型服务已启动'
       );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ err }, `本地模型服务启动失败: ${message}`);
+      if (this.embeddingStatus.state !== 'running') {
+        this.setCapabilityStatus('embedding', { state: 'error', error: message });
+      }
+      if (this.rerankStatus.state !== 'running') {
+        this.setCapabilityStatus('rerank', { state: 'error', error: message });
+      }
     } finally {
       this.starting = false;
     }
@@ -55,6 +68,8 @@ export class LocalModelServiceManager {
     this.rerankServer?.stop();
     this.embeddingServer = null;
     this.rerankServer = null;
+    this.embeddingStatus = { state: 'idle', url: null, error: null, progress: null };
+    this.rerankStatus = { state: 'idle', url: null, error: null, progress: null };
   }
 
   getEmbeddingUrl(): string | null {
@@ -66,18 +81,31 @@ export class LocalModelServiceManager {
   }
 
   getStatus(): LocalModelStatus {
-    const idle: ModelServiceStatus = { state: 'idle', url: null, error: null };
     return {
-      embedding: this.embeddingServer?.getStatus() ?? idle,
-      rerank: this.rerankServer?.getStatus() ?? idle,
+      embedding: this.embeddingStatus,
+      rerank: this.rerankStatus,
     };
   }
 
   async restart(capability: ModelCapability): Promise<void> {
+    this.setCapabilityStatus(capability, { state: 'starting' });
     const server = capability === 'embedding' ? this.embeddingServer : this.rerankServer;
     server?.stop();
     const model = capability === 'embedding' ? this.embeddingModel : this.rerankModel;
     await this.startCapability(capability, model, true);
+  }
+
+  private setCapabilityStatus(
+    capability: ModelCapability,
+    status: Partial<ModelServiceStatus>
+  ): void {
+    const current = capability === 'embedding' ? this.embeddingStatus : this.rerankStatus;
+    const next = { ...current, ...status };
+    if (capability === 'embedding') {
+      this.embeddingStatus = next;
+    } else {
+      this.rerankStatus = next;
+    }
   }
 
   private sitePackagesDir(): string {
@@ -160,7 +188,14 @@ __all__ = ['BetterTransformer', 'BetterTransformerManager']
       if (existing?.isHealthy()) return;
     }
 
-    const server = new ModelServer({ capability, model, venvDir: this.venvDir });
+    const server = new ModelServer({
+      capability,
+      model,
+      venvDir: this.venvDir,
+      onStatusChange: (status) => {
+        this.setCapabilityStatus(capability, status);
+      },
+    });
     const url = await server.start();
     if (capability === 'embedding') {
       this.embeddingServer = server;
