@@ -49,8 +49,11 @@ describe('Daemon', () => {
   let store: MetadataStore;
   let registry: ProjectRegistry;
   let daemon: Daemon;
+  const originalSocketPath = process.env.CODEKEEPER_IPC_SOCKET_PATH;
 
   beforeEach(() => {
+    // 使用独立的命名管道，避免与开发中的 daemon 实例冲突
+    process.env.CODEKEEPER_IPC_SOCKET_PATH = `\\\\?\\pipe\\ck-daemon-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     dir = mkdtempSync(join(tmpdir(), 'ck-daemon-'));
     store = new MetadataStore(join(dir, 'test.db'));
     registry = new ProjectRegistry({ store });
@@ -61,6 +64,7 @@ describe('Daemon', () => {
     await daemon.stop();
     store.close();
     rmSync(dir, { recursive: true, force: true });
+    process.env.CODEKEEPER_IPC_SOCKET_PATH = originalSocketPath;
   });
 
   it('启动和停止状态正确', async () => {
