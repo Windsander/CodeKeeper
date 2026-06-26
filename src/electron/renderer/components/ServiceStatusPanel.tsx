@@ -143,7 +143,7 @@ export function ServiceStatusPanel({ daemon, localModel, error }: ServiceStatusP
           onToggle={toggle}
         >
           <TreeNode
-            title="EverOS"
+            title="记忆服务（EverOS）"
             nodeKey="everos"
             icon="🧠"
             status={daemon?.everos?.state}
@@ -151,37 +151,36 @@ export function ServiceStatusPanel({ daemon, localModel, error }: ServiceStatusP
             error={daemon?.everos?.error ?? null}
             expandedKeys={expandedKeys}
             onToggle={toggle}
+          />
+          <TreeNode
+            title="本地模型服务"
+            nodeKey="localModel"
+            icon="⚙️"
+            status={inferLocalModelState(localModel)}
+            error={inferLocalModelError(localModel) ?? null}
+            expandedKeys={expandedKeys}
+            onToggle={toggle}
           >
             <TreeNode
-              title="本地模型服务"
-              nodeKey="localModel"
-              icon="⚙️"
-              status={inferLocalModelState(localModel)}
-              error={inferLocalModelError(localModel) ?? null}
+              title="Embedding"
+              nodeKey="embedding"
+              icon="🔤"
+              status={localModel?.embedding.state}
+              url={localModel?.embedding.url}
+              error={localModel?.embedding.error ?? null}
               expandedKeys={expandedKeys}
               onToggle={toggle}
-            >
-              <TreeNode
-                title="Embedding"
-                nodeKey="embedding"
-                icon="🔤"
-                status={localModel?.embedding.state}
-                url={localModel?.embedding.url}
-                error={localModel?.embedding.error ?? null}
-                expandedKeys={expandedKeys}
-                onToggle={toggle}
-              />
-              <TreeNode
-                title="Rerank"
-                nodeKey="rerank"
-                icon="🔍"
-                status={localModel?.rerank.state}
-                url={localModel?.rerank.url}
-                error={localModel?.rerank.error ?? null}
-                expandedKeys={expandedKeys}
-                onToggle={toggle}
-              />
-            </TreeNode>
+            />
+            <TreeNode
+              title="Rerank"
+              nodeKey="rerank"
+              icon="🔍"
+              status={localModel?.rerank.state}
+              url={localModel?.rerank.url}
+              error={localModel?.rerank.error ?? null}
+              expandedKeys={expandedKeys}
+              onToggle={toggle}
+            />
           </TreeNode>
         </TreeNode>
       </div>

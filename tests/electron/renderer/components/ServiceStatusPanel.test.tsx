@@ -4,7 +4,7 @@ import { ServiceStatusPanel } from '../../../../src/electron/renderer/components
 import type { DaemonStatus, LocalModelStatus } from '../../../../src/electron/shared/service-status';
 
 describe('ServiceStatusPanel', () => {
-  it('渲染 Daemon → EverOS → 本地模型服务 → Embedding/Rerank 树形结构', () => {
+  it('渲染 Daemon → 记忆服务（EverOS）/本地模型服务 → Embedding/Rerank 树形结构', () => {
     const daemon: DaemonStatus = {
       daemonRunning: true,
       everos: { state: 'running', url: 'http://127.0.0.1:8000', error: null },
@@ -18,15 +18,12 @@ describe('ServiceStatusPanel', () => {
       <ServiceStatusPanel
         daemon={daemon}
         localModel={localModel}
-        loading={false}
-        error={null}
-        onRefresh={() => {}}
       />
     );
 
     expect(screen.getByText('服务状态')).toBeTruthy();
     expect(screen.getByText('Daemon')).toBeTruthy();
-    expect(screen.getByText('EverOS')).toBeTruthy();
+    expect(screen.getByText('记忆服务（EverOS）')).toBeTruthy();
     expect(screen.getByText('本地模型服务')).toBeTruthy();
     expect(screen.getByText('Embedding')).toBeTruthy();
     expect(screen.getByText('Rerank')).toBeTruthy();
@@ -77,8 +74,8 @@ describe('ServiceStatusPanel', () => {
       />
     );
 
-    // 点击 EverOS 错误行展开
-    fireEvent.click(screen.getByText('EverOS'));
+    // 点击记忆服务（EverOS）错误行展开
+    fireEvent.click(screen.getByText('记忆服务（EverOS）'));
     const everosNode = screen.getByTestId('status-node-everos');
     const everosError = within(everosNode).getByText(/a{200}/);
     expect(everosError).toBeTruthy();
