@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { logger } from '../../../core/logger.js';
 import { getAppStorageDir } from '../../../core/platform.js';
+import { ensureFcntlShim, buildEverOSProcessEnv } from './everos-windows-shim.js';
 
 export interface EverOSServiceOptions {
   /** EverOS submodule 根目录 */
@@ -25,6 +26,7 @@ export class EverOSService {
   private readonly dataDir: string;
   private readonly port: number;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly shimDir: string;
   private everosUrl: string | null = null;
 
   constructor(options: EverOSServiceOptions) {
@@ -32,6 +34,7 @@ export class EverOSService {
     this.dataDir = options.dataDir ?? join(getAppStorageDir(), 'everos-data');
     this.port = options.port ?? 0;
     this.env = options.env ?? process.env;
+    this.shimDir = join(getAppStorageDir(), 'everos-windows-shim');
   }
 
   /**
@@ -44,6 +47,7 @@ export class EverOSService {
     }
 
     await this.ensureVenv();
+    await this.ensureShim();
     await mkdir(this.dataDir, { recursive: true });
     await this.checkCompatibility();
     await this.ensureInitialized();
@@ -57,6 +61,7 @@ export class EverOSService {
       const child = spawn(everosCli, args, {
         cwd: this.submodulePath,
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: this.getProcessEnv(),
       });
       this.process = child;
 
@@ -134,14 +139,25 @@ export class EverOSService {
   }
 
   /**
-   * 检查当前环境是否能运行 EverOS（依赖 Unix-only 的 fcntl）
+   * Windows 下生成 fcntl shim，让原生 Python 也能加载 EverOS。
+   */
+  private async ensureShim(): Promise<void> {
+    if (process.platform !== 'win32') return;
+    await ensureFcntlShim(this.shimDir);
+    logger.info({ shimDir: this.shimDir }, '已生成 Windows fcntl shim');
+  }
+
+  /**
+   * 检查当前环境是否能运行 EverOS。
+   *
+   * Windows 下通过 fcntl shim 让原生 Python 也能加载该模块。
    */
   private async checkCompatibility(): Promise<void> {
     try {
       await this.runCommand(this.pythonPath(), ['-c', 'import fcntl']);
     } catch {
       throw new Error(
-        'EverOS 当前运行环境不兼容（缺少 Unix-only 依赖 fcntl），请在 Linux/macOS/WSL 下使用本地记忆功能'
+        'EverOS 启动环境检查失败：无法加载 fcntl 兼容层，请确认虚拟环境已正确安装 portalocker'
       );
     }
   }
@@ -161,13 +177,21 @@ export class EverOSService {
 
   private async runCommand(command: string, args: string[]): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, { stdio: 'ignore', env: this.env });
+      const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], env: this.getProcessEnv() });
+      let stderr = '';
+      child.stderr?.on('data', (chunk) => {
+        stderr += chunk.toString();
+      });
       child.on('error', reject);
       child.on('exit', (code) => {
         if (code === 0) resolve();
-        else reject(new Error(`命令失败: ${command} ${args.join(' ')}，code=${code}`));
+        else reject(new Error(`命令失败: ${command} ${args.join(' ')}，code=${code}，stderr=${stderr}`));
       });
     });
+  }
+
+  private getProcessEnv(): NodeJS.ProcessEnv {
+    return buildEverOSProcessEnv(process.platform, this.env, this.shimDir);
   }
 
   private venvPath(): string {
@@ -175,7 +199,7 @@ export class EverOSService {
   }
 
   private pythonPath(): string {
-    return join(this.venvPath(), process.platform === 'win32' ? 'python.exe' : 'bin/python');
+    return join(this.venvPath(), process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python');
   }
 
   private pipPath(): string {

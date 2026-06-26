@@ -1,10 +1,28 @@
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MetadataStore } from '../../src/advance/store/metadata-store';
 import { ProjectRegistry } from '../../src/advance/project-registry';
 import { Daemon } from '../../src/advance/daemon';
+
+vi.mock('../../src/advance/classic/memory/everos-service.js', () => ({
+  EverOSService: class {
+    async start(): Promise<string> {
+      return 'http://127.0.0.1:9999';
+    }
+    stop(): void {}
+  },
+}));
+
+vi.mock('../../src/advance/classic/memory/everos-mcp-server.js', () => ({
+  EverOSMcpServer: class {
+    async start(): Promise<string> {
+      return 'http://127.0.0.1:9998/sse';
+    }
+    async stop(): Promise<void> {}
+  },
+}));
 
 async function waitCondition(condition: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();
