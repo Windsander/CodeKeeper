@@ -9,6 +9,8 @@ export interface ModelServiceStatus {
   state: ModelServiceState;
   url: string | null;
   error: string | null;
+  /** 下载进度 0-100，仅 downloading 时有效 */
+  progress: number | null;
 }
 
 export type EverosServiceState = 'idle' | 'starting' | 'running' | 'error';
@@ -27,4 +29,18 @@ export interface DaemonStatus {
 export interface LocalModelStatus {
   embedding: ModelServiceStatus;
   rerank: ModelServiceStatus;
+}
+
+export interface RemoteModelItemStatus {
+  state: 'unconfigured' | 'idle' | 'running' | 'error';
+  modelLabel: string;
+  fullModel: string;
+  baseUrl: string | null;
+  error: string | null;
+  lastCheckedAt: number;
+}
+
+export interface RemoteModelStatus {
+  llm: RemoteModelItemStatus;
+  multimodal: RemoteModelItemStatus;
 }
