@@ -58,6 +58,7 @@ export class Daemon {
   private everosService: EverOSService | null = null;
   private everosMcpServer: EverOSMcpServer | null = null;
   private everosMcpUrl: string | null = null;
+  private everosStarting = false;
 
   constructor(private options: DaemonOptions) {
     // 初始化角色服务注册表，注册所有支持的角色
@@ -138,23 +139,7 @@ export class Daemon {
     await this.ipcServer.start();
 
     // 启动 EverOS 本地记忆基础设施，所有角色服务共享同一套实例
-    try {
-      const submodulePath = join(__dirname, '..', '..', 'vendor', 'everos');
-      this.everosService = new EverOSService({
-        submodulePath,
-        env: this.buildEverOSEnv(),
-      });
-      const everosUrl = await this.everosService.start();
-      this.handlerContext.everosUrl = everosUrl;
-      this.everosMcpServer = new EverOSMcpServer({ everosUrl });
-      this.everosMcpUrl = await this.everosMcpServer.start();
-      this.serviceRegistry.setMemoryMcpUrl(this.everosMcpUrl);
-      logger.info({ everosUrl, mcpUrl: this.everosMcpUrl }, 'EverOS 记忆基础设施已启动');
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.warn({ err }, `EverOS 未启动: ${message}`);
-      // 记忆基础设施失败不应阻塞 daemon 其余功能
-    }
+    await this.startEverOS();
 
     // IPC server 启动后，把文件监控等非关键初始化推迟到下一个事件循环，
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
@@ -211,16 +196,65 @@ export class Daemon {
     return this.running;
   }
 
+  /**
+   * 启动 EverOS + MCP Server。
+   *
+   * 可被 start() 和 updateConfig() 调用；已启动或正在启动时不会重复执行。
+   */
+  private async startEverOS(): Promise<void> {
+    if (this.everosStarting) return;
+    this.everosStarting = true;
+
+    try {
+      if (this.everosService && this.everosMcpUrl) {
+        return;
+      }
+
+      // 清理之前失败或未完成的实例
+      if (this.everosService) {
+        this.everosService.stop();
+        this.everosService = null;
+      }
+      await this.everosMcpServer?.stop();
+      this.everosMcpServer = null;
+      this.everosMcpUrl = null;
+
+      const submodulePath = join(__dirname, '..', '..', 'vendor', 'everos');
+      this.everosService = new EverOSService({
+        submodulePath,
+        env: this.buildEverOSEnv(),
+      });
+      const everosUrl = await this.everosService.start();
+      this.handlerContext.everosUrl = everosUrl;
+      this.everosMcpServer = new EverOSMcpServer({ everosUrl });
+      this.everosMcpUrl = await this.everosMcpServer.start();
+      this.serviceRegistry.setMemoryMcpUrl(this.everosMcpUrl);
+      logger.info({ everosUrl, mcpUrl: this.everosMcpUrl }, 'EverOS 记忆基础设施已启动');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ err }, `EverOS 未启动: ${message}`);
+      // 记忆基础设施失败不应阻塞 daemon 其余功能
+      this.everosService = null;
+      this.everosMcpServer = null;
+      this.everosMcpUrl = null;
+    } finally {
+      this.everosStarting = false;
+    }
+  }
+
   updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string; llmRequestsPerMinute?: number; everos?: import('./config/daemon-config.js').EverOSConfig }): void {
     const persisted: import('./config/daemon-config.js').DaemonPersistedConfig = {};
+    let everosConfigChanged = false;
 
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
       persisted.apiKey = config.apiKey;
+      everosConfigChanged = true;
     }
     if (config.apiUrl !== undefined) {
       this.options.apiUrl = config.apiUrl;
       persisted.apiUrl = config.apiUrl;
+      everosConfigChanged = true;
     }
     if (config.provider !== undefined) {
       this.options.provider = config.provider;
@@ -229,6 +263,7 @@ export class Daemon {
     if (config.model !== undefined) {
       this.options.model = config.model;
       persisted.model = config.model;
+      everosConfigChanged = true;
     }
     if (config.headers !== undefined) {
       this.options.headers = config.headers;
@@ -247,10 +282,19 @@ export class Daemon {
     if (config.everos !== undefined) {
       this.options.everos = config.everos;
       persisted.everos = config.everos;
+      everosConfigChanged = true;
     }
 
     if (Object.keys(persisted).length > 0) {
       saveDaemonConfig(persisted);
+    }
+
+    // 如果用户启动后才填写记忆相关配置，自动重试启动 EverOS
+    if (this.running && everosConfigChanged) {
+      this.startEverOS().catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn({ err }, `配置更新后 EverOS 重试启动失败: ${message}`);
+      });
     }
   }
 
