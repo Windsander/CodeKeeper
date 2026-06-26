@@ -11,6 +11,8 @@ export interface ModelServerOptions {
   capability: ModelCapability;
   model: string;
   venvDir: string;
+  /** 状态变化回调，用于本地模型管理器实时聚合状态 */
+  onStatusChange?: (status: ModelServiceStatus) => void;
 }
 
 export async function getFreePort(): Promise<number> {
@@ -149,16 +151,18 @@ export class ModelServer {
     this.stderrBuffer = '';
   }
 
-  private setStatus(state: ModelServiceStatus['state']): void {
+  private setStatus(state: ModelServiceStatus['state'], progress?: number | null): void {
     // running / error 状态为终态，避免被后续 stderr 日志覆盖
     if (this.statusValue.state === 'running' || this.statusValue.state === 'error') {
       return;
     }
-    this.statusValue = { state, url: this.urlValue, error: null };
+    this.statusValue = { state, url: this.urlValue, error: null, progress: progress ?? null };
+    this.options.onStatusChange?.(this.getStatus());
   }
 
   private setError(message: string): void {
-    this.statusValue = { state: 'error', url: this.urlValue, error: message };
+    this.statusValue = { state: 'error', url: this.urlValue, error: message, progress: null };
+    this.options.onStatusChange?.(this.getStatus());
   }
 
   private tryParseUrl(stdout: string, resolve: (url: string) => void): void {
@@ -167,7 +171,8 @@ export class ModelServer {
     if (match) {
       this.urlValue = match[1];
       this.started = true;
-      this.statusValue = { state: 'running', url: this.urlValue, error: null };
+      this.statusValue = { state: 'running', url: this.urlValue, error: null, progress: null };
+      this.options.onStatusChange?.(this.getStatus());
       resolve(this.urlValue);
     }
   }
@@ -176,7 +181,8 @@ export class ModelServer {
     if (this.started) return;
     // infinity_emb 下载模型时 stderr 会输出 Downloading ... 45% 这类进度
     if (/downloading/i.test(text) || /\d+%/.test(text)) {
-      this.setStatus('downloading');
+      const match = text.match(/(\d{1,3})%/);
+      this.setStatus('downloading', match ? parseInt(match[1], 10) : null);
       return;
     }
     // 模型加载阶段的关键字
