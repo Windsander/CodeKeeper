@@ -147,11 +147,19 @@ export class Daemon {
     });
     await this.ipcServer.start();
 
-    // 启动本地 Embedding/Rerank 模型服务
-    await this.localModelManager.start().catch((err) => {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.warn({ err }, `本地模型服务未启动: ${message}`);
-    });
+    // 启动本地 Embedding/Rerank 模型服务（后台进行，不阻塞 IPC）
+    this.localModelManager
+      .start()
+      .then(async () => {
+        if (this.running) {
+          logger.info('本地模型服务已就绪，尝试启动/重启 EverOS');
+          await this.startEverOS();
+        }
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn({ err }, `本地模型服务未启动: ${message}`);
+      });
 
     // 启动 EverOS 本地记忆基础设施，所有角色服务共享同一套实例
     await this.startEverOS();
