@@ -288,6 +288,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         config.llmRequestsPerMinute = rpm;
       }
     }
+    if (params.embeddingModel !== undefined) {
+      config.embeddingModel = params.embeddingModel || undefined;
+    }
+    if (params.rerankModel !== undefined) {
+      config.rerankModel = params.rerankModel || undefined;
+    }
 
     if (params.provider === 'anthropic' || params.provider === 'openai') {
       config.provider = params.provider;

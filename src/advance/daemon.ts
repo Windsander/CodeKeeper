@@ -44,6 +44,10 @@ export interface DaemonOptions {
   maxEventsPerScan?: number;
   /** 每分钟 LLM 请求数限制，默认 10 */
   llmRequestsPerMinute?: number;
+  /** 本地 Embedding 模型名；默认使用 DEFAULT_EMBEDDING_MODEL */
+  embeddingModel?: string;
+  /** 本地 Rerank 模型名；默认使用 DEFAULT_RERANK_MODEL */
+  rerankModel?: string;
   /** EverOS 独立配置；未设置时继承 Agent 通用配置 */
   everos?: import('./config/daemon-config.js').EverOSConfig;
 }
@@ -94,8 +98,8 @@ export class Daemon {
     });
 
     this.localModelManager = new LocalModelServiceManager({
-      embeddingModel: this.options.everos?.embeddingModel,
-      rerankModel: this.options.everos?.rerankModel,
+      embeddingModel: this.options.embeddingModel ?? this.options.everos?.embeddingModel,
+      rerankModel: this.options.rerankModel ?? this.options.everos?.rerankModel,
     });
 
     this.handlerContext = {
@@ -131,6 +135,8 @@ export class Daemon {
         headers: this.options.headers ? JSON.stringify(this.options.headers) : '',
         scanCron: this.options.scanCron ?? '*/5 * * * *',
         llmRequestsPerMinute: this.options.llmRequestsPerMinute ?? 10,
+        embeddingModel: this.options.embeddingModel ?? DEFAULT_EMBEDDING_MODEL,
+        rerankModel: this.options.rerankModel ?? DEFAULT_RERANK_MODEL,
         everos: this.options.everos ? JSON.stringify(this.options.everos) : '',
       }),
       isDaemonRunning: () => this.running,
@@ -309,19 +315,30 @@ export class Daemon {
     }
   }
 
-  updateConfig(config: { apiKey?: string; apiUrl?: string; provider?: 'anthropic' | 'openai'; model?: string; headers?: Record<string, string>; scanCron?: string; llmRequestsPerMinute?: number; everos?: import('./config/daemon-config.js').EverOSConfig }): void {
+  updateConfig(config: {
+    apiKey?: string;
+    apiUrl?: string;
+    provider?: 'anthropic' | 'openai';
+    model?: string;
+    headers?: Record<string, string>;
+    scanCron?: string;
+    llmRequestsPerMinute?: number;
+    embeddingModel?: string;
+    rerankModel?: string;
+    everos?: import('./config/daemon-config.js').EverOSConfig;
+  }): void {
     const persisted: import('./config/daemon-config.js').DaemonPersistedConfig = {};
-    let everosConfigChanged = false;
+    let memoryConfigChanged = false;
 
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
       persisted.apiKey = config.apiKey;
-      everosConfigChanged = true;
+      memoryConfigChanged = true;
     }
     if (config.apiUrl !== undefined) {
       this.options.apiUrl = config.apiUrl;
       persisted.apiUrl = config.apiUrl;
-      everosConfigChanged = true;
+      memoryConfigChanged = true;
     }
     if (config.provider !== undefined) {
       this.options.provider = config.provider;
@@ -330,7 +347,7 @@ export class Daemon {
     if (config.model !== undefined) {
       this.options.model = config.model;
       persisted.model = config.model;
-      everosConfigChanged = true;
+      memoryConfigChanged = true;
     }
     if (config.headers !== undefined) {
       this.options.headers = config.headers;
@@ -346,15 +363,28 @@ export class Daemon {
       this.options.llmRequestsPerMinute = config.llmRequestsPerMinute;
       persisted.llmRequestsPerMinute = config.llmRequestsPerMinute;
     }
+    if (config.embeddingModel !== undefined) {
+      this.options.embeddingModel = config.embeddingModel;
+      persisted.embeddingModel = config.embeddingModel;
+      memoryConfigChanged = true;
+    }
+    if (config.rerankModel !== undefined) {
+      this.options.rerankModel = config.rerankModel;
+      persisted.rerankModel = config.rerankModel;
+      memoryConfigChanged = true;
+    }
     if (config.everos !== undefined) {
       this.options.everos = config.everos;
       persisted.everos = config.everos;
-      everosConfigChanged = true;
-      // 如果用户修改了本地模型名，替换 manager 实例
+      memoryConfigChanged = true;
+    }
+
+    // 本地模型名变更时替换 manager 实例，使新模型在下次启动时生效
+    if (config.embeddingModel !== undefined || config.rerankModel !== undefined) {
       this.localModelManager.stop();
       this.localModelManager = new LocalModelServiceManager({
-        embeddingModel: config.everos?.embeddingModel,
-        rerankModel: config.everos?.rerankModel,
+        embeddingModel: this.options.embeddingModel,
+        rerankModel: this.options.rerankModel,
       });
       this.handlerContext.localModelManager = this.localModelManager;
     }
@@ -363,8 +393,8 @@ export class Daemon {
       saveDaemonConfig(persisted);
     }
 
-    // 如果用户启动后才填写记忆相关配置，先启动本地模型服务，再自动重试启动 EverOS
-    if (this.running && everosConfigChanged) {
+    // 记忆相关配置变化后，先启动本地模型服务，再自动重试启动 EverOS
+    if (this.running && memoryConfigChanged) {
       this.localModelManager
         .start()
         .then(() => this.startEverOS())
@@ -387,7 +417,7 @@ export class Daemon {
     // Embedding：优先用户显式配置，否则使用本地模型服务，最后 fallback 到 Agent 通用配置
     const embedKey = cfg.embeddingApiKey ?? agent.apiKey ?? 'local';
     const embedUrl = cfg.embeddingBaseUrl ?? this.localModelManager.getEmbeddingUrl() ?? agent.apiUrl;
-    const embedModel = cfg.embeddingModel ?? DEFAULT_EMBEDDING_MODEL;
+    const embedModel = this.options.embeddingModel ?? DEFAULT_EMBEDDING_MODEL;
     if (embedKey) env.EVEROS_EMBEDDING__API_KEY = embedKey;
     if (embedUrl) env.EVEROS_EMBEDDING__BASE_URL = embedUrl;
     env.EVEROS_EMBEDDING__MODEL = embedModel;
@@ -395,7 +425,7 @@ export class Daemon {
     // Rerank：同上
     const rerankKey = cfg.rerankApiKey ?? agent.apiKey ?? 'local';
     const rerankUrl = cfg.rerankBaseUrl ?? this.localModelManager.getRerankUrl() ?? agent.apiUrl;
-    const rerankModel = cfg.rerankModel ?? DEFAULT_RERANK_MODEL;
+    const rerankModel = this.options.rerankModel ?? DEFAULT_RERANK_MODEL;
     if (rerankKey) env.EVEROS_RERANK__API_KEY = rerankKey;
     if (rerankUrl) env.EVEROS_RERANK__BASE_URL = rerankUrl;
     env.EVEROS_RERANK__MODEL = rerankModel;

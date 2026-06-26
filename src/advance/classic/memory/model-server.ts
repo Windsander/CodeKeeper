@@ -119,7 +119,6 @@ export class ModelServer {
 
       setTimeout(() => {
         if (!this.started) {
-          const tail = this.stderrBuffer.slice(-500);
           this.setError(`${this.options.capability} 启动超时`);
           this.stop();
           reject(new Error(`${this.options.capability} 启动超时`));

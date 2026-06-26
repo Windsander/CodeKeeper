@@ -1270,3 +1270,36 @@ select.input:focus {
   opacity: 0.8;
 }
 
+/* ---------- 设置页双栏布局 ---------- */
+
+.settings-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.settings-form-column {
+  flex: 2;
+  min-width: 0;
+}
+
+.settings-status-column {
+  flex: 1;
+  min-width: 280px;
+  max-width: 380px;
+  position: sticky;
+  top: 24px;
+}
+
+@media (max-width: 900px) {
+  .settings-layout {
+    flex-direction: column;
+  }
+
+  .settings-status-column {
+    position: static;
+    max-width: none;
+    width: 100%;
+  }
+}
+

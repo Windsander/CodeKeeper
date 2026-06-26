@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { DaemonStatus, EverosStatus, LocalModelStatus, ModelServiceStatus } from '../../shared/service-status';
+import type { DaemonStatus, LocalModelStatus, ModelServiceStatus } from '../../shared/service-status';
 
 export interface ServiceStatusPanelProps {
   daemon: DaemonStatus | null;
@@ -25,16 +25,9 @@ const STATE_DISPLAY: Record<ModelServiceStatus['state'], StatusDisplay> = {
   error: { label: '错误', badgeClass: 'badge-danger' },
 };
 
-const EVEROS_STATE_DISPLAY: Record<EverosStatus['state'], StatusDisplay> = {
-  idle: { label: '闲置', badgeClass: 'badge-secondary' },
-  starting: { label: '启动中', badgeClass: 'badge-info' },
-  running: { label: '运行中', badgeClass: 'badge-success' },
-  error: { label: '错误', badgeClass: 'badge-danger' },
-};
-
 const MAX_ERROR_LENGTH = 200;
 
-function truncateError(message: string | null): { text: string; truncated: boolean } {
+function truncateError(message: string | null | undefined): { text: string; truncated: boolean } {
   if (!message) return { text: '', truncated: false };
   if (message.length <= MAX_ERROR_LENGTH) return { text: message, truncated: false };
   return { text: `${message.slice(0, MAX_ERROR_LENGTH)}...`, truncated: true };
@@ -57,11 +50,11 @@ function StatusBadge({ state, isDaemon = false, running }: { state?: string; isD
 interface TreeNodeProps {
   title: string;
   nodeKey: NodeKey;
-  status: string | undefined;
+  status?: string;
   isDaemon?: boolean;
   running?: boolean;
   url?: string | null;
-  error?: string | null;
+  error?: string | null | undefined;
   expandedKeys: Set<NodeKey>;
   onToggle: (key: NodeKey) => void;
   children?: React.ReactNode;
@@ -146,7 +139,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
           nodeKey="daemon"
           isDaemon
           running={daemon?.daemonRunning ?? false}
-          error={daemon?.everos?.state === 'error' ? daemon.everos.error ?? undefined : undefined}
+          error={daemon?.everos?.state === 'error' ? daemon.everos.error : null}
           expandedKeys={expandedKeys}
           onToggle={toggle}
         >
@@ -155,7 +148,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
             nodeKey="everos"
             status={daemon?.everos?.state}
             url={daemon?.everos?.url}
-            error={daemon?.everos?.error ?? undefined}
+            error={daemon?.everos?.error ?? null}
             expandedKeys={expandedKeys}
             onToggle={toggle}
           >
@@ -163,7 +156,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
               title="本地模型服务"
               nodeKey="localModel"
               status={inferLocalModelState(localModel)}
-              error={inferLocalModelError(localModel) ?? undefined}
+              error={inferLocalModelError(localModel) ?? null}
               expandedKeys={expandedKeys}
               onToggle={toggle}
             >
@@ -172,7 +165,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
                 nodeKey="embedding"
                 status={localModel?.embedding.state}
                 url={localModel?.embedding.url}
-                error={localModel?.embedding.error ?? undefined}
+                error={localModel?.embedding.error ?? null}
                 expandedKeys={expandedKeys}
                 onToggle={toggle}
               />
@@ -181,7 +174,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
                 nodeKey="rerank"
                 status={localModel?.rerank.state}
                 url={localModel?.rerank.url}
-                error={localModel?.rerank.error ?? undefined}
+                error={localModel?.rerank.error ?? null}
                 expandedKeys={expandedKeys}
                 onToggle={toggle}
               />

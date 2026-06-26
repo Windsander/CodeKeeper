@@ -46,6 +46,10 @@ export interface DaemonPersistedConfig {
   scanCron?: string;
   /** 每分钟 LLM 请求数限制，默认 10 */
   llmRequestsPerMinute?: number;
+  /** 本地 Embedding 模型名 */
+  embeddingModel?: string;
+  /** 本地 Rerank 模型名 */
+  rerankModel?: string;
   /** EverOS 独立配置；未配置时继承 Agent 通用配置 */
   everos?: EverOSConfig;
 }
