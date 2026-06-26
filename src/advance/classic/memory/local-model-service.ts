@@ -71,9 +71,14 @@ export class LocalModelServiceManager {
     await this.startCapability(capability, model, true);
   }
 
+  private sitePackagesDir(): string {
+    return join(this.venvDir, process.platform === 'win32' ? 'Lib\\site-packages' : 'lib/python3.12/site-packages');
+  }
+
   private async ensureVenv(): Promise<void> {
     const cli = join(this.venvDir, process.platform === 'win32' ? 'Scripts\\infinity_emb.exe' : 'bin/infinity_emb');
-    if (existsSync(cli)) return;
+    const stubOk = existsSync(join(this.sitePackagesDir(), 'optimum', '__init__.py'));
+    if (existsSync(cli) && stubOk) return;
 
     await mkdir(this.venvDir, { recursive: true });
     const python = await this.findPython();
@@ -89,7 +94,7 @@ export class LocalModelServiceManager {
    * 提供一个空 stub，使检查返回 False，从而跳过 bettertransformer 转换。
    */
   private ensureOptimumStub(): void {
-    const sitePackages = join(this.venvDir, process.platform === 'win32' ? 'Lib\\site-packages' : 'lib/python3.12/site-packages');
+    const sitePackages = this.sitePackagesDir();
     const optimumDir = join(sitePackages, 'optimum');
     if (existsSync(join(optimumDir, '__init__.py'))) return;
 
