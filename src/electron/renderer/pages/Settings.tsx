@@ -840,7 +840,7 @@ export function Settings() {
           <ServiceStatusPanel
             daemon={serviceStatus.daemon}
             localModel={serviceStatus.localModel}
-            error={serviceStatus.error}
+            remoteModel={serviceStatus.remoteModel}
           />
         </div>
       </div>

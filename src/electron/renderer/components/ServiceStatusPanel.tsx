@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import type { DaemonStatus, LocalModelStatus, ModelServiceStatus } from '../../shared/service-status';
+import type { DaemonStatus, LocalModelStatus, ModelServiceStatus, RemoteModelStatus } from '../../shared/service-status';
+import { CircularProgress } from './CircularProgress';
 
 export interface ServiceStatusPanelProps {
   daemon: DaemonStatus | null;
   localModel: LocalModelStatus | null;
-  error?: string | null;
+  remoteModel: RemoteModelStatus | null;
 }
 
-type NodeKey = 'daemon' | 'everos' | 'localModel' | 'embedding' | 'rerank';
+type NodeKey = 'daemon' | 'everos' | 'localModel' | 'embedding' | 'rerank' | 'remoteModel' | 'remoteModel-llm' | 'remoteModel-multimodal';
 
 interface StatusDisplay {
   label: string;
@@ -56,6 +57,7 @@ interface TreeNodeProps {
   nodeKey: NodeKey;
   icon: string;
   status?: string;
+  progress?: number | null;
   isDaemon?: boolean;
   running?: boolean;
   url?: string | null;
@@ -70,6 +72,7 @@ function TreeNode({
   nodeKey,
   icon,
   status,
+  progress,
   isDaemon,
   running,
   url,
@@ -92,6 +95,11 @@ function TreeNode({
       >
         <span className="service-status-icon">{icon}</span>
         <span className="service-status-title">{title}</span>
+        {progress !== undefined && (
+          <span className="service-status-progress">
+            <CircularProgress value={progress} size={14} strokeWidth={2} />
+          </span>
+        )}
         <StatusBadge state={status} isDaemon={isDaemon} running={running} />
       </div>
       {url && status === 'running' && (
@@ -110,7 +118,7 @@ function TreeNode({
   );
 }
 
-export function ServiceStatusPanel({ daemon, localModel, error }: ServiceStatusPanelProps) {
+export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceStatusPanelProps) {
   const [expandedKeys, setExpandedKeys] = useState<Set<NodeKey>>(new Set());
 
   const toggle = (key: NodeKey) => {
@@ -130,7 +138,6 @@ export function ServiceStatusPanel({ daemon, localModel, error }: ServiceStatusP
       <div className="service-status-header">
         <h3 className="service-status-title">服务状态</h3>
       </div>
-      {error && <div className="service-status-top-error">{error}</div>}
       <div className="service-status-tree">
         <TreeNode
           title="Daemon"
@@ -166,6 +173,7 @@ export function ServiceStatusPanel({ daemon, localModel, error }: ServiceStatusP
               nodeKey="embedding"
               icon="🔤"
               status={localModel?.embedding.state}
+              progress={localModel?.embedding.progress}
               url={localModel?.embedding.url}
               error={localModel?.embedding.error ?? null}
               expandedKeys={expandedKeys}
@@ -176,12 +184,43 @@ export function ServiceStatusPanel({ daemon, localModel, error }: ServiceStatusP
               nodeKey="rerank"
               icon="🔍"
               status={localModel?.rerank.state}
+              progress={localModel?.rerank.progress}
               url={localModel?.rerank.url}
               error={localModel?.rerank.error ?? null}
               expandedKeys={expandedKeys}
               onToggle={toggle}
             />
           </TreeNode>
+          {remoteModel && (
+            <TreeNode
+              title="远端模型服务"
+              nodeKey="remoteModel"
+              icon="🌐"
+              status={inferRemoteModelState(remoteModel)}
+              error={inferRemoteModelError(remoteModel) ?? null}
+              expandedKeys={expandedKeys}
+              onToggle={toggle}
+            >
+              <TreeNode
+                title={remoteModel.llm.modelLabel}
+                nodeKey="remoteModel-llm"
+                icon="💬"
+                status={remoteModel.llm.state}
+                error={remoteModel.llm.error ?? null}
+                expandedKeys={expandedKeys}
+                onToggle={toggle}
+              />
+              <TreeNode
+                title={remoteModel.multimodal.modelLabel}
+                nodeKey="remoteModel-multimodal"
+                icon="🖼️"
+                status={remoteModel.multimodal.state}
+                error={remoteModel.multimodal.error ?? null}
+                expandedKeys={expandedKeys}
+                onToggle={toggle}
+              />
+            </TreeNode>
+          )}
         </TreeNode>
       </div>
     </div>
@@ -202,5 +241,19 @@ function inferLocalModelState(localModel: LocalModelStatus | null): ModelService
 function inferLocalModelError(localModel: LocalModelStatus | null): string | null {
   if (!localModel) return null;
   const errors = [localModel.embedding.error, localModel.rerank.error].filter(Boolean);
+  return errors.length > 0 ? errors.join('; ') : null;
+}
+
+function inferRemoteModelState(remoteModel: RemoteModelStatus | null): 'unconfigured' | 'running' | 'error' | undefined {
+  if (!remoteModel) return 'unconfigured';
+  const states = [remoteModel.llm.state, remoteModel.multimodal.state];
+  if (states.some((s) => s === 'error')) return 'error';
+  if (states.some((s) => s === 'running')) return 'running';
+  return 'unconfigured';
+}
+
+function inferRemoteModelError(remoteModel: RemoteModelStatus | null): string | null {
+  if (!remoteModel) return null;
+  const errors = [remoteModel.llm.error, remoteModel.multimodal.error].filter(Boolean);
   return errors.length > 0 ? errors.join('; ') : null;
 }

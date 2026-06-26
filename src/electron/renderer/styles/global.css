@@ -1451,3 +1451,36 @@ select.input:focus {
   flex-shrink: 0;
 }
 
+.service-status-progress {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.circular-progress {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.circular-progress-track {
+  fill: none;
+  stroke: var(--border-color);
+}
+
+.circular-progress-bar {
+  fill: none;
+  stroke: var(--primary);
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  transition: stroke-dashoffset 0.2s ease;
+}
+
+.circular-progress-bar--indeterminate {
+  animation: circular-spin 1s linear infinite;
+}
+
+@keyframes circular-spin {
+  0% { transform: rotate(-90deg); }
+  100% { transform: rotate(270deg); }
+}
+

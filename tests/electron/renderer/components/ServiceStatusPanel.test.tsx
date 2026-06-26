@@ -1,23 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { ServiceStatusPanel } from '../../../../src/electron/renderer/components/ServiceStatusPanel';
-import type { DaemonStatus, LocalModelStatus } from '../../../../src/electron/shared/service-status';
+import type { DaemonStatus, LocalModelStatus, RemoteModelStatus } from '../../../../src/electron/shared/service-status';
 
 describe('ServiceStatusPanel', () => {
+  const defaultRemoteModel: RemoteModelStatus = {
+    llm: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
+    multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
+  };
+
   it('渲染 Daemon → 记忆服务（EverOS）/本地模型服务 → Embedding/Rerank 树形结构', () => {
     const daemon: DaemonStatus = {
       daemonRunning: true,
       everos: { state: 'running', url: 'http://127.0.0.1:8000', error: null },
     };
     const localModel: LocalModelStatus = {
-      embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null },
-      rerank: { state: 'running', url: 'http://127.0.0.1:12346', error: null },
+      embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null, progress: null },
+      rerank: { state: 'running', url: 'http://127.0.0.1:12346', error: null, progress: null },
     };
 
     render(
       <ServiceStatusPanel
         daemon={daemon}
         localModel={localModel}
+        remoteModel={defaultRemoteModel}
       />
     );
 
@@ -35,16 +41,15 @@ describe('ServiceStatusPanel', () => {
       everos: { state: 'starting', url: null, error: null },
     };
     const localModel: LocalModelStatus = {
-      embedding: { state: 'downloading', url: null, error: null },
-      rerank: { state: 'loading', url: null, error: null },
+      embedding: { state: 'downloading', url: null, error: null, progress: 30 },
+      rerank: { state: 'loading', url: null, error: null, progress: null },
     };
 
     const { container } = render(
       <ServiceStatusPanel
         daemon={daemon}
         localModel={localModel}
-        loading={false}
-        error={null}
+        remoteModel={defaultRemoteModel}
       />
     );
 
@@ -61,16 +66,15 @@ describe('ServiceStatusPanel', () => {
       everos: { state: 'error', url: null, error: longError },
     };
     const localModel: LocalModelStatus = {
-      embedding: { state: 'error', url: null, error: 'embedding 启动失败' },
-      rerank: { state: 'idle', url: null, error: null },
+      embedding: { state: 'error', url: null, error: 'embedding 启动失败', progress: null },
+      rerank: { state: 'idle', url: null, error: null, progress: null },
     };
 
     render(
       <ServiceStatusPanel
         daemon={daemon}
         localModel={localModel}
-        loading={false}
-        error={null}
+        remoteModel={defaultRemoteModel}
       />
     );
 
@@ -94,20 +98,37 @@ describe('ServiceStatusPanel', () => {
       everos: { state: 'running', url: 'http://127.0.0.1:8000', error: null },
     };
     const localModel: LocalModelStatus = {
-      embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null },
-      rerank: { state: 'idle', url: null, error: null },
+      embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null, progress: null },
+      rerank: { state: 'idle', url: null, error: null, progress: null },
     };
 
     render(
       <ServiceStatusPanel
         daemon={daemon}
         localModel={localModel}
-        loading={false}
-        error={null}
+        remoteModel={defaultRemoteModel}
       />
     );
 
     expect(screen.getByText('http://127.0.0.1:8000')).toBeTruthy();
     expect(screen.getByText('http://127.0.0.1:12345')).toBeTruthy();
+  });
+
+  it('渲染远端模型服务节点与模型简称', () => {
+    const remoteModel: RemoteModelStatus = {
+      llm: { state: 'running', modelLabel: 'Opus-4.8', fullModel: 'claude-opus-4-8', baseUrl: 'https://api.anthropic.com/v1', error: null, lastCheckedAt: Date.now() },
+      multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: Date.now() },
+    };
+
+    render(
+      <ServiceStatusPanel
+        daemon={{ daemonRunning: true, everos: { state: 'running', url: null, error: null } }}
+        localModel={{ embedding: { state: 'running', url: null, error: null, progress: null }, rerank: { state: 'running', url: null, error: null, progress: null } }}
+        remoteModel={remoteModel}
+      />
+    );
+    expect(screen.getByText('远端模型服务')).toBeTruthy();
+    expect(screen.getByText('Opus-4.8')).toBeTruthy();
+    expect(screen.getByText('未配置')).toBeTruthy();
   });
 });
