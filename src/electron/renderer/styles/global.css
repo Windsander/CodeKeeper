@@ -1303,3 +1303,14 @@ select.input:focus {
   }
 }
 
+.settings-tabs {
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-tab-content {
+  min-height: 200px;
+}
+

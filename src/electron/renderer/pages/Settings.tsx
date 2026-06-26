@@ -136,13 +136,15 @@ function SecretInput({ value, onChange, placeholder, ariaLabel, error }: SecretI
   );
 }
 
-function Section({ title, badge, children }: { title: string; badge?: React.ReactNode; children: React.ReactNode }) {
+function Section({ title, badge, hideHeader, children }: { title: string; badge?: React.ReactNode; hideHeader?: boolean; children: React.ReactNode }) {
   return (
     <div className="config-section expanded">
-      <div className="config-section-header locked">
-        <h5 className="config-section-title">{title}</h5>
-        {badge}
-      </div>
+      {!hideHeader && (
+        <div className="config-section-header locked">
+          <h5 className="config-section-title">{title}</h5>
+          {badge}
+        </div>
+      )}
       <div className="config-section-body">{children}</div>
     </div>
   );
@@ -176,7 +178,7 @@ function LlmConfigSection({
   removeHeader: (index: number) => void;
 }) {
   return (
-    <Section title="LLM 配置">
+    <Section title="LLM 配置" hideHeader>
       <div className="form-group">
         <label>Provider</label>
         <Dropdown value={provider} options={PROVIDER_OPTIONS} onChange={(value) => setProvider(value)} />
@@ -272,7 +274,7 @@ function DaemonScheduleSection({
   };
 
   return (
-    <Section title="Daemon 调度">
+    <Section title="Daemon 调度" hideHeader>
       <div className="form-group">
         <label>扫描间隔</label>
         <Dropdown
@@ -351,6 +353,7 @@ function LocalModelsSection({
   return (
     <Section
       title="本地 Embedding/Rerank 模型"
+      hideHeader
       badge={
         embeddingState === 'running' && rerankState === 'running' ? (
           <span className="badge badge-success">运行中</span>
@@ -444,6 +447,7 @@ function EverosMemorySection({
   return (
     <Section
       title="EverOS 记忆配置"
+      hideHeader
       badge={
         hasCustomMultimodal(everos) ? (
           <span className="badge badge-success">已自定义</span>
@@ -616,6 +620,71 @@ export function Settings() {
     }
   };
 
+  const [activeTab, setActiveTab] = useState<'llm' | 'daemon' | 'local' | 'everos'>('llm');
+
+  const TABS = [
+    { key: 'llm' as const, label: 'LLM 配置' },
+    { key: 'daemon' as const, label: 'Daemon 调度' },
+    { key: 'local' as const, label: '本地模型' },
+    { key: 'everos' as const, label: 'EverOS 记忆' },
+  ];
+
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'llm':
+        return (
+          <LlmConfigSection
+            provider={provider}
+            setProvider={setProvider}
+            apiKey={apiKey}
+            setApiKey={setApiKey}
+            apiUrl={apiUrl}
+            setApiUrl={setApiUrl}
+            model={model}
+            setModel={setModel}
+            headerEntries={headerEntries}
+            updateHeader={updateHeader}
+            addHeader={addHeader}
+            removeHeader={removeHeader}
+          />
+        );
+      case 'daemon':
+        return (
+          <DaemonScheduleSection
+            scanCron={scanCron}
+            setScanCron={setScanCron}
+            customCron={customCron}
+            setCustomCron={setCustomCron}
+            llmRequestsPerMinute={llmRequestsPerMinute}
+            setLlmRequestsPerMinute={setLlmRequestsPerMinute}
+          />
+        );
+      case 'local':
+        return (
+          <LocalModelsSection
+            embeddingModel={embeddingModel}
+            setEmbeddingModel={setEmbeddingModel}
+            rerankModel={rerankModel}
+            setRerankModel={setRerankModel}
+            embeddingCustom={embeddingCustom}
+            setEmbeddingCustom={setEmbeddingCustom}
+            rerankCustom={rerankCustom}
+            setRerankCustom={setRerankCustom}
+            localModelStatus={serviceStatus.localModel}
+          />
+        );
+      case 'everos':
+        return (
+          <EverosMemorySection
+            everos={everos}
+            updateEveros={updateEveros}
+            modelHint={model}
+            apiUrlHint={apiUrl}
+          />
+        );
+    }
+  };
+
   if (loading) return <div className="loading">加载中...</div>;
 
   return (
@@ -627,48 +696,20 @@ export function Settings() {
       <div className="settings-layout">
         <div className="settings-form-column">
           <div className="card">
-            <LlmConfigSection
-              provider={provider}
-              setProvider={setProvider}
-              apiKey={apiKey}
-              setApiKey={setApiKey}
-              apiUrl={apiUrl}
-              setApiUrl={setApiUrl}
-              model={model}
-              setModel={setModel}
-              headerEntries={headerEntries}
-              updateHeader={updateHeader}
-              addHeader={addHeader}
-              removeHeader={removeHeader}
-            />
+            <div className="tabs settings-tabs">
+              {TABS.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  className={`tab-btn${activeTab === tab.key ? ' active' : ''}`}
+                  onClick={() => setActiveTab(tab.key)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
 
-            <DaemonScheduleSection
-              scanCron={scanCron}
-              setScanCron={setScanCron}
-              customCron={customCron}
-              setCustomCron={setCustomCron}
-              llmRequestsPerMinute={llmRequestsPerMinute}
-              setLlmRequestsPerMinute={setLlmRequestsPerMinute}
-            />
-
-            <LocalModelsSection
-              embeddingModel={embeddingModel}
-              setEmbeddingModel={setEmbeddingModel}
-              rerankModel={rerankModel}
-              setRerankModel={setRerankModel}
-              embeddingCustom={embeddingCustom}
-              setEmbeddingCustom={setEmbeddingCustom}
-              rerankCustom={rerankCustom}
-              setRerankCustom={setRerankCustom}
-              localModelStatus={serviceStatus.localModel}
-            />
-
-            <EverosMemorySection
-              everos={everos}
-              updateEveros={updateEveros}
-              modelHint={model}
-              apiUrlHint={apiUrl}
-            />
+            <div className="settings-tab-content">{renderTabContent()}</div>
 
             {localModelError && (
               <div className="input-hint" style={{ marginTop: 12, color: 'var(--danger)' }}>
