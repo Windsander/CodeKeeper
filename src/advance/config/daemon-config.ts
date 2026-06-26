@@ -3,38 +3,21 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 /**
- * EverOS 独立配置
+ * EverOS 多模态模型覆盖配置。
  *
- * 留空字段表示“继承 Agent 通用配置”或“使用 EverOS 默认值”。
+ * 所有字段留空表示不向 EverOS 传入多模态覆盖，使用 EverOS 自身默认值。
  */
 export interface EverOSConfig {
-  /** LLM 模型（OpenAI 协议） */
-  llmModel?: string;
-  /** LLM API Key */
-  llmApiKey?: string;
-  /** LLM Base URL */
-  llmBaseUrl?: string;
-
-  /** Embedding 模型 */
-  embeddingModel?: string;
-  /** Embedding API Key */
-  embeddingApiKey?: string;
-  /** Embedding Base URL */
-  embeddingBaseUrl?: string;
-
-  /** 多模态 LLM 模型（解析图片 / PDF / 音频） */
-  multimodalModel?: string;
+  /** 多模态 LLM 服务提供商 */
+  multimodalProvider?: 'anthropic' | 'openai';
   /** 多模态 LLM API Key */
   multimodalApiKey?: string;
   /** 多模态 LLM Base URL */
   multimodalBaseUrl?: string;
-
-  /** Rerank 模型 */
-  rerankModel?: string;
-  /** Rerank API Key */
-  rerankApiKey?: string;
-  /** Rerank Base URL */
-  rerankBaseUrl?: string;
+  /** 多模态 LLM 模型（解析图片 / PDF / 音频） */
+  multimodalModel?: string;
+  /** 多模态 LLM 自定义 Headers（JSON 字符串） */
+  multimodalHeaders?: string;
 }
 
 export interface DaemonPersistedConfig {

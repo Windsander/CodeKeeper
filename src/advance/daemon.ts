@@ -98,8 +98,8 @@ export class Daemon {
     });
 
     this.localModelManager = new LocalModelServiceManager({
-      embeddingModel: this.options.embeddingModel ?? this.options.everos?.embeddingModel,
-      rerankModel: this.options.rerankModel ?? this.options.everos?.rerankModel,
+      embeddingModel: this.options.embeddingModel,
+      rerankModel: this.options.rerankModel,
     });
 
     this.handlerContext = {
@@ -159,13 +159,8 @@ export class Daemon {
     });
     await this.ipcServer.start();
 
-    // 启动本地 Embedding/Rerank 模型服务（后台进行，不阻塞 IPC）
-    // 若用户显式配置了外部 Embedding/Rerank URL，则不需要等待本地模型，可立即启动 EverOS。
-    const hasExplicitModelUrls = Boolean(
-      this.options.everos?.embeddingBaseUrl && this.options.everos?.rerankBaseUrl
-    );
-
-    const localModelReady = this.localModelManager
+    // 启动本地 Embedding/Rerank 模型服务（后台进行，不阻塞 IPC），就绪后自动启动 EverOS
+    this.localModelManager
       .start()
       .then(async () => {
         if (this.running) {
@@ -176,21 +171,8 @@ export class Daemon {
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
         logger.warn({ err }, `本地模型服务未启动: ${message}`);
-        if (!hasExplicitModelUrls) {
-          logger.warn('未配置外部 Embedding/Rerank URL，EverOS 将不会自动启动，Agent 子进程会等待就绪');
-        }
+        logger.warn('本地模型服务未就绪，EverOS 将不会自动启动，Agent 子进程会等待就绪');
       });
-
-    if (hasExplicitModelUrls) {
-      // 显式 URL 已配置，本地模型失败也不应阻塞 EverOS
-      await this.startEverOS();
-    } else {
-      // 依赖本地模型服务，让 EverOS 在本地模型就绪后再启动。
-      // 这里不 await，避免 IPC 启动被模型下载/加载阻塞。
-      localModelReady.catch(() => {
-        /* 错误已在上方记录 */
-      });
-    }
 
     // IPC server 启动后，把文件监控等非关键初始化推迟到下一个事件循环，
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
@@ -414,33 +396,29 @@ export class Daemon {
     };
     const cfg = this.options.everos ?? {};
 
-    // Embedding：优先用户显式配置，否则使用本地模型服务，最后 fallback 到 Agent 通用配置
-    const embedKey = cfg.embeddingApiKey ?? agent.apiKey ?? 'local';
-    const embedUrl = cfg.embeddingBaseUrl ?? this.localModelManager.getEmbeddingUrl() ?? agent.apiUrl;
+    // Embedding / Rerank：使用本地模型服务，未就绪时回退到 Agent 通用配置
+    const embedKey = agent.apiKey ?? 'local';
+    const embedUrl = this.localModelManager.getEmbeddingUrl() ?? agent.apiUrl;
     const embedModel = this.options.embeddingModel ?? DEFAULT_EMBEDDING_MODEL;
     if (embedKey) env.EVEROS_EMBEDDING__API_KEY = embedKey;
     if (embedUrl) env.EVEROS_EMBEDDING__BASE_URL = embedUrl;
     env.EVEROS_EMBEDDING__MODEL = embedModel;
 
-    // Rerank：同上
-    const rerankKey = cfg.rerankApiKey ?? agent.apiKey ?? 'local';
-    const rerankUrl = cfg.rerankBaseUrl ?? this.localModelManager.getRerankUrl() ?? agent.apiUrl;
+    const rerankKey = agent.apiKey ?? 'local';
+    const rerankUrl = this.localModelManager.getRerankUrl() ?? agent.apiUrl;
     const rerankModel = this.options.rerankModel ?? DEFAULT_RERANK_MODEL;
     if (rerankKey) env.EVEROS_RERANK__API_KEY = rerankKey;
     if (rerankUrl) env.EVEROS_RERANK__BASE_URL = rerankUrl;
     env.EVEROS_RERANK__MODEL = rerankModel;
 
-    // LLM（保持现有逻辑）
-    const llmKey = cfg.llmApiKey ?? agent.apiKey;
-    const llmUrl = cfg.llmBaseUrl ?? agent.apiUrl;
-    const llmModel = cfg.llmModel ?? agent.model;
-    if (llmKey) env.EVEROS_LLM__API_KEY = llmKey;
-    if (llmUrl) env.EVEROS_LLM__BASE_URL = llmUrl;
-    if (llmModel) env.EVEROS_LLM__MODEL = llmModel;
+    // LLM：使用 Agent 通用配置
+    if (agent.apiKey) env.EVEROS_LLM__API_KEY = agent.apiKey;
+    if (agent.apiUrl) env.EVEROS_LLM__BASE_URL = agent.apiUrl;
+    if (agent.model) env.EVEROS_LLM__MODEL = agent.model;
 
-    // Multimodal（保持现有逻辑）
-    const mmKey = cfg.multimodalApiKey ?? agent.apiKey;
-    const mmUrl = cfg.multimodalBaseUrl ?? agent.apiUrl;
+    // Multimodal：仅使用显式配置，未配置时不回退到 Agent LLM
+    const mmKey = cfg.multimodalApiKey;
+    const mmUrl = cfg.multimodalBaseUrl;
     const mmModel = cfg.multimodalModel;
     if (mmKey) env.EVEROS_MULTIMODAL__API_KEY = mmKey;
     if (mmUrl) env.EVEROS_MULTIMODAL__BASE_URL = mmUrl;

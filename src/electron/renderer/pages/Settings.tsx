@@ -25,9 +25,11 @@ interface DaemonConfig {
 }
 
 interface EverOSConfig {
-  multimodalModel?: string;
+  multimodalProvider?: 'anthropic' | 'openai';
   multimodalApiKey?: string;
   multimodalBaseUrl?: string;
+  multimodalModel?: string;
+  multimodalHeaders?: string;
 }
 
 interface HeaderEntry {
@@ -73,10 +75,6 @@ function stringifyEverOS(cfg: EverOSConfig): string {
     }
   });
   return JSON.stringify(cleaned);
-}
-
-function hasCustomMultimodal(cfg: EverOSConfig): boolean {
-  return Object.values(cfg).some((value) => typeof value === 'string' && value.trim().length > 0);
 }
 
 const SCAN_INTERVALS = [
@@ -445,65 +443,117 @@ function LocalModelsSection({
   );
 }
 
-function EverosMemorySection({
-  everos,
-  updateEveros,
-  modelHint,
-  apiUrlHint,
+function MultimodalConfigSection({
+  provider,
+  setProvider,
+  apiKey,
+  setApiKey,
+  apiUrl,
+  setApiUrl,
+  model,
+  setModel,
+  headerEntries,
+  updateHeader,
+  addHeader,
+  removeHeader,
 }: {
-  everos: EverOSConfig;
-  updateEveros: (patch: Partial<EverOSConfig>) => void;
-  modelHint: string;
-  apiUrlHint: string;
+  provider: string;
+  setProvider: (value: string) => void;
+  apiKey: string;
+  setApiKey: (value: string) => void;
+  apiUrl: string;
+  setApiUrl: (value: string) => void;
+  model: string;
+  setModel: (value: string) => void;
+  headerEntries: HeaderEntry[];
+  updateHeader: (index: number, field: keyof HeaderEntry, value: string) => void;
+  addHeader: () => void;
+  removeHeader: (index: number) => void;
 }) {
+  const hasCustom =
+    provider.trim() ||
+    apiKey.trim() ||
+    apiUrl.trim() ||
+    model.trim() ||
+    headerEntries.some((e) => e.key.trim() || e.value.trim());
+
   return (
     <Section
-      title="EverOS 记忆配置"
+      title="多模态模型"
       hideHeader
-      badge={
-        hasCustomMultimodal(everos) ? (
-          <span className="badge badge-success">已自定义</span>
-        ) : (
-          <span className="badge badge-info">继承 Agent 配置</span>
-        )
-      }
+      badge={hasCustom ? <span className="badge badge-success">已自定义</span> : <span className="badge badge-secondary">未配置</span>}
     >
-      <div className="input-hint" style={{ marginBottom: 12 }}>
-        留空表示继承上方 LLM 配置。Windows / macOS / Linux 均可使用本地 EverOS（Windows 会自动生成兼容层）。
+      <div className="form-group">
+        <label>Provider</label>
+        <Dropdown value={provider} options={PROVIDER_OPTIONS} onChange={(value) => setProvider(value)} />
       </div>
-      <div className="config-section" style={{ marginBottom: 16 }}>
-        <h6 className="config-section-title" style={{ marginBottom: 12, color: 'var(--text-secondary)' }}>
-          Multimodal（解析图片 / PDF / 音频）
-        </h6>
-        <div className="form-group">
-          <label>Model</label>
-          <input
-            className="input"
-            placeholder="例如 google/gemini-3-flash-preview"
-            value={everos.multimodalModel ?? ''}
-            onChange={(e) => updateEveros({ multimodalModel: e.target.value })}
-          />
-        </div>
-        <div className="form-group">
-          <label>API Key</label>
-          <SecretInput
-            value={everos.multimodalApiKey ?? ''}
-            onChange={(value) => updateEveros({ multimodalApiKey: value })}
-            placeholder="继承 Agent API Key"
-            ariaLabel="Multimodal API Key 可见性切换"
-          />
-        </div>
-        <div className="form-group" style={{ marginBottom: 0 }}>
-          <label>Base URL</label>
-          <input
-            className="input"
-            placeholder={`继承: ${apiUrlHint || '未设置'}`}
-            value={everos.multimodalBaseUrl ?? ''}
-            onChange={(e) => updateEveros({ multimodalBaseUrl: e.target.value })}
-          />
+
+      <div className="form-group">
+        <label>API Key</label>
+        <SecretInput
+          value={apiKey}
+          onChange={setApiKey}
+          placeholder="请输入多模态模型 API Key"
+          ariaLabel="多模态 API Key 可见性切换"
+        />
+      </div>
+
+      <div className="form-group">
+        <label>API Base URL（可选）</label>
+        <input
+          className="input"
+          value={apiUrl}
+          placeholder="留空使用默认"
+          onChange={(e) => setApiUrl(e.target.value)}
+        />
+        <div className="input-hint" style={{ marginTop: 6 }}>
+          OpenAI 兼容示例：https://your-openai-proxy.example.com/v1
         </div>
       </div>
-      <div className="input-hint">Model 留空时继承: {modelHint || '未设置'}</div>
+
+      <div className="form-group">
+        <label>Model</label>
+        <input
+          className="input"
+          value={model}
+          placeholder={provider === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022'}
+          onChange={(e) => setModel(e.target.value)}
+        />
+      </div>
+
+      <div className="form-group">
+        <label>自定义 Headers</label>
+        {headerEntries.map((entry, index) => (
+          <div key={index} className="form-row header-entry-row" style={{ marginBottom: 8 }}>
+            <input
+              className="input"
+              placeholder="Header 名称"
+              value={entry.key}
+              onChange={(e) => updateHeader(index, 'key', e.target.value)}
+            />
+            <input
+              className="input"
+              placeholder="Header 值"
+              value={entry.value}
+              onChange={(e) => updateHeader(index, 'value', e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn btn-danger btn-sm header-entry-remove"
+              onClick={() => removeHeader(index)}
+              title="删除"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                <line x1="10" y1="11" x2="10" y2="17" />
+                <line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
+            </button>
+          </div>
+        ))}
+        <button className="btn btn-primary btn-sm" onClick={addHeader}>+ 添加 Header</button>
+      </div>
     </Section>
   );
 }
@@ -523,7 +573,11 @@ export function Settings() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const [everos, setEveros] = useState<EverOSConfig>({});
+  const [multimodalProvider, setMultimodalProvider] = useState('anthropic');
+  const [multimodalApiKey, setMultimodalApiKey] = useState('');
+  const [multimodalApiUrl, setMultimodalApiUrl] = useState('');
+  const [multimodalModel, setMultimodalModel] = useState('');
+  const [multimodalHeaderEntries, setMultimodalHeaderEntries] = useState<HeaderEntry[]>([{ key: '', value: '' }]);
 
   const [embeddingModel, setEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
   const [rerankModel, setRerankModel] = useState(DEFAULT_RERANK_MODEL);
@@ -542,10 +596,16 @@ export function Settings() {
       setLlmRequestsPerMinute(data.llmRequestsPerMinute ?? 10);
       const entries = parseHeaders(data.headers ?? '');
       setHeaderEntries(entries.length > 0 ? entries : [{ key: '', value: '' }]);
-      const parsedEveros = parseEverOS(data.everos ?? '');
-      setEveros(parsedEveros);
-      setEmbeddingModel(data.embeddingModel ?? parsedEveros.multimodalModel ?? DEFAULT_EMBEDDING_MODEL);
+      setEmbeddingModel(data.embeddingModel ?? DEFAULT_EMBEDDING_MODEL);
       setRerankModel(data.rerankModel ?? DEFAULT_RERANK_MODEL);
+
+      const parsedEveros = parseEverOS(data.everos ?? '');
+      setMultimodalProvider(parsedEveros.multimodalProvider ?? 'anthropic');
+      setMultimodalApiKey(parsedEveros.multimodalApiKey ?? '');
+      setMultimodalApiUrl(parsedEveros.multimodalBaseUrl ?? '');
+      setMultimodalModel(parsedEveros.multimodalModel ?? '');
+      const mmEntries = parseHeaders(parsedEveros.multimodalHeaders ?? '');
+      setMultimodalHeaderEntries(mmEntries.length > 0 ? mmEntries : [{ key: '', value: '' }]);
     }
   }, [data]);
 
@@ -568,8 +628,23 @@ export function Settings() {
     });
   };
 
-  const updateEveros = (patch: Partial<EverOSConfig>) => {
-    setEveros((prev) => ({ ...prev, ...patch }));
+  const updateMultimodalHeader = (index: number, field: keyof HeaderEntry, value: string) => {
+    setMultimodalHeaderEntries((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const addMultimodalHeader = () => {
+    setMultimodalHeaderEntries((prev) => [...prev, { key: '', value: '' }]);
+  };
+
+  const removeMultimodalHeader = (index: number) => {
+    setMultimodalHeaderEntries((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length > 0 ? next : [{ key: '', value: '' }];
+    });
   };
 
   const save = async () => {
@@ -619,7 +694,14 @@ export function Settings() {
     const headers = stringifyHeaders(headerEntries);
     if (headers !== '{}') payload.headers = headers;
 
-    const everosCfg = { ...everos };
+    const mmHeaders = stringifyHeaders(multimodalHeaderEntries);
+    const everosCfg: EverOSConfig = {};
+    if (multimodalProvider.trim()) everosCfg.multimodalProvider = multimodalProvider.trim() as 'anthropic' | 'openai';
+    if (multimodalApiKey.trim()) everosCfg.multimodalApiKey = multimodalApiKey.trim();
+    if (multimodalApiUrl.trim()) everosCfg.multimodalBaseUrl = multimodalApiUrl.trim();
+    if (multimodalModel.trim()) everosCfg.multimodalModel = multimodalModel.trim();
+    if (mmHeaders !== '{}') everosCfg.multimodalHeaders = mmHeaders;
+
     const everosJson = stringifyEverOS(everosCfg);
     if (everosJson !== '{}') payload.everos = everosJson;
 
@@ -632,14 +714,21 @@ export function Settings() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<'llm' | 'daemon' | 'local' | 'everos'>('llm');
+  const [activeTab, setActiveTab] = useState<'llm' | 'multimodal' | 'local' | 'daemon'>('llm');
 
   const TABS = [
-    { key: 'llm' as const, label: '大模型 (LLM)' },
+    { key: 'llm' as const, label: '大语言模型' },
+    { key: 'multimodal' as const, label: '多模态模型' },
+    { key: 'local' as const, label: '本地辅助模型' },
     { key: 'daemon' as const, label: '扫描调度' },
-    { key: 'local' as const, label: '本地模型' },
-    { key: 'everos' as const, label: '多模态模型' },
   ];
+
+  const TAB_DESCRIPTIONS: Record<'llm' | 'multimodal' | 'local' | 'daemon', string> = {
+    llm: '配置 Agent 通用 LLM，用于评审、修复建议与归档推理。未填写 API Key 时相关功能不可用。',
+    multimodal: '用于解析图片 / PDF / 音频。未配置时不会向 EverOS 传入多模态覆盖。',
+    local: '配置本地 Embedding / Rerank 模型，为 EverOS 记忆检索提供向量服务。',
+    daemon: '配置后台扫描周期与 LLM 请求速率限制。修改后会自动应用到正在运行的 Daemon。',
+  };
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -685,13 +774,21 @@ export function Settings() {
             localModelStatus={serviceStatus.localModel}
           />
         );
-      case 'everos':
+      case 'multimodal':
         return (
-          <EverosMemorySection
-            everos={everos}
-            updateEveros={updateEveros}
-            modelHint={model}
-            apiUrlHint={apiUrl}
+          <MultimodalConfigSection
+            provider={multimodalProvider}
+            setProvider={setMultimodalProvider}
+            apiKey={multimodalApiKey}
+            setApiKey={setMultimodalApiKey}
+            apiUrl={multimodalApiUrl}
+            setApiUrl={setMultimodalApiUrl}
+            model={multimodalModel}
+            setModel={setMultimodalModel}
+            headerEntries={multimodalHeaderEntries}
+            updateHeader={updateMultimodalHeader}
+            addHeader={addMultimodalHeader}
+            removeHeader={removeMultimodalHeader}
           />
         );
     }
@@ -726,6 +823,8 @@ export function Settings() {
                 </button>
               ))}
             </div>
+
+            <p className="tab-description">{TAB_DESCRIPTIONS[activeTab]}</p>
 
             <div className="settings-tab-content">{renderTabContent()}</div>
 

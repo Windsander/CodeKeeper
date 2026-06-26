@@ -249,7 +249,8 @@ input[type='text'],
 input[type='password'],
 input[type='number'] {
   width: 100%;
-  padding: 10px 12px;
+  height: 40px;
+  padding: 9px 12px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   font-size: 14px;
@@ -322,11 +323,12 @@ select.input:focus {
 
 .dropdown-trigger {
   width: 100%;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
   font-size: 14px;
@@ -1423,6 +1425,13 @@ select.input:focus {
   min-height: 200px;
 }
 
+.tab-description {
+  margin: -4px 0 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
 .header-entry-row {
   align-items: center;
 }
@@ -1436,8 +1445,8 @@ select.input:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   flex-shrink: 0;
 }
