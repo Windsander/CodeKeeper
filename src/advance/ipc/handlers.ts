@@ -15,6 +15,7 @@ import { loadProjectStatus, clearProjectError, recordProjectError } from '../cla
 import type { ScanService } from '../scan/scan-service.js';
 import type { IGitProvider } from '../classic/provider/types.js';
 import type { RoleServiceRegistry } from '../classic/role-service-registry.js';
+import type { LocalModelServiceManager } from '../classic/memory/local-model-service.js';
 import { ReviewerManager } from '../classic/roles/reviewer-manager.js';
 import { MaintainerManager } from '../classic/roles/maintainer-manager.js';
 import type { Role, RoleConfig, GitlabConfig } from '../types.js';
@@ -57,6 +58,8 @@ export interface HandlerContext {
   unwatchProject?: (projectId: string) => void;
   /** EverOS HTTP URL，用于 memory.search 等 handler 直接访问 */
   everosUrl?: string;
+  /** 本地 Embedding/Rerank 模型服务管理器 */
+  localModelManager?: LocalModelServiceManager;
 }
 
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {

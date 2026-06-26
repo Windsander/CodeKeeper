@@ -17,6 +17,8 @@ import { ScanService } from './scan/scan-service.js';
 import { GitLabProvider } from './classic/provider/gitlab-provider.js';
 import { EverOSService } from './classic/memory/everos-service.js';
 import { EverOSMcpServer } from './classic/memory/everos-mcp-server.js';
+import { LocalModelServiceManager } from './classic/memory/local-model-service.js';
+import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL } from './classic/memory/local-model-catalog.js';
 import path from 'node:path';
 import { join } from 'node:path';
 
@@ -59,6 +61,7 @@ export class Daemon {
   private everosMcpServer: EverOSMcpServer | null = null;
   private everosMcpUrl: string | null = null;
   private everosStarting = false;
+  private localModelManager: LocalModelServiceManager;
 
   constructor(private options: DaemonOptions) {
     // 初始化角色服务注册表，注册所有支持的角色
@@ -86,12 +89,18 @@ export class Daemon {
       maxEventsPerScan: this.options.maxEventsPerScan,
     });
 
+    this.localModelManager = new LocalModelServiceManager({
+      embeddingModel: this.options.everos?.embeddingModel,
+      rerankModel: this.options.everos?.rerankModel,
+    });
+
     this.handlerContext = {
       store: options.store,
       registry: options.registry,
       serviceRegistry: this.serviceRegistry,
       dbPath: options.dbPath,
       scanService: this.scanService,
+      localModelManager: this.localModelManager,
       getProvider: (project) => {
         if (project.gitlab) {
           return new GitLabProvider(project.gitlab);
@@ -138,6 +147,12 @@ export class Daemon {
     });
     await this.ipcServer.start();
 
+    // 启动本地 Embedding/Rerank 模型服务
+    await this.localModelManager.start().catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn({ err }, `本地模型服务未启动: ${message}`);
+    });
+
     // 启动 EverOS 本地记忆基础设施，所有角色服务共享同一套实例
     await this.startEverOS();
 
@@ -177,6 +192,7 @@ export class Daemon {
     this.scanService.stop();
     this.scanJob?.stop();
     this.scanJob = null;
+    this.localModelManager.stop();
     await this.everosMcpServer?.stop();
     this.everosService?.stop();
     this.everosMcpServer = null;
@@ -283,18 +299,28 @@ export class Daemon {
       this.options.everos = config.everos;
       persisted.everos = config.everos;
       everosConfigChanged = true;
+      // 如果用户修改了本地模型名，替换 manager 实例
+      this.localModelManager.stop();
+      this.localModelManager = new LocalModelServiceManager({
+        embeddingModel: config.everos?.embeddingModel,
+        rerankModel: config.everos?.rerankModel,
+      });
+      this.handlerContext.localModelManager = this.localModelManager;
     }
 
     if (Object.keys(persisted).length > 0) {
       saveDaemonConfig(persisted);
     }
 
-    // 如果用户启动后才填写记忆相关配置，自动重试启动 EverOS
+    // 如果用户启动后才填写记忆相关配置，先启动本地模型服务，再自动重试启动 EverOS
     if (this.running && everosConfigChanged) {
-      this.startEverOS().catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        logger.warn({ err }, `配置更新后 EverOS 重试启动失败: ${message}`);
-      });
+      this.localModelManager
+        .start()
+        .then(() => this.startEverOS())
+        .catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          logger.warn({ err }, `配置更新后本地模型服务/EverOS 启动失败: ${message}`);
+        });
     }
   }
 
@@ -307,6 +333,23 @@ export class Daemon {
     };
     const cfg = this.options.everos ?? {};
 
+    // Embedding：优先用户显式配置，否则使用本地模型服务，最后 fallback 到 Agent 通用配置
+    const embedKey = cfg.embeddingApiKey ?? agent.apiKey ?? 'local';
+    const embedUrl = cfg.embeddingBaseUrl ?? this.localModelManager.getEmbeddingUrl() ?? agent.apiUrl;
+    const embedModel = cfg.embeddingModel ?? DEFAULT_EMBEDDING_MODEL;
+    if (embedKey) env.EVEROS_EMBEDDING__API_KEY = embedKey;
+    if (embedUrl) env.EVEROS_EMBEDDING__BASE_URL = embedUrl;
+    env.EVEROS_EMBEDDING__MODEL = embedModel;
+
+    // Rerank：同上
+    const rerankKey = cfg.rerankApiKey ?? agent.apiKey ?? 'local';
+    const rerankUrl = cfg.rerankBaseUrl ?? this.localModelManager.getRerankUrl() ?? agent.apiUrl;
+    const rerankModel = cfg.rerankModel ?? DEFAULT_RERANK_MODEL;
+    if (rerankKey) env.EVEROS_RERANK__API_KEY = rerankKey;
+    if (rerankUrl) env.EVEROS_RERANK__BASE_URL = rerankUrl;
+    env.EVEROS_RERANK__MODEL = rerankModel;
+
+    // LLM（保持现有逻辑）
     const llmKey = cfg.llmApiKey ?? agent.apiKey;
     const llmUrl = cfg.llmBaseUrl ?? agent.apiUrl;
     const llmModel = cfg.llmModel ?? agent.model;
@@ -314,26 +357,13 @@ export class Daemon {
     if (llmUrl) env.EVEROS_LLM__BASE_URL = llmUrl;
     if (llmModel) env.EVEROS_LLM__MODEL = llmModel;
 
-    const embedKey = cfg.embeddingApiKey ?? agent.apiKey;
-    const embedUrl = cfg.embeddingBaseUrl ?? agent.apiUrl;
-    const embedModel = cfg.embeddingModel;
-    if (embedKey) env.EVEROS_EMBEDDING__API_KEY = embedKey;
-    if (embedUrl) env.EVEROS_EMBEDDING__BASE_URL = embedUrl;
-    if (embedModel) env.EVEROS_EMBEDDING__MODEL = embedModel;
-
+    // Multimodal（保持现有逻辑）
     const mmKey = cfg.multimodalApiKey ?? agent.apiKey;
     const mmUrl = cfg.multimodalBaseUrl ?? agent.apiUrl;
     const mmModel = cfg.multimodalModel;
     if (mmKey) env.EVEROS_MULTIMODAL__API_KEY = mmKey;
     if (mmUrl) env.EVEROS_MULTIMODAL__BASE_URL = mmUrl;
     if (mmModel) env.EVEROS_MULTIMODAL__MODEL = mmModel;
-
-    const rerankKey = cfg.rerankApiKey ?? agent.apiKey;
-    const rerankUrl = cfg.rerankBaseUrl ?? agent.apiUrl;
-    const rerankModel = cfg.rerankModel;
-    if (rerankKey) env.EVEROS_RERANK__API_KEY = rerankKey;
-    if (rerankUrl) env.EVEROS_RERANK__BASE_URL = rerankUrl;
-    if (rerankModel) env.EVEROS_RERANK__MODEL = rerankModel;
 
     return env;
   }

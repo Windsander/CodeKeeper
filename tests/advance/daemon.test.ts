@@ -24,6 +24,16 @@ vi.mock('../../src/advance/classic/memory/everos-mcp-server.js', () => ({
   },
 }));
 
+vi.mock('../../src/advance/classic/memory/local-model-service.js', () => ({
+  LocalModelServiceManager: class {
+    async start(): Promise<void> {}
+    stop(): void {}
+    getEmbeddingUrl(): string { return 'http://127.0.0.1:7001'; }
+    getRerankUrl(): string { return 'http://127.0.0.1:7002'; }
+    async restart(): Promise<void> {}
+  },
+}));
+
 async function waitCondition(condition: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();
   while (!condition()) {
