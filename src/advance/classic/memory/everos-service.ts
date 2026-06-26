@@ -85,7 +85,7 @@ export class EverOSService {
       child.on('exit', (code) => {
         this.process = null;
         if (!this.everosUrl) {
-          reject(new Error(`EverOS 进程退出 code=${code}, stderr=${stderr}`));
+          reject(new Error(`EverOS 进程退出 code=${code}, stdout=${stdout}, stderr=${stderr}`));
         }
       });
 
