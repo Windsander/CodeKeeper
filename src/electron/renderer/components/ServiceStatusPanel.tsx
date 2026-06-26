@@ -14,15 +14,16 @@ type NodeKey = 'daemon' | 'everos' | 'localModel' | 'embedding' | 'rerank';
 interface StatusDisplay {
   label: string;
   badgeClass: string;
+  dotClass: string;
 }
 
 const STATE_DISPLAY: Record<ModelServiceStatus['state'], StatusDisplay> = {
-  idle: { label: '闲置', badgeClass: 'badge-secondary' },
-  starting: { label: '启动中', badgeClass: 'badge-info' },
-  downloading: { label: '下载中', badgeClass: 'badge-warning' },
-  loading: { label: '加载中', badgeClass: 'badge-info' },
-  running: { label: '运行中', badgeClass: 'badge-success' },
-  error: { label: '错误', badgeClass: 'badge-danger' },
+  idle: { label: '闲置', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' },
+  starting: { label: '启动中', badgeClass: 'badge-info', dotClass: 'status-dot-starting' },
+  downloading: { label: '下载中', badgeClass: 'badge-warning', dotClass: 'status-dot-downloading' },
+  loading: { label: '加载中', badgeClass: 'badge-info', dotClass: 'status-dot-loading' },
+  running: { label: '运行中', badgeClass: 'badge-success', dotClass: 'status-dot-running' },
+  error: { label: '错误', badgeClass: 'badge-danger', dotClass: 'status-dot-error' },
 };
 
 const MAX_ERROR_LENGTH = 200;
@@ -37,19 +38,25 @@ function StatusBadge({ state, isDaemon = false, running }: { state?: string; isD
   let display: StatusDisplay;
   if (isDaemon) {
     display = running
-      ? { label: '运行中', badgeClass: 'badge-success' }
-      : { label: '未运行', badgeClass: 'badge-secondary' };
+      ? { label: '运行中', badgeClass: 'badge-success', dotClass: 'status-dot-running' }
+      : { label: '未运行', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' };
   } else if (state && state in STATE_DISPLAY) {
     display = STATE_DISPLAY[state as ModelServiceStatus['state']];
   } else {
-    display = { label: state ?? '未知', badgeClass: 'badge-secondary' };
+    display = { label: state ?? '未知', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' };
   }
-  return <span className={`badge ${display.badgeClass}`}>{display.label}</span>;
+  return (
+    <span className={`badge ${display.badgeClass} status-badge`}>
+      <span className={`status-dot ${display.dotClass}`} />
+      {display.label}
+    </span>
+  );
 }
 
 interface TreeNodeProps {
   title: string;
   nodeKey: NodeKey;
+  icon: string;
   status?: string;
   isDaemon?: boolean;
   running?: boolean;
@@ -63,6 +70,7 @@ interface TreeNodeProps {
 function TreeNode({
   title,
   nodeKey,
+  icon,
   status,
   isDaemon,
   running,
@@ -77,23 +85,26 @@ function TreeNode({
   const { text: errorText, truncated } = truncateError(error);
 
   return (
-    <div className="service-status-node">
+    <div className="service-status-node" data-testid={`status-node-${nodeKey}`}>
       <div
         className={`service-status-row ${hasError ? 'service-status-row--error' : ''}`}
         onClick={hasError ? () => onToggle(nodeKey) : undefined}
         role={hasError ? 'button' : undefined}
         tabIndex={hasError ? 0 : undefined}
       >
+        <span className="service-status-icon">{icon}</span>
         <span className="service-status-title">{title}</span>
         <StatusBadge state={status} isDaemon={isDaemon} running={running} />
       </div>
       {url && status === 'running' && (
         <div className="service-status-url">{url}</div>
       )}
-      {hasError && isExpanded && (
-        <div className="service-status-error">
-          {errorText}
-          {truncated && <span className="service-status-error-hint">（查看日志获取完整信息）</span>}
+      {hasError && (
+        <div className={`service-status-error ${isExpanded ? 'service-status-error--expanded' : ''}`}>
+          <div className="service-status-error-inner">
+            {errorText}
+            {truncated && <span className="service-status-error-hint">（查看日志获取完整信息）</span>}
+          </div>
         </div>
       )}
       {children && <div className="service-status-children">{children}</div>}
@@ -119,7 +130,10 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
   return (
     <div className="service-status-panel card">
       <div className="service-status-header">
-        <h3 className="service-status-title">服务状态</h3>
+        <div className="service-status-header-title">
+          <span className="service-status-header-icon">◈</span>
+          <h3 className="service-status-title">服务状态</h3>
+        </div>
         {onRefresh && (
           <button
             type="button"
@@ -137,6 +151,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
         <TreeNode
           title="Daemon"
           nodeKey="daemon"
+          icon="🖥️"
           isDaemon
           running={daemon?.daemonRunning ?? false}
           error={daemon?.everos?.state === 'error' ? daemon.everos.error : null}
@@ -146,6 +161,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
           <TreeNode
             title="EverOS"
             nodeKey="everos"
+            icon="🧠"
             status={daemon?.everos?.state}
             url={daemon?.everos?.url}
             error={daemon?.everos?.error ?? null}
@@ -155,6 +171,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
             <TreeNode
               title="本地模型服务"
               nodeKey="localModel"
+              icon="⚙️"
               status={inferLocalModelState(localModel)}
               error={inferLocalModelError(localModel) ?? null}
               expandedKeys={expandedKeys}
@@ -163,6 +180,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
               <TreeNode
                 title="Embedding"
                 nodeKey="embedding"
+                icon="🔤"
                 status={localModel?.embedding.state}
                 url={localModel?.embedding.url}
                 error={localModel?.embedding.error ?? null}
@@ -172,6 +190,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
               <TreeNode
                 title="Rerank"
                 nodeKey="rerank"
+                icon="🔍"
                 status={localModel?.rerank.state}
                 url={localModel?.rerank.url}
                 error={localModel?.rerank.error ?? null}

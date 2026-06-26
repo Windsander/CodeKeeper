@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { ServiceStatusPanel } from '../../../../src/electron/renderer/components/ServiceStatusPanel';
 import type { DaemonStatus, LocalModelStatus } from '../../../../src/electron/shared/service-status';
 
@@ -68,7 +68,7 @@ describe('ServiceStatusPanel', () => {
       rerank: { state: 'idle', url: null, error: null },
     };
 
-    const { container } = render(
+    render(
       <ServiceStatusPanel
         daemon={daemon}
         localModel={localModel}
@@ -77,17 +77,18 @@ describe('ServiceStatusPanel', () => {
       />
     );
 
-    // 初始折叠
-    expect(container.textContent).not.toContain('embedding 启动失败');
-
     // 点击 EverOS 错误行展开
     fireEvent.click(screen.getByText('EverOS'));
-    expect(container.textContent).toContain('a'.repeat(200));
-    expect(container.textContent).toContain('查看日志获取完整信息');
+    const everosNode = screen.getByTestId('status-node-everos');
+    const everosError = within(everosNode).getByText(/a{200}/);
+    expect(everosError).toBeTruthy();
+    expect(everosNode.querySelector('.service-status-error')?.classList.contains('service-status-error--expanded')).toBe(true);
 
     // 点击 Embedding 错误行展开
     fireEvent.click(screen.getByText('Embedding'));
-    expect(container.textContent).toContain('embedding 启动失败');
+    const embeddingNode = screen.getByTestId('status-node-embedding');
+    expect(within(embeddingNode).getByText('embedding 启动失败')).toBeTruthy();
+    expect(embeddingNode.querySelector('.service-status-error')?.classList.contains('service-status-error--expanded')).toBe(true);
   });
 
   it('running 节点显示 URL', () => {
