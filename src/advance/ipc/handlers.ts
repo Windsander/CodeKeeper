@@ -575,6 +575,18 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { success: true };
   },
 
+  // ---------- 本地模型服务 IPC Handler ----------
+
+  'localModel.status': async (ctx) => {
+    const manager = ctx.localModelManager;
+    return {
+      embeddingUrl: manager?.getEmbeddingUrl() ?? null,
+      rerankUrl: manager?.getRerankUrl() ?? null,
+      embeddingHealthy: manager ? manager.getEmbeddingUrl() !== null : false,
+      rerankHealthy: manager ? manager.getRerankUrl() !== null : false,
+    };
+  },
+
   // ---------- 角色 IPC Handler ----------
 
   'project.role.config.get': async (ctx, params) => {
