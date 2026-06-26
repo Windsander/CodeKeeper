@@ -148,7 +148,12 @@ export class Daemon {
     await this.ipcServer.start();
 
     // 启动本地 Embedding/Rerank 模型服务（后台进行，不阻塞 IPC）
-    this.localModelManager
+    // 若用户显式配置了外部 Embedding/Rerank URL，则不需要等待本地模型，可立即启动 EverOS。
+    const hasExplicitModelUrls = Boolean(
+      this.options.everos?.embeddingBaseUrl && this.options.everos?.rerankBaseUrl
+    );
+
+    const localModelReady = this.localModelManager
       .start()
       .then(async () => {
         if (this.running) {
@@ -159,10 +164,21 @@ export class Daemon {
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
         logger.warn({ err }, `本地模型服务未启动: ${message}`);
+        if (!hasExplicitModelUrls) {
+          logger.warn('未配置外部 Embedding/Rerank URL，EverOS 将不会自动启动，Agent 子进程会等待就绪');
+        }
       });
 
-    // 启动 EverOS 本地记忆基础设施，所有角色服务共享同一套实例
-    await this.startEverOS();
+    if (hasExplicitModelUrls) {
+      // 显式 URL 已配置，本地模型失败也不应阻塞 EverOS
+      await this.startEverOS();
+    } else {
+      // 依赖本地模型服务，让 EverOS 在本地模型就绪后再启动。
+      // 这里不 await，避免 IPC 启动被模型下载/加载阻塞。
+      localModelReady.catch(() => {
+        /* 错误已在上方记录 */
+      });
+    }
 
     // IPC server 启动后，把文件监控等非关键初始化推迟到下一个事件循环，
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
