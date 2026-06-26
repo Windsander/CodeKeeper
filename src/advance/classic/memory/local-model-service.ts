@@ -9,6 +9,7 @@ import {
   DEFAULT_EMBEDDING_MODEL,
   DEFAULT_RERANK_MODEL,
 } from './local-model-catalog.js';
+import type { LocalModelStatus, ModelServiceStatus } from '../../../electron/shared/service-status.js';
 
 export interface LocalModelServiceManagerOptions {
   venvDir?: string;
@@ -62,6 +63,14 @@ export class LocalModelServiceManager {
 
   getRerankUrl(): string | null {
     return this.rerankServer?.url ?? null;
+  }
+
+  getStatus(): LocalModelStatus {
+    const idle: ModelServiceStatus = { state: 'idle', url: null, error: null };
+    return {
+      embedding: this.embeddingServer?.getStatus() ?? idle,
+      rerank: this.rerankServer?.getStatus() ?? idle,
+    };
   }
 
   async restart(capability: ModelCapability): Promise<void> {

@@ -19,6 +19,7 @@ import { EverOSService } from './classic/memory/everos-service.js';
 import { EverOSMcpServer } from './classic/memory/everos-mcp-server.js';
 import { LocalModelServiceManager } from './classic/memory/local-model-service.js';
 import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL } from './classic/memory/local-model-catalog.js';
+import type { EverosStatus } from '../electron/shared/service-status.js';
 import path from 'node:path';
 import { join } from 'node:path';
 
@@ -61,6 +62,9 @@ export class Daemon {
   private everosMcpServer: EverOSMcpServer | null = null;
   private everosMcpUrl: string | null = null;
   private everosStarting = false;
+  private everosState: EverosStatus['state'] = 'idle';
+  private everosHttpUrl: string | null = null;
+  private everosError: string | null = null;
   private localModelManager: LocalModelServiceManager;
 
   constructor(private options: DaemonOptions) {
@@ -129,6 +133,8 @@ export class Daemon {
         llmRequestsPerMinute: this.options.llmRequestsPerMinute ?? 10,
         everos: this.options.everos ? JSON.stringify(this.options.everos) : '',
       }),
+      isDaemonRunning: () => this.running,
+      getEverosStatus: () => this.getEverosStatus(),
       watchProject: (project) => this.watchProject(project),
       unwatchProject: (projectId) => this.unwatchProject(projectId),
     };
@@ -222,6 +228,9 @@ export class Daemon {
     this.everosMcpServer = null;
     this.everosService = null;
     this.everosMcpUrl = null;
+    this.everosHttpUrl = null;
+    this.everosState = 'idle';
+    this.everosError = null;
     for (const watchers of this.watchers.values()) {
       for (const watcher of watchers) {
         watcher.stop();
@@ -236,6 +245,14 @@ export class Daemon {
     return this.running;
   }
 
+  getEverosStatus(): EverosStatus {
+    return {
+      state: this.everosState,
+      url: this.everosHttpUrl,
+      error: this.everosError,
+    };
+  }
+
   /**
    * 启动 EverOS + MCP Server。
    *
@@ -244,9 +261,12 @@ export class Daemon {
   private async startEverOS(): Promise<void> {
     if (this.everosStarting) return;
     this.everosStarting = true;
+    this.everosState = 'starting';
+    this.everosError = null;
 
     try {
       if (this.everosService && this.everosMcpUrl) {
+        this.everosState = 'running';
         return;
       }
 
@@ -258,6 +278,7 @@ export class Daemon {
       await this.everosMcpServer?.stop();
       this.everosMcpServer = null;
       this.everosMcpUrl = null;
+      this.everosHttpUrl = null;
 
       const submodulePath = join(__dirname, '..', '..', 'vendor', 'everos');
       this.everosService = new EverOSService({
@@ -266,17 +287,23 @@ export class Daemon {
       });
       const everosUrl = await this.everosService.start();
       this.handlerContext.everosUrl = everosUrl;
+      this.everosHttpUrl = everosUrl;
       this.everosMcpServer = new EverOSMcpServer({ everosUrl });
       this.everosMcpUrl = await this.everosMcpServer.start();
       this.serviceRegistry.setMemoryMcpUrl(this.everosMcpUrl);
+      this.everosState = 'running';
+      this.everosError = null;
       logger.info({ everosUrl, mcpUrl: this.everosMcpUrl }, 'EverOS 记忆基础设施已启动');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn({ err }, `EverOS 未启动: ${message}`);
+      this.everosState = 'error';
+      this.everosError = message;
       // 记忆基础设施失败不应阻塞 daemon 其余功能
       this.everosService = null;
       this.everosMcpServer = null;
       this.everosMcpUrl = null;
+      this.everosHttpUrl = null;
     } finally {
       this.everosStarting = false;
     }

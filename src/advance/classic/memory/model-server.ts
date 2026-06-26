@@ -3,6 +3,7 @@ import type { ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { logger } from '../../../core/logger.js';
+import type { ModelServiceStatus } from '../../../electron/shared/service-status.js';
 
 export type ModelCapability = 'embedding' | 'rerank';
 
@@ -29,11 +30,17 @@ export class ModelServer {
   private started = false;
   private urlValue: string | null = null;
   private exitHandler?: () => void;
+  private statusValue: ModelServiceStatus = { state: 'idle', url: null, error: null };
+  private stderrBuffer = '';
 
   constructor(private readonly options: ModelServerOptions) {}
 
   get url(): string | null {
     return this.urlValue;
+  }
+
+  getStatus(): ModelServiceStatus {
+    return { ...this.statusValue };
   }
 
   isHealthy(): boolean {
@@ -64,6 +71,7 @@ export class ModelServer {
       '/v1',
     ];
 
+    this.setStatus('starting');
     logger.info({ model: this.options.model, port }, `启动 ${this.options.capability} 本地模型服务`);
 
     return new Promise((resolve, reject) => {
@@ -82,7 +90,6 @@ export class ModelServer {
       }
 
       let stdout = '';
-      let stderr = '';
 
       child.stdout?.on('data', (chunk) => {
         stdout += chunk.toString();
@@ -90,10 +97,13 @@ export class ModelServer {
       });
 
       child.stderr?.on('data', (chunk) => {
-        stderr += chunk.toString();
+        const text = chunk.toString();
+        this.stderrBuffer += text;
+        this.inferStateFromStderr(text);
       });
 
       child.on('error', (err) => {
+        this.setError(`启动 ${this.options.capability} 失败: ${err.message}`);
         this.cleanup();
         reject(new Error(`启动 ${this.options.capability} 失败: ${err.message}`));
       });
@@ -101,12 +111,16 @@ export class ModelServer {
       child.on('exit', (code) => {
         this.cleanup();
         if (!this.started) {
-          reject(new Error(`${this.options.capability} 进程退出 code=${code}, stdout=${stdout}, stderr=${stderr}`));
+          const tail = this.stderrBuffer.slice(-500);
+          this.setError(`${this.options.capability} 进程退出 code=${code}，stderr=${tail}`);
+          reject(new Error(`${this.options.capability} 进程退出 code=${code}, stdout=${stdout}, stderr=${this.stderrBuffer}`));
         }
       });
 
       setTimeout(() => {
         if (!this.started) {
+          const tail = this.stderrBuffer.slice(-500);
+          this.setError(`${this.options.capability} 启动超时`);
           this.stop();
           reject(new Error(`${this.options.capability} 启动超时`));
         }
@@ -124,12 +138,26 @@ export class ModelServer {
       }
     }, 5000);
     this.cleanup();
+    this.setStatus('idle');
   }
 
   private cleanup(): void {
     this.process = null;
     this.started = false;
     this.urlValue = null;
+    this.stderrBuffer = '';
+  }
+
+  private setStatus(state: ModelServiceStatus['state']): void {
+    // running / error 状态为终态，避免被后续 stderr 日志覆盖
+    if (this.statusValue.state === 'running' || this.statusValue.state === 'error') {
+      return;
+    }
+    this.statusValue = { state, url: this.urlValue, error: null };
+  }
+
+  private setError(message: string): void {
+    this.statusValue = { state: 'error', url: this.urlValue, error: message };
   }
 
   private tryParseUrl(stdout: string, resolve: (url: string) => void): void {
@@ -138,7 +166,21 @@ export class ModelServer {
     if (match) {
       this.urlValue = match[1];
       this.started = true;
+      this.statusValue = { state: 'running', url: this.urlValue, error: null };
       resolve(this.urlValue);
+    }
+  }
+
+  private inferStateFromStderr(text: string): void {
+    if (this.started) return;
+    // infinity_emb 下载模型时 stderr 会输出 Downloading ... 45% 这类进度
+    if (/downloading/i.test(text) || /\d+%/.test(text)) {
+      this.setStatus('downloading');
+      return;
+    }
+    // 模型加载阶段的关键字
+    if (/warmup|loading|loading checkpoint/i.test(text)) {
+      this.setStatus('loading');
     }
   }
 }

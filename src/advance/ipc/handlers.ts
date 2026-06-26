@@ -24,6 +24,7 @@ import type { IRoleManager } from '../classic/roles/role-manager.js';
 import { readDirectoryTree } from '../utils/file-tree';
 import { everosMemorySearch, type EverOSSearchItem } from '../classic/memory/everos-api.js';
 import type { MemoryEntry, MemorySearchParams, MemoryDeleteParams } from '../../electron/shared/types.js';
+import type { DaemonStatus, EverosStatus, LocalModelStatus } from '../../electron/shared/service-status.js';
 
 export interface HandlerContext {
   store: MetadataStore;
@@ -60,6 +61,10 @@ export interface HandlerContext {
   everosUrl?: string;
   /** 本地 Embedding/Rerank 模型服务管理器 */
   localModelManager?: LocalModelServiceManager;
+  /** 判断 Daemon 是否正在运行 */
+  isDaemonRunning?: () => boolean;
+  /** 获取 EverOS 当前状态 */
+  getEverosStatus?: () => EverosStatus;
 }
 
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
@@ -575,16 +580,24 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { success: true };
   },
 
+  // ---------- Daemon 状态 IPC Handler ----------
+
+  'daemon.status': async (ctx) => {
+    return {
+      daemonRunning: ctx.isDaemonRunning?.() ?? false,
+      everos: ctx.getEverosStatus?.() ?? { state: 'idle', url: null, error: null },
+    } satisfies DaemonStatus;
+  },
+
   // ---------- 本地模型服务 IPC Handler ----------
 
   'localModel.status': async (ctx) => {
-    const manager = ctx.localModelManager;
-    return {
-      embeddingUrl: manager?.getEmbeddingUrl() ?? null,
-      rerankUrl: manager?.getRerankUrl() ?? null,
-      embeddingHealthy: manager ? manager.getEmbeddingUrl() !== null : false,
-      rerankHealthy: manager ? manager.getRerankUrl() !== null : false,
-    };
+    return (
+      ctx.localModelManager?.getStatus() ?? {
+        embedding: { state: 'idle', url: null, error: null },
+        rerank: { state: 'idle', url: null, error: null },
+      }
+    ) satisfies LocalModelStatus;
   },
 
   // ---------- 角色 IPC Handler ----------
