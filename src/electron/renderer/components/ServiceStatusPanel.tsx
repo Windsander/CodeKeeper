@@ -4,9 +4,7 @@ import type { DaemonStatus, LocalModelStatus, ModelServiceStatus } from '../../s
 export interface ServiceStatusPanelProps {
   daemon: DaemonStatus | null;
   localModel: LocalModelStatus | null;
-  loading?: boolean;
   error?: string | null;
-  onRefresh?: () => void;
 }
 
 type NodeKey = 'daemon' | 'everos' | 'localModel' | 'embedding' | 'rerank';
@@ -112,7 +110,7 @@ function TreeNode({
   );
 }
 
-export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefresh }: ServiceStatusPanelProps) {
+export function ServiceStatusPanel({ daemon, localModel, error }: ServiceStatusPanelProps) {
   const [expandedKeys, setExpandedKeys] = useState<Set<NodeKey>>(new Set());
 
   const toggle = (key: NodeKey) => {
@@ -130,21 +128,7 @@ export function ServiceStatusPanel({ daemon, localModel, loading, error, onRefre
   return (
     <div className="service-status-panel card">
       <div className="service-status-header">
-        <div className="service-status-header-title">
-          <span className="service-status-header-icon">◈</span>
-          <h3 className="service-status-title">服务状态</h3>
-        </div>
-        {onRefresh && (
-          <button
-            type="button"
-            className="service-status-refresh"
-            onClick={onRefresh}
-            disabled={loading}
-            title="刷新状态"
-          >
-            {loading ? '刷新中...' : '刷新'}
-          </button>
-        )}
+        <h3 className="service-status-title">服务状态</h3>
       </div>
       {error && <div className="service-status-top-error">{error}</div>}
       <div className="service-status-tree">

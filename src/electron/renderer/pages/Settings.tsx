@@ -741,9 +741,7 @@ export function Settings() {
           <ServiceStatusPanel
             daemon={serviceStatus.daemon}
             localModel={serviceStatus.localModel}
-            loading={serviceStatus.loading}
             error={serviceStatus.error}
-            onRefresh={serviceStatus.refresh}
           />
         </div>
       </div>
