@@ -230,3 +230,97 @@ export async function everosMemorySearch(
   items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   return { items };
 }
+
+/**
+ * EverOS /api/v1/memory/get 请求参数
+ */
+export interface EverOSMemoryGetParams {
+  everosUrl: string;
+  appId: string;
+  projectId: string;
+  ownerKind: 'user' | 'agent';
+  ownerId: string;
+  memoryType: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
+  page?: number;
+  pageSize?: number;
+}
+
+/**
+ * EverOS /api/v1/memory/get 响应抽象
+ */
+export interface EverOSMemoryGetResult {
+  episodes: Array<Record<string, unknown>>;
+  profiles: Array<Record<string, unknown>>;
+  agent_cases: Array<Record<string, unknown>>;
+  agent_skills: Array<Record<string, unknown>>;
+  total_count: number;
+}
+
+/**
+ * 从 EverOS 拉取指定 owner 与类型的记忆条目
+ */
+export async function everosMemoryGet(
+  params: EverOSMemoryGetParams
+): Promise<EverOSMemoryGetResult> {
+  const body: Record<string, string | number> = {
+    app_id: sanitizeEverOSId(params.appId),
+    project_id: sanitizeEverOSId(params.projectId),
+    memory_type: params.memoryType,
+    page: params.page ?? 1,
+    page_size: params.pageSize ?? 100,
+  };
+
+  if (params.ownerKind === 'user') {
+    body.user_id = sanitizeEverOSId(params.ownerId);
+  } else {
+    body.agent_id = sanitizeEverOSId(params.ownerId);
+  }
+
+  const res = await fetch(`${params.everosUrl}/api/v1/memory/get`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(`EverOS memory/get 失败: ${res.status} ${await res.text()}`);
+  }
+
+  const json = (await res.json()) as { data?: EverOSMemoryGetResult };
+  return {
+    episodes: json.data?.episodes ?? [],
+    profiles: json.data?.profiles ?? [],
+    agent_cases: json.data?.agent_cases ?? [],
+    agent_skills: json.data?.agent_skills ?? [],
+    total_count: json.data?.total_count ?? 0,
+  };
+}
+
+/**
+ * 从 /get 结果中收集出现过的 user_id 与 agent_id
+ */
+export function extractOwnersFromGetResult(result: EverOSMemoryGetResult): {
+  users: Set<string>;
+  agents: Set<string>;
+} {
+  const users = new Set<string>();
+  const agents = new Set<string>();
+
+  for (const item of result.episodes ?? []) {
+    if (typeof item.user_id === 'string') users.add(item.user_id);
+    for (const sid of (item.sender_ids as unknown[]) ?? []) {
+      users.add(String(sid));
+    }
+  }
+  for (const item of result.profiles ?? []) {
+    if (typeof item.user_id === 'string') users.add(item.user_id);
+  }
+  for (const item of result.agent_cases ?? []) {
+    if (typeof item.agent_id === 'string') agents.add(item.agent_id);
+  }
+  for (const item of result.agent_skills ?? []) {
+    if (typeof item.agent_id === 'string') agents.add(item.agent_id);
+  }
+
+  return { users, agents };
+}
