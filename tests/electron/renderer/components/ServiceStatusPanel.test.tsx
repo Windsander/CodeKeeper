@@ -1,7 +1,18 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { ServiceStatusPanel } from '../../../../src/electron/renderer/components/ServiceStatusPanel';
+import { useModelLogs } from '../../../../src/electron/renderer/hooks/useModelLogs';
 import type { DaemonStatus, LocalModelStatus, RemoteModelStatus } from '../../../../src/electron/shared/service-status';
+
+vi.mock('../../../../src/electron/renderer/hooks/useModelLogs', () => ({
+  useModelLogs: vi.fn().mockReturnValue({
+    embedding: [],
+    rerank: [],
+    loading: false,
+    error: null,
+    refresh: vi.fn(),
+  }),
+}));
 
 describe('ServiceStatusPanel', () => {
   const defaultRemoteModel: RemoteModelStatus = {
@@ -114,21 +125,31 @@ describe('ServiceStatusPanel', () => {
     expect(screen.getByText('http://127.0.0.1:12345')).toBeTruthy();
   });
 
-  it('渲染远端模型服务节点与模型简称', () => {
-    const remoteModel: RemoteModelStatus = {
-      llm: { state: 'running', modelLabel: 'Opus-4.8', fullModel: 'claude-opus-4-8', baseUrl: 'https://api.anthropic.com/v1', error: null, lastCheckedAt: Date.now() },
-      multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: Date.now() },
-    };
+  it('切换到日志选项卡显示 Embedding/Rerank 日志', () => {
+    vi.mocked(useModelLogs).mockReturnValue({
+      embedding: ['[stdout] embedding log'],
+      rerank: ['[stderr] rerank log'],
+      loading: false,
+      error: null,
+      refresh: vi.fn(),
+    });
 
     render(
       <ServiceStatusPanel
         daemon={{ daemonRunning: true, everos: { state: 'running', url: null, error: null } }}
-        localModel={{ embedding: { state: 'running', url: null, error: null, progress: null }, rerank: { state: 'running', url: null, error: null, progress: null } }}
-        remoteModel={remoteModel}
+        localModel={{
+          embedding: { state: 'running', url: null, error: null, progress: null },
+          rerank: { state: 'running', url: null, error: null, progress: null },
+        }}
+        remoteModel={defaultRemoteModel}
       />
     );
-    expect(screen.getByText('远端模型服务')).toBeTruthy();
-    expect(screen.getByText('Opus-4.8')).toBeTruthy();
-    expect(screen.getByText('未配置')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('日志'));
+
+    expect(screen.getByText('Embedding')).toBeTruthy();
+    expect(screen.getByText('Rerank')).toBeTruthy();
+    expect(screen.getByText('[stdout] embedding log')).toBeTruthy();
+    expect(screen.getByText('[stderr] rerank log')).toBeTruthy();
   });
 });

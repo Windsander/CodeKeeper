@@ -1381,6 +1381,70 @@ select.input:focus {
   opacity: 0.8;
 }
 
+.service-status-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.service-status-tabs .tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.service-status-tabs .tab-btn.active {
+  color: var(--text-primary);
+  border-bottom: 2px solid var(--primary);
+}
+
+.service-status-body {
+  padding-top: 12px;
+}
+
+.model-log-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 400px;
+}
+
+.model-log-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+}
+
+.model-log-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.model-log-pre {
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 180px;
+}
+
+.model-log-empty,
+.model-log-error {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
 /* ---------- 设置页双栏布局 ---------- */
 
 .settings-layout {

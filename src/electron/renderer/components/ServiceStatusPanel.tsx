@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { DaemonStatus, LocalModelStatus, ModelServiceStatus, RemoteModelStatus } from '../../shared/service-status';
 import { CircularProgress } from './CircularProgress';
+import { useModelLogs } from '../hooks/useModelLogs';
 
 export interface ServiceStatusPanelProps {
   daemon: DaemonStatus | null;
@@ -118,8 +119,51 @@ function TreeNode({
   );
 }
 
+function ModelLogViewer() {
+  const { embedding, rerank, loading, error } = useModelLogs();
+  const embeddingRef = useRef<HTMLPreElement>(null);
+  const rerankRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    if (embeddingRef.current) {
+      embeddingRef.current.scrollTop = embeddingRef.current.scrollHeight;
+    }
+  }, [embedding]);
+
+  useEffect(() => {
+    if (rerankRef.current) {
+      rerankRef.current.scrollTop = rerankRef.current.scrollHeight;
+    }
+  }, [rerank]);
+
+  if (loading && embedding.length === 0 && rerank.length === 0) {
+    return <div className="model-log-empty">加载日志中...</div>;
+  }
+  if (error) {
+    return <div className="model-log-error">读取日志失败: {error}</div>;
+  }
+
+  return (
+    <div className="model-log-viewer">
+      <div className="model-log-section">
+        <h4 className="model-log-title">Embedding</h4>
+        <pre ref={embeddingRef} className="model-log-pre">
+          {embedding.join('\n') || '暂无日志'}
+        </pre>
+      </div>
+      <div className="model-log-section">
+        <h4 className="model-log-title">Rerank</h4>
+        <pre ref={rerankRef} className="model-log-pre">
+          {rerank.join('\n') || '暂无日志'}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
 export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceStatusPanelProps) {
   const [expandedKeys, setExpandedKeys] = useState<Set<NodeKey>>(new Set());
+  const [activeTab, setActiveTab] = useState<'status' | 'logs'>('status');
 
   const toggle = (key: NodeKey) => {
     setExpandedKeys((prev) => {
@@ -137,91 +181,113 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
     <div className="service-status-panel card">
       <div className="service-status-header">
         <h3 className="service-status-title">服务状态</h3>
-      </div>
-      <div className="service-status-tree">
-        <TreeNode
-          title="Daemon"
-          nodeKey="daemon"
-          icon="🖥️"
-          isDaemon
-          running={daemon?.daemonRunning ?? false}
-          error={daemon?.everos?.state === 'error' ? daemon.everos.error : null}
-          expandedKeys={expandedKeys}
-          onToggle={toggle}
-        >
-          <TreeNode
-            title="记忆服务（EverOS）"
-            nodeKey="everos"
-            icon="🧠"
-            status={daemon?.everos?.state}
-            url={daemon?.everos?.url}
-            error={daemon?.everos?.error ?? null}
-            expandedKeys={expandedKeys}
-            onToggle={toggle}
-          />
-          <TreeNode
-            title="本地模型服务"
-            nodeKey="localModel"
-            icon="⚙️"
-            status={inferLocalModelState(localModel)}
-            error={inferLocalModelError(localModel) ?? null}
-            expandedKeys={expandedKeys}
-            onToggle={toggle}
+        <div className="service-status-tabs">
+          <button
+            type="button"
+            className={`tab-btn${activeTab === 'status' ? ' active' : ''}`}
+            onClick={() => setActiveTab('status')}
           >
+            状态
+          </button>
+          <button
+            type="button"
+            className={`tab-btn${activeTab === 'logs' ? ' active' : ''}`}
+            onClick={() => setActiveTab('logs')}
+          >
+            日志
+          </button>
+        </div>
+      </div>
+      <div className="service-status-body">
+        {activeTab === 'status' ? (
+          <div className="service-status-tree">
             <TreeNode
-              title="Embedding"
-              nodeKey="embedding"
-              icon="🔤"
-              status={localModel?.embedding.state}
-              progress={localModel?.embedding.progress}
-              url={localModel?.embedding.url}
-              error={localModel?.embedding.error ?? null}
-              expandedKeys={expandedKeys}
-              onToggle={toggle}
-            />
-            <TreeNode
-              title="Rerank"
-              nodeKey="rerank"
-              icon="🔍"
-              status={localModel?.rerank.state}
-              progress={localModel?.rerank.progress}
-              url={localModel?.rerank.url}
-              error={localModel?.rerank.error ?? null}
-              expandedKeys={expandedKeys}
-              onToggle={toggle}
-            />
-          </TreeNode>
-          {remoteModel && (
-            <TreeNode
-              title="远端模型服务"
-              nodeKey="remoteModel"
-              icon="🌐"
-              status={inferRemoteModelState(remoteModel)}
-              error={inferRemoteModelError(remoteModel) ?? null}
+              title="Daemon"
+              nodeKey="daemon"
+              icon="🖥️"
+              isDaemon
+              running={daemon?.daemonRunning ?? false}
+              error={daemon?.everos?.state === 'error' ? daemon.everos.error : null}
               expandedKeys={expandedKeys}
               onToggle={toggle}
             >
               <TreeNode
-                title={remoteModel.llm.modelLabel}
-                nodeKey="remoteModel-llm"
-                icon="💬"
-                status={remoteModel.llm.state}
-                error={remoteModel.llm.error ?? null}
+                title="记忆服务（EverOS）"
+                nodeKey="everos"
+                icon="🧠"
+                status={daemon?.everos?.state}
+                url={daemon?.everos?.url}
+                error={daemon?.everos?.error ?? null}
                 expandedKeys={expandedKeys}
                 onToggle={toggle}
               />
               <TreeNode
-                title={remoteModel.multimodal.modelLabel}
-                nodeKey="remoteModel-multimodal"
-                icon="🖼️"
-                status={remoteModel.multimodal.state}
-                error={remoteModel.multimodal.error ?? null}
+                title="本地模型服务"
+                nodeKey="localModel"
+                icon="⚙️"
+                status={inferLocalModelState(localModel)}
+                error={inferLocalModelError(localModel) ?? null}
                 expandedKeys={expandedKeys}
                 onToggle={toggle}
-              />
+              >
+                <TreeNode
+                  title="Embedding"
+                  nodeKey="embedding"
+                  icon="🔤"
+                  status={localModel?.embedding.state}
+                  progress={localModel?.embedding.progress}
+                  url={localModel?.embedding.url}
+                  error={localModel?.embedding.error ?? null}
+                  expandedKeys={expandedKeys}
+                  onToggle={toggle}
+                />
+                <TreeNode
+                  title="Rerank"
+                  nodeKey="rerank"
+                  icon="🔍"
+                  status={localModel?.rerank.state}
+                  progress={localModel?.rerank.progress}
+                  url={localModel?.rerank.url}
+                  error={localModel?.rerank.error ?? null}
+                  expandedKeys={expandedKeys}
+                  onToggle={toggle}
+                />
+              </TreeNode>
+              {remoteModel && (
+                <TreeNode
+                  title="远端模型服务"
+                  nodeKey="remoteModel"
+                  icon="🌐"
+                  status={inferRemoteModelState(remoteModel)}
+                  error={inferRemoteModelError(remoteModel) ?? null}
+                  expandedKeys={expandedKeys}
+                  onToggle={toggle}
+                >
+                  <TreeNode
+                    title={remoteModel.llm.modelLabel}
+                    nodeKey="remoteModel-llm"
+                    icon="💬"
+                    status={remoteModel.llm.state}
+                    error={remoteModel.llm.error ?? null}
+                    expandedKeys={expandedKeys}
+                    onToggle={toggle}
+                  />
+                  <TreeNode
+                    title={remoteModel.multimodal.modelLabel}
+                    nodeKey="remoteModel-multimodal"
+                    icon="🖼️"
+                    status={remoteModel.multimodal.state}
+                    error={remoteModel.multimodal.error ?? null}
+                    expandedKeys={expandedKeys}
+                    onToggle={toggle}
+                  />
+                </TreeNode>
+              )}
             </TreeNode>
-          )}
-        </TreeNode>
+          </div>
+        ) : (
+          <ModelLogViewer />
+        )}
       </div>
     </div>
   );
