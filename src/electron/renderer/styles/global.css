@@ -1119,6 +1119,38 @@ select.input:focus {
   margin: 0;
 }
 
+/* 日志页双栏布局：左侧全部日志，右侧本地模型日志 */
+.logs-page-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.logs-card--main {
+  flex: 2;
+  min-width: 0;
+}
+
+.logs-card--local {
+  flex: 1;
+  min-width: 320px;
+  max-width: 480px;
+}
+
+.logs-card-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.logs-card--local .model-log-viewer {
+  max-height: none;
+}
+
+.logs-card--local .model-log-pre {
+  max-height: 50vh;
+}
+
 /* 记忆浏览器 */
 .memory-browser {
   padding: 20px;
@@ -1379,25 +1411,6 @@ select.input:focus {
 .service-status-error-hint {
   margin-left: 6px;
   opacity: 0.8;
-}
-
-.service-status-tabs {
-  display: flex;
-  gap: 8px;
-}
-
-.service-status-tabs .tab-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 4px 8px;
-  font-size: 13px;
-}
-
-.service-status-tabs .tab-btn.active {
-  color: var(--text-primary);
-  border-bottom: 2px solid var(--primary);
 }
 
 .service-status-body {

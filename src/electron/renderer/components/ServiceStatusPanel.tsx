@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import type { DaemonStatus, LocalModelStatus, ModelServiceStatus, RemoteModelStatus } from '../../shared/service-status';
 import { CircularProgress } from './CircularProgress';
-import { useModelLogs } from '../hooks/useModelLogs';
 
 export interface ServiceStatusPanelProps {
   daemon: DaemonStatus | null;
@@ -119,51 +118,8 @@ function TreeNode({
   );
 }
 
-function ModelLogViewer() {
-  const { embedding, rerank, loading, error } = useModelLogs();
-  const embeddingRef = useRef<HTMLPreElement>(null);
-  const rerankRef = useRef<HTMLPreElement>(null);
-
-  useEffect(() => {
-    if (embeddingRef.current) {
-      embeddingRef.current.scrollTop = embeddingRef.current.scrollHeight;
-    }
-  }, [embedding]);
-
-  useEffect(() => {
-    if (rerankRef.current) {
-      rerankRef.current.scrollTop = rerankRef.current.scrollHeight;
-    }
-  }, [rerank]);
-
-  if (loading && embedding.length === 0 && rerank.length === 0) {
-    return <div className="model-log-empty">加载日志中...</div>;
-  }
-  if (error) {
-    return <div className="model-log-error">读取日志失败: {error}</div>;
-  }
-
-  return (
-    <div className="model-log-viewer">
-      <div className="model-log-section">
-        <h4 className="model-log-title">Embedding</h4>
-        <pre ref={embeddingRef} className="model-log-pre">
-          {embedding.join('\n') || '暂无日志'}
-        </pre>
-      </div>
-      <div className="model-log-section">
-        <h4 className="model-log-title">Rerank</h4>
-        <pre ref={rerankRef} className="model-log-pre">
-          {rerank.join('\n') || '暂无日志'}
-        </pre>
-      </div>
-    </div>
-  );
-}
-
 export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceStatusPanelProps) {
   const [expandedKeys, setExpandedKeys] = useState<Set<NodeKey>>(new Set());
-  const [activeTab, setActiveTab] = useState<'status' | 'logs'>('status');
 
   const toggle = (key: NodeKey) => {
     setExpandedKeys((prev) => {
@@ -181,26 +137,9 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
     <div className="service-status-panel card">
       <div className="service-status-header">
         <h3 className="service-status-title">服务状态</h3>
-        <div className="service-status-tabs">
-          <button
-            type="button"
-            className={`tab-btn${activeTab === 'status' ? ' active' : ''}`}
-            onClick={() => setActiveTab('status')}
-          >
-            状态
-          </button>
-          <button
-            type="button"
-            className={`tab-btn${activeTab === 'logs' ? ' active' : ''}`}
-            onClick={() => setActiveTab('logs')}
-          >
-            日志
-          </button>
-        </div>
       </div>
       <div className="service-status-body">
-        {activeTab === 'status' ? (
-          <div className="service-status-tree">
+        <div className="service-status-tree">
             <TreeNode
               title="Daemon"
               nodeKey="daemon"
@@ -285,9 +224,6 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
               )}
             </TreeNode>
           </div>
-        ) : (
-          <ModelLogViewer />
-        )}
       </div>
     </div>
   );

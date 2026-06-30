@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
 import { LogViewer } from '../components/LogViewer';
+import { LocalModelLogViewer } from '../components/LocalModelLogViewer';
 
 type LogTab = 'all' | 'reviewer' | 'maintainer';
 
@@ -101,38 +102,49 @@ export function Logs() {
         <button className="btn btn-primary" onClick={() => refresh()}>刷新</button>
       </div>
 
-      <div className="card logs-card">
-        <div className="logs-card-header">
-          <div className="logs-tabs">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                className={`logs-tab-btn${tab === t.key ? ' active' : ''}`}
-                onClick={() => setTab(t.key)}
-              >
-                {t.label}
-              </button>
-            ))}
+      <div className="logs-page-layout">
+        <div className="card logs-card logs-card--main">
+          <div className="logs-card-header">
+            <div className="logs-tabs">
+              {TABS.map((t) => (
+                <button
+                  key={t.key}
+                  className={`logs-tab-btn${tab === t.key ? ' active' : ''}`}
+                  onClick={() => setTab(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="logs-lines-control">
+              <label htmlFor="logs-lines">显示行数</label>
+              <input
+                id="logs-lines"
+                type="number"
+                className="input"
+                value={lines}
+                onChange={(e) => setLines(Number(e.target.value))}
+              />
+            </div>
           </div>
 
-          <div className="logs-lines-control">
-            <label htmlFor="logs-lines">显示行数</label>
-            <input
-              id="logs-lines"
-              type="number"
-              className="input"
-              value={lines}
-              onChange={(e) => setLines(Number(e.target.value))}
-            />
+          <div className="logs-card-body">
+            {loading && !data ? (
+              <div className="loading">加载中...</div>
+            ) : (
+              <LogViewer lines={formattedLines} />
+            )}
           </div>
         </div>
 
-        <div className="logs-card-body">
-          {loading && !data ? (
-            <div className="loading">加载中...</div>
-          ) : (
-            <LogViewer lines={formattedLines} />
-          )}
+        <div className="card logs-card logs-card--local">
+          <div className="logs-card-header">
+            <h3 className="logs-card-title">本地模型日志</h3>
+          </div>
+          <div className="logs-card-body">
+            <LocalModelLogViewer />
+          </div>
         </div>
       </div>
     </div>
