@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync, readFileSync, statSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { logger } from '../../../core/logger.js';
-import { getAppStorageDir } from '../../../core/platform.js';
+import { getAppStorageDir, getLogDir } from '../../../core/platform.js';
 import { ModelServer, type ModelCapability } from './model-server.js';
 import {
   DEFAULT_EMBEDDING_MODEL,
@@ -105,6 +105,40 @@ export class LocalModelServiceManager {
       embedding: this.embeddingStatus,
       rerank: this.rerankStatus,
     };
+  }
+
+  getModelLogs(capability: ModelCapability, maxLines = 200): string[] {
+    const server = capability === 'embedding' ? this.embeddingServer : this.rerankServer;
+    if (server?.getLogs) {
+      return server.getLogs(maxLines);
+    }
+    return this.readLatestLogFile(capability, maxLines);
+  }
+
+  private readLatestLogFile(capability: ModelCapability, maxLines: number): string[] {
+    const logDir = getLogDir();
+    if (!existsSync(logDir)) return [];
+
+    const prefix = `model-${capability}-`;
+    const files = readdirSync(logDir)
+      .filter((name) => name.startsWith(prefix) && name.endsWith('.log'))
+      .map((name) => {
+        const fullPath = join(logDir, name);
+        return { name, path: fullPath, mtime: statSync(fullPath).mtime };
+      })
+      .sort((a, b) => b.mtime.getTime() - a.mtime.getTime());
+
+    if (files.length === 0) return [];
+
+    try {
+      const all = readFileSync(files[0].path, 'utf-8')
+        .split('\n')
+        .filter((line) => line.trim() !== '');
+      return all.slice(-maxLines);
+    } catch (err) {
+      logger.warn({ err, capability }, '读取模型日志文件失败');
+      return [];
+    }
   }
 
   async restart(capability: ModelCapability): Promise<void> {

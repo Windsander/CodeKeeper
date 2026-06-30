@@ -21,17 +21,22 @@ vi.mock('../../../../src/advance/classic/memory/model-server.js', () => ({
     isHealthy: vi.fn().mockReturnValue(true),
     url: `http://127.0.0.1:8000/${capability}`,
     onExit: vi.fn(),
+    getLogs: vi.fn().mockReturnValue([`${capability} log line`]),
   })),
   getFreePort: vi.fn().mockResolvedValue(8000),
 }));
 
 describe('LocalModelServiceManager', () => {
+  const originalPlatform = process.platform;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
   });
 
   it('start 后聚合 embedding/rerank 运行状态', async () => {
@@ -64,6 +69,7 @@ describe('LocalModelServiceManager', () => {
       isHealthy: vi.fn().mockReturnValue(false),
       url: null,
       onExit: vi.fn(),
+      getLogs: vi.fn().mockReturnValue([]),
     }));
 
     const manager = new LocalModelServiceManager({ venvDir: '/venv' });
@@ -71,5 +77,13 @@ describe('LocalModelServiceManager', () => {
 
     const status = manager.getStatus();
     expect(status.embedding.state === 'error' || status.rerank.state === 'error').toBe(true);
+  });
+
+  it('getModelLogs 代理到对应 ModelServer', async () => {
+    const manager = new LocalModelServiceManager({ venvDir: '/venv' });
+    await manager.start();
+    const logs = manager.getModelLogs('embedding');
+    expect(logs).toContain('embedding log line');
+    manager.stop();
   });
 });
