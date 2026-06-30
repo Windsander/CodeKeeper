@@ -115,11 +115,56 @@ describe('RemoteModelChecker', () => {
     expect(url).toBe('https://api.anthropic.com/v1/models');
   });
 
-  it('非 2xx 响应返回 body 摘要', async () => {
+  it('apiUrl 包含 /v1/chat/completions 等已知后缀时自动清理', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ id: 'gpt-4o-mini' }] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await checker.checkLlm({
+      provider: 'openai',
+      apiKey: 'test-key',
+      apiUrl: 'https://api.example.com/v1/chat/completions',
+      model: 'gpt-4o-mini',
+    });
+
+    expect(result.baseUrl).toBe('https://api.example.com/v1');
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('https://api.example.com/v1/models');
+  });
+
+  it('/v1/models 返回 400/404/405 时降级探测基地址，可达则视为 running', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'HEAD' || init?.method === 'GET') {
+        return { ok: true, status: 200 };
+      }
+      return {
+        ok: false,
+        status: 400,
+        text: async () => '{"error":{"code":"400","message":"Invalid request","param":"404 NOT_FOUND"}}',
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await checker.checkLlm({
+      provider: 'openai',
+      apiKey: 'test-key',
+      apiUrl: 'https://api.example.com/v1',
+      model: 'gpt-4o-mini',
+    });
+
+    expect(result.state).toBe('running');
+    expect(result.error).toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith('https://api.example.com/v1/models', expect.any(Object));
+    expect(fetchMock).toHaveBeenCalledWith('https://api.example.com/v1', expect.objectContaining({ method: 'HEAD' }));
+  });
+
+  it('服务端 5xx 返回 error', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
-      status: 400,
-      text: async () => '{"error":"invalid request"}',
+      status: 500,
+      text: async () => 'internal server error',
     }));
     const result = await checker.checkLlm({
       provider: 'anthropic',
@@ -127,8 +172,7 @@ describe('RemoteModelChecker', () => {
       model: 'claude-opus-4-8',
     });
     expect(result.state).toBe('error');
-    expect(result.error).toContain('HTTP 400');
-    expect(result.error).toContain('invalid request');
+    expect(result.error).toContain('HTTP 500');
   });
 
   it('多模态配置解析自定义 Headers', async () => {

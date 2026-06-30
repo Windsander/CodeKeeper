@@ -31,14 +31,30 @@ function getHeaders(config: LlmConfig): Record<string, string> {
   return { ...auth, ...(config.headers ?? {}) };
 }
 
+const KNOWN_ENDPOINT_SUFFIXES = ['/models', '/chat/completions'];
+
+function cleanBaseUrl(url: string): string {
+  let cleaned = url.trim();
+  if (cleaned.endsWith('/')) {
+    cleaned = cleaned.slice(0, -1);
+  }
+  for (const suffix of KNOWN_ENDPOINT_SUFFIXES) {
+    if (cleaned.toLowerCase().endsWith(suffix.toLowerCase())) {
+      cleaned = cleaned.slice(0, -suffix.length);
+      break;
+    }
+  }
+  if (cleaned.endsWith('/')) {
+    cleaned = cleaned.slice(0, -1);
+  }
+  return cleaned;
+}
+
 function normalizeBaseUrl(provider: 'anthropic' | 'openai', apiUrl?: string): string {
   if (!apiUrl) {
     return DEFAULT_BASE_URL[provider];
   }
-  let url = apiUrl.trim();
-  if (url.endsWith('/')) {
-    url = url.slice(0, -1);
-  }
+  const url = cleanBaseUrl(apiUrl);
   if (url.endsWith('/v1')) {
     return url;
   }
@@ -51,6 +67,21 @@ function normalizeBaseUrl(provider: 'anthropic' | 'openai', apiUrl?: string): st
     // 非法 URL 保持原样，让后续请求报错
   }
   return url;
+}
+
+async function probeBaseUrl(baseUrl: string, headers: Record<string, string>): Promise<void> {
+  // 先尝试 HEAD，不下载响应体；若服务端不支持 HEAD（405），再降级为 GET
+  let res = await fetch(baseUrl, { method: 'HEAD', headers });
+  if (res.status === 405) {
+    res = await fetch(baseUrl, { method: 'GET', headers });
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(`认证失败 HTTP ${res.status}`);
+  }
+  if (res.status >= 500) {
+    throw new Error(`服务端错误 HTTP ${res.status}`);
+  }
+  // 其他 2xx/3xx/4xx（除 401/403/5xx 外）均视为基地址可达
 }
 
 async function listModels(baseUrl: string, headers: Record<string, string>): Promise<string[]> {
@@ -73,7 +104,8 @@ async function listModels(baseUrl: string, headers: Record<string, string>): Pro
 /**
  * 远端模型连通性检测器。
  *
- * 仅调用各厂商的 `GET /v1/models` 接口列出可用模型，不消耗 token。
+ * 优先调用 `GET /v1/models` 验证模型是否存在；若该接口不可用，则降级为
+ * HEAD/GET 基地址探测，整个过程不消耗 token。
  */
 export class RemoteModelChecker {
   async checkLlm(config: LlmConfig): Promise<RemoteModelItemStatus> {
@@ -137,6 +169,32 @@ export class RemoteModelChecker {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const statusMatch = message.match(/HTTP (\d{3})/);
+      const status = statusMatch ? parseInt(statusMatch[1], 10) : 0;
+      // /v1/models 不存在时（400/404/405），降级为探测基地址是否可达，不消耗 token
+      if (status === 400 || status === 404 || status === 405) {
+        try {
+          await probeBaseUrl(baseUrl, getHeaders(params));
+          return {
+            state: 'running',
+            modelLabel: formatModelShortName(fullModel),
+            fullModel,
+            baseUrl,
+            error: null,
+            lastCheckedAt: Date.now(),
+          };
+        } catch (probeErr) {
+          const probeMessage = probeErr instanceof Error ? probeErr.message : String(probeErr);
+          return {
+            state: 'error',
+            modelLabel: formatModelShortName(fullModel),
+            fullModel,
+            baseUrl,
+            error: probeMessage,
+            lastCheckedAt: Date.now(),
+          };
+        }
+      }
       return {
         state: 'error',
         modelLabel: formatModelShortName(fullModel),
