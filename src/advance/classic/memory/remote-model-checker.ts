@@ -159,12 +159,16 @@ export class RemoteModelChecker {
     try {
       const ids = await listModels(baseUrl, getHeaders(params));
       const found = ids.includes(fullModel);
+      if (!found) {
+        logger.debug({ baseUrl, fullModel, returnedIds: ids.slice(0, 20) }, '远端模型 /v1/models 返回列表未包含配置模型，但服务可达');
+      }
+      // 只要 /v1/models 能通即认为服务可用；模型名可能是别名或自定义，不强求在列表中精确匹配
       return {
-        state: found ? 'running' : 'error',
+        state: 'running',
         modelLabel: formatModelShortName(fullModel),
         fullModel,
         baseUrl,
-        error: found ? null : '服务端未返回配置的模型',
+        error: null,
         lastCheckedAt: Date.now(),
       };
     } catch (err) {

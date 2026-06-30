@@ -31,7 +31,7 @@ describe('RemoteModelChecker', () => {
     expect(result.baseUrl).toBe('https://api.anthropic.com/v1');
   });
 
-  it('模型不在列表中返回 error', async () => {
+  it('模型不在列表中也返回 running（模型名可能是别名）', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ data: [{ id: 'other-model' }] }),
@@ -41,8 +41,8 @@ describe('RemoteModelChecker', () => {
       apiKey: 'test-key',
       model: 'claude-opus-4-8',
     });
-    expect(result.state).toBe('error');
-    expect(result.error).toContain('未返回');
+    expect(result.state).toBe('running');
+    expect(result.error).toBeNull();
   });
 
   it('网络错误返回 error', async () => {
