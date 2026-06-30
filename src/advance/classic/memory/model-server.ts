@@ -60,10 +60,11 @@ export class ModelServer {
     }
 
     const port = await getFreePort();
-    const python = join(this.options.venvDir, process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python');
+    const cli = join(
+      this.options.venvDir,
+      process.platform === 'win32' ? 'Scripts\\infinity_emb.exe' : 'bin/infinity_emb'
+    );
     const args = [
-      '-m',
-      'infinity_emb',
       'v2',
       '--model-id',
       this.options.model,
@@ -82,7 +83,7 @@ export class ModelServer {
     logger.info({ model: this.options.model, port }, `启动 ${this.options.capability} 本地模型服务`);
 
     return new Promise((resolve, reject) => {
-      const child = spawn(python, args, {
+      const child = spawn(cli, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
@@ -122,9 +123,10 @@ export class ModelServer {
           const tail = this.stderrBuffer.slice(-500);
           this.setError(`${this.options.capability} 进程退出 code=${code}，stderr=${tail}`);
         }
+        const stderrSnapshot = this.stderrBuffer;
         this.cleanup();
         if (!this.started) {
-          reject(new Error(`${this.options.capability} 进程退出 code=${code}, stdout=${stdout}, stderr=${this.stderrBuffer}`));
+          reject(new Error(`${this.options.capability} 进程退出 code=${code}, stdout=${stdout}, stderr=${stderrSnapshot}`));
         }
       });
 

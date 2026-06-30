@@ -69,13 +69,16 @@ describe('ModelServer', () => {
     fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:12345'));
     await startPromise;
 
-    const [, args, options] = vi.mocked(spawn).mock.calls[0];
+    const [command, args, options] = vi.mocked(spawn).mock.calls[0];
+    expect(command).toContain('infinity_emb');
     expect(options?.env).toMatchObject({ INFINITY_NO_BETTERTRANSFORMER: '1' });
     expect(args).toContain('--host');
     expect(args).toContain('127.0.0.1');
     expect(args).toContain('--engine');
     expect(args).toContain('torch');
     expect(args).toContain('--no-bettertransformer');
+    expect(args).not.toContain('-m');
+    expect(args).not.toContain('infinity_emb');
   });
 
   it('stderr 出现下载进度时状态变为 downloading', async () => {
