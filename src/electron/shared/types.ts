@@ -175,3 +175,50 @@ export interface Project {
   gitlab?: GitlabConfig | null;
   roles?: RoleConfigMap;
 }
+
+// ==================== Memory Graph Types ====================
+
+export type MemoryGraphNodeGroup =
+  | 'system'
+  | 'project'
+  | 'topic'
+  | 'episode'
+  | 'agent_case'
+  | 'agent_skill'
+  | 'profile'
+  | 'agent'
+  | 'user';
+
+export interface MemoryGraphNode {
+  id: string;
+  label: string;
+  group: MemoryGraphNodeGroup;
+  title?: string;
+  details?: string;
+  timestamp?: string;
+  projectId?: string;
+  ownerId?: string;
+}
+
+export interface MemoryGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  label?: string;
+  arrows?: 'to' | 'from' | 'to,from';
+}
+
+export interface MemoryGraphStats {
+  totalNodes: number;
+  totalEdges: number;
+  totalMemories: number;
+  projectCount: number;
+  activeDays: number;
+  dailyGrowth: Array<{ date: string; count: number }>;
+}
+
+export interface MemoryGraph {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  stats: MemoryGraphStats;
+}
