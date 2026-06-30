@@ -659,7 +659,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       }
     }
 
-    return buildMemoryGraph({ projects, getResults });
+    return buildMemoryGraph({
+      projects: projects.map((p) => ({ id: p.id, name: p.name, rootPath: p.rootPath })),
+      getResults,
+    });
   },
 
   // ---------- Daemon 状态 IPC Handler ----------

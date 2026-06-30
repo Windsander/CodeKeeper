@@ -44,7 +44,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       { nodes, edges },
       {
         nodes: { shape: 'dot', size: 18, font: { color: '#c9d1d9', size: 13 } },
-        edges: { color: '#30363d', smooth: { type: 'continuous' } },
+        edges: { color: '#30363d', smooth: { enabled: true, type: 'continuous', roundness: 0.5 } },
         physics: { barnesHut: { gravitationalConstant: -3000, springLength: 160 } },
         interaction: { hover: true },
       }

@@ -87,8 +87,8 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
   }
 
   addCrossTopicEdges(userTopics, edges);
-  addRelatedSkillEdges(skillCases, nodes, edges);
-  addProjectShareEdges(systemSkills, projectUsers, nodes, edges);
+  addRelatedSkillEdges(skillCases, edges);
+  addProjectShareEdges(projectUsers, edges);
 
   const nodeList = [...nodes.values()];
   const edgeList = [...edges.values()];
@@ -281,7 +281,6 @@ function addCrossTopicEdges(
 
 function addRelatedSkillEdges(
   skillCases: Map<string, Set<string>>,
-  nodes: Map<string, MemoryGraphNode>,
   edges: Map<string, MemoryGraphEdge>
 ): void {
   const skills = [...skillCases.entries()];
@@ -298,9 +297,7 @@ function addRelatedSkillEdges(
 }
 
 function addProjectShareEdges(
-  systemSkills: Set<string>,
   projectUsers: Map<string, Set<string>>,
-  nodes: Map<string, MemoryGraphNode>,
   edges: Map<string, MemoryGraphEdge>
 ): void {
   const projectIds = [...projectUsers.keys()];
