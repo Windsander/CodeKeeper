@@ -1119,38 +1119,6 @@ select.input:focus {
   margin: 0;
 }
 
-/* 日志页双栏布局：左侧全部日志，右侧本地模型日志 */
-.logs-page-layout {
-  display: flex;
-  gap: 24px;
-  align-items: flex-start;
-}
-
-.logs-card--main {
-  flex: 2;
-  min-width: 0;
-}
-
-.logs-card--local {
-  flex: 1;
-  min-width: 320px;
-  max-width: 480px;
-}
-
-.logs-card-title {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.logs-card--local .model-log-viewer {
-  max-height: none;
-}
-
-.logs-card--local .model-log-pre {
-  max-height: 50vh;
-}
-
 /* 记忆浏览器 */
 .memory-browser {
   padding: 20px;
@@ -1415,47 +1383,6 @@ select.input:focus {
 
 .service-status-body {
   padding-top: 12px;
-}
-
-.model-log-viewer {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: 400px;
-}
-
-.model-log-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 1;
-  min-height: 0;
-}
-
-.model-log-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.model-log-pre {
-  background: var(--bg-secondary);
-  border-radius: 6px;
-  padding: 8px;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 180px;
-}
-
-.model-log-empty,
-.model-log-error {
-  padding: 16px;
-  text-align: center;
-  color: var(--text-muted);
 }
 
 /* ---------- 设置页双栏布局 ---------- */
