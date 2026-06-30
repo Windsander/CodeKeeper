@@ -24,6 +24,9 @@ export function App() {
             <NavLink to="/" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
               仪表盘
             </NavLink>
+            <NavLink to="/memory" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
+              记忆图谱
+            </NavLink>
             {getAllRoleUIs().map((ui) => (
               <NavLink
                 key={ui.role}
@@ -41,9 +44,6 @@ export function App() {
             </NavLink>
             <NavLink to="/settings" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
               设置
-            </NavLink>
-            <NavLink to="/memory" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
-              记忆浏览器
             </NavLink>
           </nav>
           <main className="main-content">

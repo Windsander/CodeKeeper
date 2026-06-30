@@ -11,10 +11,12 @@ const stats = {
   dailyGrowth: [{ date: '2026-06-30', count: 3 }],
 };
 
+const graph = { nodes: [], edges: [], stats };
+
 describe('MemoryProgressView', () => {
   it('渲染统计与增长图', () => {
-    render(<MemoryProgressView stats={stats} />);
+    render(<MemoryProgressView stats={stats} graph={graph} />);
     expect(screen.getByText('20')).toBeTruthy();
-    expect(screen.getByText('记忆增长（最近 14 天）')).toBeTruthy();
+    expect(screen.getByText('Memory Growth (Last 14 Days)')).toBeTruthy();
   });
 });

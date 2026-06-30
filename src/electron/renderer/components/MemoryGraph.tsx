@@ -20,13 +20,26 @@ const GROUP_COLORS: Record<string, string> = {
   user: '#ff6b9d',
 };
 
+const GROUP_LABELS: Record<string, string> = {
+  system: 'System',
+  project: 'Project',
+  topic: 'Topic',
+  episode: 'Episode',
+  agent_case: 'Case',
+  agent_skill: 'Skill',
+  profile: 'Profile',
+  agent: 'Agent',
+  user: 'User',
+};
+
 /**
- * 使用 vis-network 渲染力导向记忆图
+ * 使用 vis-network 渲染力导向记忆图（EverOS 风格）
  */
 export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -44,10 +57,29 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       containerRef.current,
       { nodes, edges },
       {
-        nodes: { shape: 'dot', size: 18, font: { color: '#c9d1d9', size: 13 } },
-        edges: { color: '#30363d', smooth: { enabled: true, type: 'continuous', roundness: 0.5 } },
-        physics: { barnesHut: { gravitationalConstant: -3000, springLength: 160 } },
-        interaction: { hover: true },
+        nodes: {
+          shape: 'dot',
+          size: 18,
+          font: { color: '#c9d1d9', size: 13, face: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif' },
+          borderWidth: 2,
+          shadow: { enabled: true, color: 'rgba(0,0,0,0.5)', size: 10, x: 0, y: 0 },
+        },
+        edges: {
+          color: { color: '#30363d', highlight: '#58a6ff', hover: '#58a6ff' },
+          width: 1,
+          smooth: { enabled: true, type: 'continuous', roundness: 0.5 },
+        },
+        physics: {
+          barnesHut: {
+            gravitationalConstant: -4000,
+            centralGravity: 0.3,
+            springLength: 180,
+            springConstant: 0.04,
+            damping: 0.09,
+          },
+          stabilization: { iterations: 200 },
+        },
+        interaction: { hover: true, tooltipDelay: 200 },
       }
     );
 
@@ -57,6 +89,22 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
         const node = graph.nodes.find((n) => n.id === nodeId);
         if (node) onNodeSelect(node);
       }
+    });
+
+    network.on('hoverNode', (params) => {
+      const node = graph.nodes.find((n) => n.id === params.node);
+      if (!node) return;
+      const domCoords = network.canvasToDOM(network.getPositions([params.node])[params.node]);
+      const rect = containerRef.current!.getBoundingClientRect();
+      setTooltip({
+        x: domCoords.x + rect.left + 16,
+        y: domCoords.y + rect.top + 16,
+        node,
+      });
+    });
+
+    network.on('blurNode', () => {
+      setTooltip(null);
     });
 
     networkRef.current = network;
@@ -72,21 +120,67 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     });
   };
 
+  const zoomIn = () => networkRef.current?.moveTo({ scale: (networkRef.current.getScale() ?? 1) * 1.2 });
+  const zoomOut = () => networkRef.current?.moveTo({ scale: (networkRef.current.getScale() ?? 1) / 1.2 });
+  const fit = () => networkRef.current?.fit({ animation: true });
+
   return (
-    <div className="memory-graph">
-      <div className="memory-graph-filters">
-        {Object.entries(GROUP_COLORS).map(([group, color]) => (
-          <button
-            key={group}
-            className={`filter-chip${activeGroups.has(group) ? ' active' : ''}`}
-            style={{ color, borderColor: color }}
-            onClick={() => toggleGroup(group)}
-          >
-            {group}
-          </button>
+    <div className="memory-graph-canvas-wrap">
+      <div className="memory-graph-bg" />
+      <div ref={containerRef} className="memory-graph-canvas" />
+
+      <div className="memory-graph-filter">
+        <div className="memory-graph-filter-title">Filter by type</div>
+        <div className="memory-graph-filter-chips">
+          {Object.entries(GROUP_COLORS).map(([group, color]) => (
+            <button
+              key={group}
+              className={`memory-graph-filter-chip${activeGroups.has(group) ? ' active' : ''}`}
+              style={{ borderColor: color, color }}
+              onClick={() => toggleGroup(group)}
+            >
+              <span className="memory-graph-chip-dot" style={{ backgroundColor: color }} />
+              {GROUP_LABELS[group]}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="memory-graph-legend">
+        {Object.entries(GROUP_LABELS).map(([group, label]) => (
+          <div key={group} className="memory-graph-legend-item">
+            <span className="memory-graph-legend-dot" style={{ backgroundColor: GROUP_COLORS[group] }} />
+            {label}
+          </div>
         ))}
       </div>
-      <div ref={containerRef} className="memory-graph-canvas" />
+
+      <div className="memory-graph-zoom">
+        <button className="memory-graph-zoom-btn" onClick={zoomIn} title="放大">+</button>
+        <button className="memory-graph-zoom-btn" onClick={zoomOut} title="缩小">−</button>
+        <button className="memory-graph-zoom-btn" onClick={fit} title="适配">⊡</button>
+      </div>
+
+      {tooltip?.node && (
+        <div
+          className="memory-graph-tooltip"
+          style={{ left: tooltip.x, top: tooltip.y }}
+        >
+          <span
+            className="memory-graph-tooltip-type"
+            style={{ backgroundColor: GROUP_COLORS[tooltip.node.group], color: '#0d1117' }}
+          >
+            {GROUP_LABELS[tooltip.node.group]}
+          </span>
+          <h3>{tooltip.node.label}</h3>
+          {tooltip.node.title && <p>{tooltip.node.title}</p>}
+          {tooltip.node.details && <p>{tooltip.node.details.slice(0, 200)}</p>}
+          <div className="memory-graph-tooltip-meta">
+            {tooltip.node.projectId && <span>项目: {tooltip.node.projectId}</span>}
+            {tooltip.node.timestamp && <span>{tooltip.node.timestamp}</span>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

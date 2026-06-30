@@ -1,34 +1,101 @@
-import type { MemoryGraphStats } from '../../shared/types.js';
+import { useMemo } from 'react';
+import type { MemoryGraph, MemoryGraphStats } from '../../shared/types.js';
 
 interface MemoryProgressViewProps {
   stats: MemoryGraphStats;
+  graph: MemoryGraph;
 }
 
 /**
- * Progress View 页签：统计卡片与增长图表
+ * Progress View 页签：统计、增长图、时间线（EverOS 风格）
  */
-export function MemoryProgressView({ stats }: MemoryProgressViewProps) {
+export function MemoryProgressView({ stats, graph }: MemoryProgressViewProps) {
   const maxGrowth = Math.max(1, ...stats.dailyGrowth.map((d) => d.count));
+
+  const timeline = useMemo(() => {
+    const groups = new Map<string, typeof graph.nodes>();
+    for (const node of graph.nodes) {
+      if (!node.timestamp) continue;
+      const date = node.timestamp.slice(0, 10);
+      if (!groups.has(date)) groups.set(date, []);
+      groups.get(date)!.push(node);
+    }
+    return [...groups.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .slice(0, 14)
+      .map(([date, nodes]) => ({
+        date,
+        count: nodes.length,
+        nodes: nodes.slice(0, 5),
+      }));
+  }, [graph]);
+
   return (
     <div className="memory-progress-view">
-      <div className="stats-grid">
-        <div className="stat-card"><div className="label">总记忆数</div><div className="value">{stats.totalMemories}</div></div>
-        <div className="stat-card"><div className="label">总关联数</div><div className="value">{stats.totalEdges}</div></div>
-        <div className="stat-card"><div className="label">活跃天数</div><div className="value">{stats.activeDays}</div></div>
-        <div className="stat-card"><div className="label">项目数</div><div className="value">{stats.projectCount}</div></div>
-      </div>
+      <div className="memory-progress-container">
+        <div className="memory-progress-stats">
+          <div className="memory-progress-stat-card">
+            <div className="memory-progress-stat-label">Total Memories</div>
+            <div className="memory-progress-stat-value">{stats.totalMemories}</div>
+            <div className="memory-progress-stat-trend">+{stats.dailyGrowth.slice(-1)[0]?.count ?? 0} today</div>
+          </div>
+          <div className="memory-progress-stat-card">
+            <div className="memory-progress-stat-label">Connections</div>
+            <div className="memory-progress-stat-value">{stats.totalEdges}</div>
+            <div className="memory-progress-stat-trend">across {stats.projectCount} projects</div>
+          </div>
+          <div className="memory-progress-stat-card">
+            <div className="memory-progress-stat-label">Active Days</div>
+            <div className="memory-progress-stat-value">{stats.activeDays}</div>
+            <div className="memory-progress-stat-trend neutral">keep building</div>
+          </div>
+          <div className="memory-progress-stat-card">
+            <div className="memory-progress-stat-label">Nodes</div>
+            <div className="memory-progress-stat-value">{stats.totalNodes}</div>
+            <div className="memory-progress-stat-trend">+{stats.totalMemories} memories</div>
+          </div>
+        </div>
 
-      <div className="growth-section">
-        <div className="section-title">记忆增长（最近 14 天）</div>
-        <div className="growth-chart">
-          {stats.dailyGrowth.map((d) => (
-            <div key={d.date} className="chart-bar-container">
-              <div className="chart-bar-wrapper">
-                <div className="chart-bar" style={{ height: `${(d.count / maxGrowth) * 100}%` }} />
+        <div className="memory-progress-card">
+          <div className="memory-progress-card-title">Memory Growth (Last 14 Days)</div>
+          <div className="memory-progress-growth">
+            {stats.dailyGrowth.map((d) => (
+              <div key={d.date} className="memory-progress-bar-wrap">
+                <div className="memory-progress-bar-track">
+                  <div
+                    className="memory-progress-bar"
+                    style={{ height: `${(d.count / maxGrowth) * 100}%` }}
+                  >
+                    <div className="memory-progress-bar-tip">{d.count}</div>
+                  </div>
+                </div>
+                <div className="memory-progress-bar-label">{d.date.slice(5)}</div>
               </div>
-              <div className="chart-label">{d.date.slice(5)}</div>
-            </div>
-          ))}
+            ))}
+          </div>
+        </div>
+
+        <div className="memory-progress-card">
+          <div className="memory-progress-card-title">Daily Memory Timeline</div>
+          <div className="memory-progress-timeline">
+            {timeline.map((day, idx) => (
+              <div key={day.date} className="memory-progress-day">
+                <div className={`memory-progress-dot${idx === 0 ? ' today' : ''}`} />
+                <div className="memory-progress-day-header">
+                  <span className="memory-progress-day-date">{day.date}</span>
+                  <span className="memory-progress-day-badge">{day.count} memories</span>
+                </div>
+                <div className="memory-progress-day-items">
+                  {day.nodes.map((node) => (
+                    <div key={node.id} className="memory-progress-item">
+                      <div className="memory-progress-item-title">{node.label}</div>
+                      {node.details && <div className="memory-progress-item-desc">{node.details.slice(0, 120)}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
