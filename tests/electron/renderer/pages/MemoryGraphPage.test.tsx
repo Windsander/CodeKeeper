@@ -3,11 +3,14 @@ import { render, screen } from '@testing-library/react';
 import { MemoryGraphPage } from '../../../../src/electron/renderer/pages/MemoryGraphPage';
 
 vi.mock('vis-network', () => ({
-  DataSet: vi.fn().mockImplementation((items) => items),
   Network: vi.fn().mockImplementation(() => ({
     on: vi.fn(),
     destroy: vi.fn(),
   })),
+}));
+
+vi.mock('vis-data', () => ({
+  DataSet: vi.fn().mockImplementation((items) => items),
 }));
 
 vi.mock('../../../../src/electron/renderer/hooks/useMemoryGraph', () => ({

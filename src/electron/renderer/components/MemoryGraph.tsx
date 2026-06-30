@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { DataSet, Network } from 'vis-network';
+import { Network } from 'vis-network';
+import { DataSet } from 'vis-data';
 import type { MemoryGraph, MemoryGraphNode } from '../../shared/types.js';
 
 interface MemoryGraphProps {
