@@ -59,6 +59,48 @@ describe('ServiceStatusPanel', () => {
     expect(container.textContent).toContain('加载中');
   });
 
+  it('downloading 状态显示实际进度条', () => {
+    const daemon: DaemonStatus = {
+      daemonRunning: true,
+      everos: { state: 'running', url: null, error: null },
+    };
+    const localModel: LocalModelStatus = {
+      embedding: { state: 'downloading', url: null, error: null, progress: 30 },
+      rerank: { state: 'idle', url: null, error: null, progress: null },
+    };
+
+    const { container } = render(
+      <ServiceStatusPanel
+        daemon={daemon}
+        localModel={localModel}
+        remoteModel={defaultRemoteModel}
+      />
+    );
+
+    expect(container.querySelector('.service-status-progress')).toBeTruthy();
+  });
+
+  it('running 状态不显示进度条', () => {
+    const daemon: DaemonStatus = {
+      daemonRunning: true,
+      everos: { state: 'running', url: null, error: null },
+    };
+    const localModel: LocalModelStatus = {
+      embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null, progress: null },
+      rerank: { state: 'running', url: 'http://127.0.0.1:12346', error: null, progress: null },
+    };
+
+    const { container } = render(
+      <ServiceStatusPanel
+        daemon={daemon}
+        localModel={localModel}
+        remoteModel={defaultRemoteModel}
+      />
+    );
+
+    expect(container.querySelector('.service-status-progress')).toBeNull();
+  });
+
   it('错误状态可点击展开，显示截断错误摘要', () => {
     const longError = 'a'.repeat(300);
     const daemon: DaemonStatus = {

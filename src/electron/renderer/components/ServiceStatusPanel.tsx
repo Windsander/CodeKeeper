@@ -95,7 +95,7 @@ function TreeNode({
       >
         <span className="service-status-icon">{icon}</span>
         <span className="service-status-title">{title}</span>
-        {progress !== undefined && (
+        {status === 'downloading' && progress != null && (
           <span className="service-status-progress">
             <CircularProgress value={progress} size={14} strokeWidth={2} />
           </span>
