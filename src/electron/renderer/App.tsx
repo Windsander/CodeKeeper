@@ -7,7 +7,7 @@ import { Logs } from './pages/Logs';
 import { Settings } from './pages/Settings';
 import { MrReview } from './pages/MrReview';
 import { Maintainer } from './pages/Maintainer';
-import { MemoryBrowser } from './components/MemoryBrowser';
+import { MemoryGraphPage } from './pages/MemoryGraphPage';
 import { getAllRoleUIs } from './roles/role-registry.js';
 // 触发角色 UI 注册（side-effect）
 import './roles/reviewer-role.js';
@@ -55,7 +55,7 @@ export function App() {
               <Route path="/settings" element={<Settings />} />
               <Route path="/reviewer" element={<MrReview />} />
               <Route path="/maintainer" element={<Maintainer />} />
-              <Route path="/memory" element={<MemoryBrowser />} />
+              <Route path="/memory" element={<MemoryGraphPage />} />
             </Routes>
           </main>
         </div>
