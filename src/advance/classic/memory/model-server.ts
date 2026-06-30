@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { logger } from '../../../core/logger.js';
 import type { ModelServiceStatus } from '../../../electron/shared/service-status.js';
 
@@ -27,6 +29,64 @@ export async function getFreePort(): Promise<number> {
   });
 }
 
+function getHubCacheDir(): string {
+  if (process.env.HF_HUB_CACHE) return process.env.HF_HUB_CACHE;
+  return join(homedir(), '.cache', 'huggingface', 'hub');
+}
+
+function getModelCacheDir(modelId: string): string {
+  const safeId = modelId.replace(/\//g, '--');
+  return join(getHubCacheDir(), `models--${safeId}`);
+}
+
+interface TreeEntry {
+  type: string;
+  path: string;
+  size?: number;
+}
+
+async function fetchTreeSize(modelId: string, path = ''): Promise<number | null> {
+  const url = `https://huggingface.co/api/models/${modelId}/tree/main${path ? `/${path}` : ''}`;
+  try {
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const entries = (await res.json()) as TreeEntry[];
+    let total = 0;
+    for (const entry of entries) {
+      if (entry.type === 'file' || entry.type === 'blob') {
+        total += entry.size ?? 0;
+      } else if (entry.type === 'directory') {
+        const sub = await fetchTreeSize(modelId, entry.path);
+        if (sub != null) total += sub;
+      }
+    }
+    return total;
+  } catch {
+    return null;
+  }
+}
+
+function getDownloadedBytes(dir: string): number {
+  if (!existsSync(dir)) return 0;
+  let bytes = 0;
+  const walk = (root: string) => {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      const fullPath = join(root, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile()) {
+        try {
+          bytes += statSync(fullPath).size;
+        } catch {
+          // 忽略并发读写导致的 stat 失败
+        }
+      }
+    }
+  };
+  walk(dir);
+  return bytes;
+}
+
 export class ModelServer {
   private process: ChildProcess | null = null;
   private started = false;
@@ -34,6 +94,9 @@ export class ModelServer {
   private exitHandler?: () => void;
   private statusValue: ModelServiceStatus = { state: 'idle', url: null, error: null, progress: null };
   private stderrBuffer = '';
+  private progressTimer: NodeJS.Timeout | null = null;
+  private expectedTotalBytes: number | null = null;
+  private lastProgress: number | null = null;
 
   constructor(private readonly options: ModelServerOptions) {}
 
@@ -100,6 +163,8 @@ export class ModelServer {
         child.on('exit', this.exitHandler);
       }
 
+      this.startProgressTracking(this.options.model);
+
       let stdout = '';
 
       child.stdout?.on('data', (chunk) => {
@@ -157,10 +222,55 @@ export class ModelServer {
   }
 
   private cleanup(): void {
+    this.stopProgressTracking();
     this.process = null;
     this.started = false;
     this.urlValue = null;
     this.stderrBuffer = '';
+  }
+
+  private startProgressTracking(modelId: string): void {
+    this.stopProgressTracking();
+    this.expectedTotalBytes = null;
+    this.lastProgress = null;
+
+    // 先异步获取模型总大小，再开始轮询缓存目录
+    fetchTreeSize(modelId)
+      .then((total) => {
+        if (total != null && total > 0) {
+          this.expectedTotalBytes = total;
+          logger.debug({ modelId, totalBytes: total }, '已获取 HuggingFace 模型总大小');
+        }
+      })
+      .catch(() => {
+        // 获取失败则退化为只显示下载状态，不显示百分比
+      })
+      .finally(() => {
+        if (this.started || this.statusValue.state === 'error') return;
+        const cacheDir = getModelCacheDir(modelId);
+        this.progressTimer = setInterval(() => {
+          if (this.started || this.statusValue.state === 'error') {
+            this.stopProgressTracking();
+            return;
+          }
+          const downloaded = getDownloadedBytes(cacheDir);
+          if (this.expectedTotalBytes && this.expectedTotalBytes > 0) {
+            const ratio = downloaded / this.expectedTotalBytes;
+            const progress = Math.min(99, Math.round(ratio * 100));
+            if (this.lastProgress == null || progress > this.lastProgress) {
+              this.lastProgress = progress;
+              this.setStatus('downloading', progress);
+            }
+          }
+        }, 1000);
+      });
+  }
+
+  private stopProgressTracking(): void {
+    if (this.progressTimer) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = null;
+    }
   }
 
   private setStatus(state: ModelServiceStatus['state'], progress?: number | null): void {
@@ -183,6 +293,7 @@ export class ModelServer {
     if (match) {
       this.urlValue = match[1];
       this.started = true;
+      this.stopProgressTracking();
       this.statusValue = { state: 'running', url: this.urlValue, error: null, progress: null };
       this.options.onStatusChange?.(this.getStatus());
       resolve(this.urlValue);
