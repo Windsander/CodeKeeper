@@ -69,8 +69,13 @@ export class ModelServer {
       this.options.model,
       '--port',
       String(port),
+      '--host',
+      '127.0.0.1',
       '--url-prefix',
       '/v1',
+      '--engine',
+      'torch',
+      '--no-bettertransformer',
     ];
 
     this.setStatus('starting');
@@ -83,7 +88,7 @@ export class ModelServer {
           ...process.env,
           DO_NOT_TRACK: '1',
           HF_HUB_DISABLE_TELEMETRY: '1',
-          INFINITY_BETTERTRANSFORMER: 'false',
+          INFINITY_NO_BETTERTRANSFORMER: '1',
         },
       });
       this.process = child;
@@ -94,14 +99,16 @@ export class ModelServer {
       let stdout = '';
 
       child.stdout?.on('data', (chunk) => {
-        stdout += chunk.toString();
+        const text = chunk.toString();
+        stdout += text;
+        this.inferStateFromLog(text);
         this.tryParseUrl(stdout, resolve);
       });
 
       child.stderr?.on('data', (chunk) => {
         const text = chunk.toString();
         this.stderrBuffer += text;
-        this.inferStateFromStderr(text);
+        this.inferStateFromLog(text);
       });
 
       child.on('error', (err) => {
@@ -177,9 +184,9 @@ export class ModelServer {
     }
   }
 
-  private inferStateFromStderr(text: string): void {
+  private inferStateFromLog(text: string): void {
     if (this.started) return;
-    // infinity_emb 下载模型时 stderr 会输出 Downloading ... 45% 这类进度
+    // infinity_emb 下载模型时 stdout/stderr 会输出 Downloading ... 45% 这类进度
     if (/downloading/i.test(text) || /\d+%/.test(text)) {
       const match = text.match(/(\d{1,3})%/);
       this.setStatus('downloading', match ? parseInt(match[1], 10) : null);

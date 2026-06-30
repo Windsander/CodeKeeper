@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { LocalModelServiceManager } from '../../../../src/advance/classic/memory/local-model-service.js';
+import { ModelServer } from '../../../../src/advance/classic/memory/model-server.js';
 
 vi.mock('node:fs', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -54,5 +55,21 @@ describe('LocalModelServiceManager', () => {
     const status = manager.getStatus();
     expect(status.embedding.state).toBe('idle');
     expect(status.rerank.state).toBe('idle');
+  });
+
+  it('任一模型启动失败时 start 应 reject 并记录错误状态', async () => {
+    vi.mocked(ModelServer).mockImplementationOnce(({ capability, onStatusChange }) => ({
+      start: vi.fn().mockRejectedValue(new Error(`${capability} 进程退出 code=1`)),
+      stop: vi.fn(),
+      isHealthy: vi.fn().mockReturnValue(false),
+      url: null,
+      onExit: vi.fn(),
+    }));
+
+    const manager = new LocalModelServiceManager({ venvDir: '/venv' });
+    await expect(manager.start()).rejects.toThrow('本地模型未同时就绪');
+
+    const status = manager.getStatus();
+    expect(status.embedding.state === 'error' || status.rerank.state === 'error').toBe(true);
   });
 });

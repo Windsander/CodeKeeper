@@ -52,7 +52,7 @@ describe('ModelServer', () => {
     expect(server.isHealthy()).toBe(true);
   });
 
-  it('启动时禁用 bettertransformer 并设置对应环境变量', async () => {
+  it('启动时禁用 bettertransformer 并设置对应环境变量与 CLI 参数', async () => {
     const fake = new EventEmitter() as ChildProcess;
     fake.stdout = new EventEmitter();
     fake.stderr = new EventEmitter();
@@ -69,8 +69,13 @@ describe('ModelServer', () => {
     fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:12345'));
     await startPromise;
 
-    const [, , options] = vi.mocked(spawn).mock.calls[0];
-    expect(options?.env).toMatchObject({ INFINITY_BETTERTRANSFORMER: 'false' });
+    const [, args, options] = vi.mocked(spawn).mock.calls[0];
+    expect(options?.env).toMatchObject({ INFINITY_NO_BETTERTRANSFORMER: '1' });
+    expect(args).toContain('--host');
+    expect(args).toContain('127.0.0.1');
+    expect(args).toContain('--engine');
+    expect(args).toContain('torch');
+    expect(args).toContain('--no-bettertransformer');
   });
 
   it('stderr 出现下载进度时状态变为 downloading', async () => {
@@ -153,6 +158,31 @@ describe('ModelServer', () => {
 
     expect(server.getStatus().state).toBe('running');
     expect(server.getStatus().progress).toBeNull();
+  });
+
+  it('stdout 出现下载进度时状态变为 downloading', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'embedding',
+      model: 'intfloat/multilingual-e5-small',
+      venvDir: '/venv',
+    });
+
+    const startPromise = server.start();
+    await waitForSpawnCall();
+
+    fake.stdout.emit('data', Buffer.from('Downloading model.safetensors:  62%|██████▏| 62M/100M'));
+    expect(server.getStatus().state).toBe('downloading');
+    expect(server.getStatus().progress).toBe(62);
+
+    fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:12345'));
+    await startPromise;
+
+    expect(server.getStatus().state).toBe('running');
   });
 
   it('进程异常退出时状态变为 error 并记录 stderr 摘要', async () => {

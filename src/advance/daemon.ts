@@ -173,9 +173,17 @@ export class Daemon {
     this.localModelManager
       .start()
       .then(async () => {
-        if (this.running) {
+        if (!this.running) return;
+        const status = this.localModelManager.getStatus();
+        const ready = status.embedding.state === 'running' && status.rerank.state === 'running';
+        if (ready) {
           logger.info('本地模型服务已就绪，尝试启动/重启 EverOS');
           await this.startEverOS();
+        } else {
+          logger.warn(
+            { status },
+            '本地模型服务未完全就绪，EverOS 将不会自动启动，Agent 子进程会等待就绪'
+          );
         }
       })
       .catch((err) => {
@@ -266,6 +274,7 @@ export class Daemon {
         apiUrl: this.options.apiUrl,
         provider: this.options.provider,
         model: this.options.model,
+        headers: this.options.headers,
       }),
       this.remoteModelChecker.checkMultimodal(this.options.everos ?? {}),
     ]);

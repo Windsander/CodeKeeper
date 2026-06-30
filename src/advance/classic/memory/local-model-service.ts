@@ -41,15 +41,34 @@ export class LocalModelServiceManager {
     try {
       await this.ensureVenv();
       this.setCapabilityStatus('embedding', { state: 'starting' });
-      await this.startCapability('embedding', this.embeddingModel);
       this.setCapabilityStatus('rerank', { state: 'starting' });
-      await this.startCapability('rerank', this.rerankModel);
+      await Promise.all([
+        this.startCapability('embedding', this.embeddingModel),
+        this.startCapability('rerank', this.rerankModel),
+      ]);
+
+      const status = this.getStatus();
+      const ready = status.embedding.state === 'running' && status.rerank.state === 'running';
+      if (!ready) {
+        const message = `本地模型未同时就绪（embedding=${status.embedding.state}, rerank=${status.rerank.state}）`;
+        if (status.embedding.state !== 'running') {
+          this.setCapabilityStatus('embedding', { state: 'error', error: message });
+        }
+        if (status.rerank.state !== 'running') {
+          this.setCapabilityStatus('rerank', { state: 'error', error: message });
+        }
+        throw new Error(message);
+      }
+
       logger.info(
         { embeddingUrl: this.getEmbeddingUrl(), rerankUrl: this.getRerankUrl() },
         '本地 Embedding/Rerank 模型服务已启动'
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const status = this.getStatus();
+      const detail = `本地模型未同时就绪（embedding=${status.embedding.state}, rerank=${status.rerank.state}）`;
+      const cause = err instanceof Error ? err.message : String(err);
+      const message = `${detail}: ${cause}`;
       logger.warn({ err }, `本地模型服务启动失败: ${message}`);
       if (this.embeddingStatus.state !== 'running') {
         this.setCapabilityStatus('embedding', { state: 'error', error: message });
@@ -57,6 +76,7 @@ export class LocalModelServiceManager {
       if (this.rerankStatus.state !== 'running') {
         this.setCapabilityStatus('rerank', { state: 'error', error: message });
       }
+      throw new Error(message);
     } finally {
       this.starting = false;
     }

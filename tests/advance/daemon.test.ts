@@ -30,6 +30,12 @@ vi.mock('../../src/advance/classic/memory/local-model-service.js', () => ({
     stop(): void {}
     getEmbeddingUrl(): string { return 'http://127.0.0.1:7001'; }
     getRerankUrl(): string { return 'http://127.0.0.1:7002'; }
+    getStatus() {
+      return {
+        embedding: { state: 'running', url: 'http://127.0.0.1:7001', error: null, progress: null },
+        rerank: { state: 'running', url: 'http://127.0.0.1:7002', error: null, progress: null },
+      };
+    }
     async restart(): Promise<void> {}
   },
 }));
