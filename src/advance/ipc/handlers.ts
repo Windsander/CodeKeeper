@@ -23,7 +23,8 @@ import type { Role, RoleConfig, GitlabConfig } from '../types.js';
 import type { IRoleManager } from '../classic/roles/role-manager.js';
 
 import { readDirectoryTree } from '../utils/file-tree';
-import { everosMemorySearch, type EverOSSearchItem } from '../classic/memory/everos-api.js';
+import { everosMemorySearch, type EverOSSearchItem, everosMemoryGet, extractOwnersFromGetResult, type EverOSMemoryGetResult } from '../classic/memory/everos-api.js';
+import { buildMemoryGraph } from '../classic/memory/graph-builder.js';
 import type { MemoryEntry, MemorySearchParams, MemoryDeleteParams } from '../../electron/shared/types.js';
 import type { DaemonStatus, EverosStatus, LocalModelStatus, RemoteModelStatus } from '../../electron/shared/service-status.js';
 import type { RemoteModelChecker } from '../classic/memory/remote-model-checker.js';
@@ -592,6 +593,75 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { success: true };
   },
 
+  'memory.graph': async (ctx) => {
+    if (!ctx.everosUrl) throw new Error('EverOS 服务未启动');
+
+    const projects = ctx.registry.list();
+    const knownUsers = new Set<string>();
+    const knownAgents = new Set<string>(['reviewer', 'maintainer', 'archiver']);
+    const getResults = new Map<string, EverOSMemoryGetResult>();
+
+    // 第一轮：用已知固定 agent 拉取 agent 侧数据，同时发现 users
+    for (const project of projects) {
+      const projectResult: EverOSMemoryGetResult = {
+        episodes: [], profiles: [], agent_cases: [], agent_skills: [], total_count: 0,
+      };
+
+      for (const agentId of knownAgents) {
+        const caseRes = await everosMemoryGet({
+          everosUrl: ctx.everosUrl,
+          appId: 'codekeeper-advance',
+          projectId: project.id,
+          ownerKind: 'agent',
+          ownerId: agentId,
+          memoryType: 'agent_case',
+        });
+        const skillRes = await everosMemoryGet({
+          everosUrl: ctx.everosUrl,
+          appId: 'codekeeper-advance',
+          projectId: project.id,
+          ownerKind: 'agent',
+          ownerId: agentId,
+          memoryType: 'agent_skill',
+        });
+        mergeResult(projectResult, caseRes);
+        mergeResult(projectResult, skillRes);
+
+        const owners = extractOwnersFromGetResult(caseRes);
+        for (const uid of owners.users) knownUsers.add(uid);
+      }
+
+      getResults.set(project.id, projectResult);
+    }
+
+    // 第二轮：用发现的 users 拉取 user 侧数据
+    for (const project of projects) {
+      const projectResult = getResults.get(project.id)!;
+      for (const userId of knownUsers) {
+        const episodeRes = await everosMemoryGet({
+          everosUrl: ctx.everosUrl,
+          appId: 'codekeeper-advance',
+          projectId: project.id,
+          ownerKind: 'user',
+          ownerId: userId,
+          memoryType: 'episode',
+        });
+        const profileRes = await everosMemoryGet({
+          everosUrl: ctx.everosUrl,
+          appId: 'codekeeper-advance',
+          projectId: project.id,
+          ownerKind: 'user',
+          ownerId: userId,
+          memoryType: 'profile',
+        });
+        mergeResult(projectResult, episodeRes);
+        mergeResult(projectResult, profileRes);
+      }
+    }
+
+    return buildMemoryGraph({ projects, getResults });
+  },
+
   // ---------- Daemon 状态 IPC Handler ----------
 
   'daemon.status': async (ctx) => {
@@ -711,4 +781,12 @@ function createRoleManager(role: Role, store: MetadataStore): IRoleManager {
     default:
       throw new Error(`未支持的角色: ${role}`);
   }
+}
+
+function mergeResult(target: EverOSMemoryGetResult, source: EverOSMemoryGetResult): void {
+  target.episodes.push(...source.episodes);
+  target.profiles.push(...source.profiles);
+  target.agent_cases.push(...source.agent_cases);
+  target.agent_skills.push(...source.agent_skills);
+  target.total_count += source.total_count;
 }
