@@ -16,6 +16,7 @@ import type { ScanService } from '../scan/scan-service.js';
 import type { IGitProvider } from '../classic/provider/types.js';
 import type { RoleServiceRegistry } from '../classic/role-service-registry.js';
 import type { LocalModelServiceManager } from '../classic/memory/local-model-service.js';
+import type { ModelCapability } from '../classic/memory/model-server.js';
 import { ReviewerManager } from '../classic/roles/reviewer-manager.js';
 import { MaintainerManager } from '../classic/roles/maintainer-manager.js';
 import type { Role, RoleConfig, GitlabConfig } from '../types.js';
@@ -609,6 +610,15 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         rerank: { state: 'idle', url: null, error: null, progress: null },
       }
     ) satisfies LocalModelStatus;
+  },
+
+  'localModel.logs': async (ctx, params) => {
+    const capability = params.capability as string;
+    if (capability !== 'embedding' && capability !== 'rerank') {
+      throw new Error(`无效的模型能力: ${capability}`);
+    }
+    const lines = ctx.localModelManager?.getModelLogs(capability as ModelCapability, params.lines ?? 200) ?? [];
+    return { lines };
   },
 
   // ---------- 远端模型服务 IPC Handler ----------
