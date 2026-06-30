@@ -2,12 +2,16 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { logger } from '../../../core/logger.js';
+import { getLogDir } from '../../../core/platform.js';
 import type { ModelServiceStatus } from '../../../electron/shared/service-status.js';
 
 export type ModelCapability = 'embedding' | 'rerank';
+
+const MAX_LOG_LINES = 2000;
+const LOG_TAIL_LINES = 100;
 
 export interface ModelServerOptions {
   capability: ModelCapability;
@@ -15,6 +19,8 @@ export interface ModelServerOptions {
   venvDir: string;
   /** 状态变化回调，用于本地模型管理器实时聚合状态 */
   onStatusChange?: (status: ModelServiceStatus) => void;
+  /** 启动超时（毫秒），默认 10 分钟 */
+  startupTimeoutMs?: number;
 }
 
 export async function getFreePort(): Promise<number> {
@@ -97,6 +103,8 @@ export class ModelServer {
   private progressTimer: NodeJS.Timeout | null = null;
   private expectedTotalBytes: number | null = null;
   private lastProgress: number | null = null;
+  private logLines: string[] = [];
+  private logFilePath: string | null = null;
 
   constructor(private readonly options: ModelServerOptions) {}
 
@@ -110,6 +118,10 @@ export class ModelServer {
 
   isHealthy(): boolean {
     return this.started && this.process !== null && !this.process.killed;
+  }
+
+  getLogs(maxLines = MAX_LOG_LINES): string[] {
+    return this.logLines.slice(-maxLines);
   }
 
   onExit(handler: () => void): void {
@@ -162,6 +174,7 @@ export class ModelServer {
       if (this.exitHandler) {
         child.on('exit', this.exitHandler);
       }
+      this.initLogStream();
 
       this.startProgressTracking(this.options.model);
 
@@ -169,6 +182,7 @@ export class ModelServer {
 
       child.stdout?.on('data', (chunk) => {
         const text = chunk.toString();
+        this.appendLog('stdout', text);
         stdout += text;
         this.inferStateFromLog(text);
         this.tryParseUrl(stdout, resolve);
@@ -176,6 +190,7 @@ export class ModelServer {
 
       child.stderr?.on('data', (chunk) => {
         const text = chunk.toString();
+        this.appendLog('stderr', text);
         this.stderrBuffer += text;
         this.inferStateFromLog(text);
       });
@@ -187,9 +202,9 @@ export class ModelServer {
       });
 
       child.on('exit', (code) => {
+        const tail = this.getLogs(LOG_TAIL_LINES).join('\n');
         if (!this.started) {
-          const tail = this.stderrBuffer.slice(-500);
-          this.setError(`${this.options.capability} 进程退出 code=${code}，stderr=${tail}`);
+          this.setError(`${this.options.capability} 进程退出 code=${code}\n最近日志:\n${tail}`);
         }
         const stderrSnapshot = this.stderrBuffer;
         this.cleanup();
@@ -200,11 +215,13 @@ export class ModelServer {
 
       setTimeout(() => {
         if (!this.started) {
-          this.setError(`${this.options.capability} 启动超时`);
+          const tail = this.getLogs(LOG_TAIL_LINES).join('\n');
+          const message = `${this.options.capability} 启动超时\n最近日志:\n${tail}`;
+          this.setError(message);
           this.stop();
-          reject(new Error(`${this.options.capability} 启动超时`));
+          reject(new Error(message));
         }
-      }, 600000);
+      }, this.options.startupTimeoutMs ?? 600000);
     });
   }
 
@@ -223,10 +240,44 @@ export class ModelServer {
 
   private cleanup(): void {
     this.stopProgressTracking();
+    this.logFilePath = null;
+    this.logLines = [];
     this.process = null;
     this.started = false;
     this.urlValue = null;
     this.stderrBuffer = '';
+  }
+
+  private initLogStream(): void {
+    try {
+      const logDir = getLogDir();
+      mkdirSync(logDir, { recursive: true });
+      this.logFilePath = join(logDir, `model-${this.options.capability}-${Date.now()}.log`);
+    } catch (err) {
+      logger.warn({ err, capability: this.options.capability }, '创建模型日志文件失败');
+      this.logFilePath = null;
+    }
+  }
+
+  private appendLog(source: 'stdout' | 'stderr', text: string): void {
+    const lines = text.split(/\r?\n/);
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) continue;
+      const tagged = `[${source}] ${line}`;
+      this.logLines.push(tagged);
+      if (this.logLines.length > MAX_LOG_LINES) {
+        this.logLines.shift();
+      }
+      logger.debug({ capability: this.options.capability, source, line }, '模型进程日志');
+      if (this.logFilePath) {
+        try {
+          appendFileSync(this.logFilePath, `${tagged}\n`);
+        } catch (err) {
+          logger.warn({ err, capability: this.options.capability }, '写入模型日志文件失败');
+        }
+      }
+    }
   }
 
   private startProgressTracking(modelId: string): void {

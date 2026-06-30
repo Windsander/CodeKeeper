@@ -4,13 +4,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { rmSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { ModelServer } from '../../../../src/advance/classic/memory/model-server.js';
 
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
 
+vi.mock('../../../../src/core/platform.js', () => ({
+  getLogDir: () => join(tmpdir(), 'ck-model-server-test-logs'),
+}));
+
 import { spawn } from 'node:child_process';
+
+const TEST_LOG_DIR = join(tmpdir(), 'ck-model-server-test-logs');
 
 async function waitForSpawnCall(): Promise<void> {
   const start = Date.now();
@@ -25,6 +34,8 @@ async function waitForSpawnCall(): Promise<void> {
 describe('ModelServer', () => {
   beforeEach(() => {
     vi.mocked(spawn).mockClear();
+    rmSync(TEST_LOG_DIR, { recursive: true, force: true });
+    mkdirSync(TEST_LOG_DIR, { recursive: true });
   });
 
   afterEach(() => {
@@ -236,5 +247,85 @@ describe('ModelServer', () => {
     await expect(startPromise).rejects.toThrow('embedding 进程退出');
     expect(server.getStatus().state).toBe('error');
     expect(server.getStatus().error).toContain('CUDA out of memory');
+  });
+
+  it('stdout/stderr 输出被捕获到 getLogs 并写入日志文件', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'embedding',
+      model: 'intfloat/multilingual-e5-small',
+      venvDir: '/venv',
+    });
+
+    const startPromise = server.start();
+    await waitForSpawnCall();
+
+    fake.stdout.emit('data', Buffer.from('line one\nline two'));
+    fake.stderr.emit('data', Buffer.from('error line'));
+
+    expect(server.getLogs()).toContain('[stdout] line one');
+    expect(server.getLogs()).toContain('[stdout] line two');
+    expect(server.getLogs()).toContain('[stderr] error line');
+
+    fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:12345'));
+    await startPromise;
+
+    const files = readdirSync(TEST_LOG_DIR).filter((f) => f.startsWith('model-embedding-'));
+    expect(files.length).toBe(1);
+    const content = readFileSync(join(TEST_LOG_DIR, files[0]), 'utf-8');
+    expect(content).toContain('[stdout] line one');
+    expect(content).toContain('[stderr] error line');
+  });
+
+  it('日志环形缓冲区超过 2000 行时丢弃旧行', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'embedding',
+      model: 'intfloat/multilingual-e5-small',
+      venvDir: '/venv',
+    });
+
+    server.start();
+    await waitForSpawnCall();
+
+    for (let i = 0; i < 2005; i++) {
+      fake.stdout.emit('data', Buffer.from(`log ${i}\n`));
+    }
+
+    const logs = server.getLogs();
+    expect(logs.length).toBe(2000);
+    expect(logs[0]).toContain('log 5');
+    expect(logs[logs.length - 1]).toContain('log 2004');
+  });
+
+  it('启动超时时错误信息包含最近日志', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    (fake as any).kill = vi.fn();
+    (fake as any).killed = false;
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'embedding',
+      model: 'intfloat/multilingual-e5-small',
+      venvDir: '/venv',
+      startupTimeoutMs: 100,
+    });
+
+    const startPromise = server.start();
+    await waitForSpawnCall();
+    fake.stdout.emit('data', Buffer.from('stuck at loading\n'));
+
+    await expect(startPromise).rejects.toThrow('stuck at loading');
+    expect(server.getStatus().error).toContain('stuck at loading');
   });
 });
