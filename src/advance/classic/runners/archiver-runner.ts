@@ -15,6 +15,17 @@ export interface ArchiverRunnerOptions {
 }
 
 /**
+ * 构建 Archiver 会话 ID（按 8 小时窗口粒度）
+ */
+export function buildArchiverSessionId(projectId: string, date: Date): string {
+  const yyyy = String(date.getUTCFullYear());
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  const slot = Math.floor(date.getUTCHours() / 8);
+  return `archiver-${projectId}-${yyyy}-${mm}-${dd}-${slot}`;
+}
+
+/**
  * Archiver 角色的 Runner 实现
  * 负责扫描项目文件、提炼知识、写入 EverOS
  */
@@ -64,7 +75,7 @@ export class ArchiverRunner extends BaseRoleRunner {
         projectId: project.id,
         agentId: 'archiver',
         userId: 'codekeeper-system',
-        sessionId: `archiver-${project.id}-${Date.now()}`,
+        sessionId: buildArchiverSessionId(project.id, new Date()),
       },
     });
     await memoryClient.connect().catch(() => {

@@ -24,6 +24,13 @@ import { loadState, saveState, type MrAgentState } from './shared/state-utils.js
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
+ * 构建 Maintainer 修复尝试会话 ID（按 MR 粒度）
+ */
+export function buildMaintainerMrSessionId(projectId: string, mrIid: number): string {
+  return `maintainer-${projectId}-mr-${mrIid}`;
+}
+
+/**
  * MaintainerRunner 构造选项
  */
 export interface MaintainerRunnerOptions {
@@ -57,18 +64,12 @@ export class MaintainerRunner extends BaseRoleRunner {
     const projectContext = loadProjectContext(getArchiveRoot(project));
 
     const mcpUrl = process.env.CK_EVEROS_MCP_URL ?? '';
-    const memoryClient = mcpUrl
-      ? new MemoryClient({
-          mcpUrl,
-          context: {
-            appId: 'codekeeper-advance',
-            projectId: project.id,
-            agentId: 'maintainer',
-            userId: 'codekeeper-system',
-            sessionId: `maintainer-${project.id}-${Date.now()}`,
-          },
-        })
-      : undefined;
+    const baseMemoryContext = {
+      appId: 'codekeeper-advance',
+      projectId: project.id,
+      agentId: 'maintainer',
+      userId: 'codekeeper-system',
+    };
 
     const allowedRiskLevels = maintainerConfig.autoFixRiskLevels ?? ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
     const maintainerName = maintainerConfig.maintainerName || 'CodeKeeper Maintainer';
@@ -78,16 +79,14 @@ export class MaintainerRunner extends BaseRoleRunner {
       remoteUrl: buildAuthenticatedRemoteUrl(gitlabConfig),
     });
     const fixAgent = new MrFixAgent({ worktreeManager, llmClient: this.llmClient });
-    const brain = new MaintainerBrain({
+    const actor = new MaintainerActor({ provider, fixAgent, maintainerName });
+
+    const brainOptions = {
       llmClient: this.llmClient,
       allowedRiskLevels,
       soulContent: soul.content || undefined,
       projectContext,
-      memoryClient,
-    });
-    const actor = new MaintainerActor({ provider, fixAgent, maintainerName });
-
-    await memoryClient?.connect().catch(() => undefined);
+    };
 
     const state = loadState(project);
     state.interactiveThreads ??= {};
@@ -128,6 +127,18 @@ export class MaintainerRunner extends BaseRoleRunner {
         continue;
       }
 
+      const memoryClient = mcpUrl
+        ? new MemoryClient({
+            mcpUrl,
+            context: {
+              ...baseMemoryContext,
+              sessionId: buildMaintainerMrSessionId(project.id, mr.iid),
+            },
+          })
+        : undefined;
+      await memoryClient?.connect().catch(() => undefined);
+      const brain = new MaintainerBrain({ ...brainOptions, memoryClient });
+
       console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
       discussions.forEach((d, idx) => {
         console.log(
@@ -150,6 +161,7 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       if (pendingDiscussions.length === 0) {
         console.log(`[MaintainerRunner] MR !${mr.iid} 没有待处理的 discussion，跳过`);
+        await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
 
@@ -167,10 +179,10 @@ export class MaintainerRunner extends BaseRoleRunner {
           state
         );
       }
+      await memoryClient?.disconnect().catch(() => undefined);
     }
 
     saveState(project, state);
-    await memoryClient?.disconnect().catch(() => undefined);
   }
 
   /**

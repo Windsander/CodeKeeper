@@ -18,6 +18,13 @@ import type { MergeRequest, MrDiff } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
+ * 构建 Reviewer 会话 ID（按 MR 粒度）
+ */
+export function buildReviewerSessionId(projectId: string, mrIid: number): string {
+  return `reviewer-${projectId}-mr-${mrIid}`;
+}
+
+/**
  * ReviewerRunner 构造选项
  */
 export interface ReviewerRunnerOptions {
@@ -48,30 +55,21 @@ export class ReviewerRunner extends BaseRoleRunner {
     const projectContext = loadProjectContext(getArchiveRoot(project));
 
     const mcpUrl = process.env.CK_EVEROS_MCP_URL ?? '';
-    const memoryClient = mcpUrl
-      ? new MemoryClient({
-          mcpUrl,
-          context: {
-            appId: 'codekeeper-advance',
-            projectId: project.id,
-            agentId: 'reviewer',
-            userId: 'codekeeper-system',
-            sessionId: `reviewer-${project.id}-${Date.now()}`,
-          },
-        })
-      : undefined;
+    const baseMemoryContext = {
+      appId: 'codekeeper-advance',
+      projectId: project.id,
+      agentId: 'reviewer',
+      userId: 'codekeeper-system',
+    };
 
-    const brain = new ReviewerBrain({
+    const brainOptions = {
       llmClient: this.llmClient,
       tokenBudget: 4000,
       rules: soul.content || '默认评审规则：检查代码质量、安全性、性能问题',
       soulContent: soul.content || undefined,
       projectContext,
-      memoryClient,
-    });
+    };
     const actor = new ReviewerActor({ provider });
-
-    await memoryClient?.connect().catch(() => undefined);
 
     console.log(`[ReviewerRunner] 扫描项目 ${project.name} 的 open MRs...`);
     console.log(`[ReviewerRunner] 项目 ${project.name} 使用 filter: ${JSON.stringify(config.filter ?? {})}`);
@@ -113,23 +111,36 @@ export class ReviewerRunner extends BaseRoleRunner {
         continue;
       }
 
+      const memoryClient = mcpUrl
+        ? new MemoryClient({
+            mcpUrl,
+            context: {
+              ...baseMemoryContext,
+              sessionId: buildReviewerSessionId(project.id, mr.iid),
+            },
+          })
+        : undefined;
+      await memoryClient?.connect().catch(() => undefined);
+      const brain = new ReviewerBrain({ ...brainOptions, memoryClient });
+
       let result;
       try {
         result = await brain.review(mr, diffs);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] 评审 MR !${mr.iid} 失败: ${message}`);
+        await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
 
       if (result.findings.length === 0) {
         console.log(`[ReviewerRunner] MR !${mr.iid} 无发现问题`);
+        await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
 
       await actor.postReview(mr, result);
+      await memoryClient?.disconnect().catch(() => undefined);
     }
-
-    await memoryClient?.disconnect().catch(() => undefined);
   }
 }
