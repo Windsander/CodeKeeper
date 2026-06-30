@@ -71,7 +71,11 @@ describe('ModelServer', () => {
 
     const [command, args, options] = vi.mocked(spawn).mock.calls[0];
     expect(command).toContain('infinity_emb');
-    expect(options?.env).toMatchObject({ INFINITY_NO_BETTERTRANSFORMER: '1' });
+    expect(options?.env).toMatchObject({
+      INFINITY_NO_BETTERTRANSFORMER: '1',
+      TQDM_POSITION: '-1',
+      PYTHONUNBUFFERED: '1',
+    });
     expect(args).toContain('--host');
     expect(args).toContain('127.0.0.1');
     expect(args).toContain('--engine');
@@ -161,6 +165,29 @@ describe('ModelServer', () => {
 
     expect(server.getStatus().state).toBe('running');
     expect(server.getStatus().progress).toBeNull();
+  });
+
+  it('同一 chunk 包含多个百分比时取最大值', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'embedding',
+      model: 'intfloat/multilingual-e5-small',
+      venvDir: '/venv',
+    });
+
+    const startPromise = server.start();
+    await waitForSpawnCall();
+
+    fake.stdout.emit('data', Buffer.from('Downloading:  12%|\nDownloading:  45%|\n'));
+    expect(server.getStatus().state).toBe('downloading');
+    expect(server.getStatus().progress).toBe(45);
+
+    fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:12345'));
+    await startPromise;
   });
 
   it('stdout 出现下载进度时状态变为 downloading', async () => {

@@ -90,6 +90,9 @@ export class ModelServer {
           DO_NOT_TRACK: '1',
           HF_HUB_DISABLE_TELEMETRY: '1',
           INFINITY_NO_BETTERTRANSFORMER: '1',
+          // 强制 tqdm 在非 TTY（pipe）环境下也输出进度条，且每行一个新百分比，便于解析
+          TQDM_POSITION: '-1',
+          PYTHONUNBUFFERED: '1',
         },
       });
       this.process = child;
@@ -136,7 +139,7 @@ export class ModelServer {
           this.stop();
           reject(new Error(`${this.options.capability} 启动超时`));
         }
-      }, 120000);
+      }, 600000);
     });
   }
 
@@ -188,14 +191,23 @@ export class ModelServer {
 
   private inferStateFromLog(text: string): void {
     if (this.started) return;
-    // infinity_emb 下载模型时 stdout/stderr 会输出 Downloading ... 45% 这类进度
-    if (/downloading/i.test(text) || /\d+%/.test(text)) {
-      const match = text.match(/(\d{1,3})%/);
-      this.setStatus('downloading', match ? parseInt(match[1], 10) : null);
+
+    // 优先从百分比进度条提取最大进度值（支持 45%、45.5%）
+    const percentMatches = text.match(/(\d+(?:\.\d+)?)%/g);
+    if (percentMatches) {
+      const maxProgress = Math.max(...percentMatches.map((m) => parseFloat(m)));
+      this.setStatus('downloading', Math.round(maxProgress));
       return;
     }
+
+    // 没有百分比但出现 downloading 关键字时，保持下载状态（进度未知）
+    if (/downloading/i.test(text)) {
+      this.setStatus('downloading', null);
+      return;
+    }
+
     // 模型加载阶段的关键字
-    if (/warmup|loading|loading checkpoint/i.test(text)) {
+    if (/warmup|loading|loading checkpoint|load pretrained/i.test(text)) {
       this.setStatus('loading');
     }
   }
