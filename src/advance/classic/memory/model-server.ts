@@ -178,21 +178,24 @@ export class ModelServer {
 
       this.startProgressTracking(this.options.model);
 
-      let stdout = '';
+      // 同时累积 stdout 与 stderr，infinity_emb v2 会把 Uvicorn running 输出到 stderr
+      let output = '';
 
       child.stdout?.on('data', (chunk) => {
         const text = chunk.toString();
         this.appendLog('stdout', text);
-        stdout += text;
+        output += text;
         this.inferStateFromLog(text);
-        this.tryParseUrl(stdout, resolve);
+        this.tryParseUrl(output, resolve);
       });
 
       child.stderr?.on('data', (chunk) => {
         const text = chunk.toString();
         this.appendLog('stderr', text);
         this.stderrBuffer += text;
+        output += text;
         this.inferStateFromLog(text);
+        this.tryParseUrl(output, resolve);
       });
 
       child.on('error', (err) => {
@@ -209,7 +212,7 @@ export class ModelServer {
         const stderrSnapshot = this.stderrBuffer;
         this.cleanup();
         if (!this.started) {
-          reject(new Error(`${this.options.capability} 进程退出 code=${code}, stdout=${stdout}, stderr=${stderrSnapshot}`));
+          reject(new Error(`${this.options.capability} 进程退出 code=${code}, output=${output}, stderr=${stderrSnapshot}`));
         }
       });
 

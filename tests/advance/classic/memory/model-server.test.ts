@@ -63,6 +63,27 @@ describe('ModelServer', () => {
     expect(server.isHealthy()).toBe(true);
   });
 
+  it('启动后解析 stderr 中的 URL', async () => {
+    const fake = new EventEmitter() as ChildProcess;
+    fake.stdout = new EventEmitter();
+    fake.stderr = new EventEmitter();
+    vi.mocked(spawn).mockReturnValue(fake as unknown as ChildProcess);
+
+    const server = new ModelServer({
+      capability: 'embedding',
+      model: 'intfloat/multilingual-e5-small',
+      venvDir: '/venv',
+    });
+
+    const startPromise = server.start();
+    await waitForSpawnCall();
+    fake.stderr.emit('data', Buffer.from('INFO:     Uvicorn running on http://127.0.0.1:59900 (Press CTRL+C to quit)'));
+
+    const url = await startPromise;
+    expect(url).toBe('http://127.0.0.1:59900');
+    expect(server.getStatus().state).toBe('running');
+  });
+
   it('启动时禁用 bettertransformer 并设置对应环境变量与 CLI 参数', async () => {
     const fake = new EventEmitter() as ChildProcess;
     fake.stdout = new EventEmitter();
