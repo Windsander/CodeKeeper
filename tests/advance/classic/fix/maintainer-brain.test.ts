@@ -115,4 +115,52 @@ describe('MaintainerBrain', () => {
     const prompt = complete.mock.calls[0][0] as string;
     expect(prompt).toContain('该用户偏好显式类型注解');
   });
+
+  it('从 summary 中解析多条 finding', async () => {
+    const summary = `
+- 🔴 **高** (1)
+  - \`src/a.ts:10\` · 规则 \`R1\` 问题 A<br>**建议**：改成 X
+- 🟠 **中** (1)
+  - \`src/b.ts:20\` · 规则 \`R2\` 问题 B<br>**建议**：改成 Y
+`;
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient(JSON.stringify([
+        { severity: 'HIGH', file: 'src/a.ts', line: 10, ruleId: 'R1', message: '问题 A', suggestion: '改成 X', autoFixable: true },
+        { severity: 'MEDIUM', file: 'src/b.ts', line: 20, ruleId: 'R2', message: '问题 B', suggestion: '改成 Y', autoFixable: false },
+      ])),
+    });
+    const findings = await brain.parseFindings({ body: summary, isSummary: true });
+    expect(findings).toHaveLength(2);
+    expect(findings[0].file).toBe('src/a.ts');
+  });
+
+  it('thread 评论缺少行号时使用 position 兜底', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient(JSON.stringify([
+        { severity: 'MEDIUM', message: '问题', suggestion: '建议' },
+      ])),
+    });
+    const findings = await brain.parseFindings({
+      body: '这里有个问题',
+      position: { newPath: 'src/c.ts', newLine: 5 },
+    });
+    expect(findings[0].file).toBe('src/c.ts');
+    expect(findings[0].line).toBe(5);
+  });
+
+  it('无修复点的评论返回空数组', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient(JSON.stringify([])),
+    });
+    const findings = await brain.parseFindings({ body: '👍 看起来不错' });
+    expect(findings).toHaveLength(0);
+  });
+
+  it('LLM 返回 markdown JSON 也能解析', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient('```json\n[]\n```'),
+    });
+    const findings = await brain.parseFindings({ body: 'ok' });
+    expect(findings).toHaveLength(0);
+  });
 });

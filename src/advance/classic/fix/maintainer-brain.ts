@@ -34,6 +34,12 @@ export interface MaintainerBrainOptions {
   memoryClient?: IMemoryClient;
 }
 
+export interface ParseFindingsInput {
+  body: string;
+  position?: { newPath?: string; newLine?: number; oldPath?: string; oldLine?: number };
+  isSummary?: boolean;
+}
+
 /**
  * MaintainerBrain
  *
@@ -92,6 +98,15 @@ export class MaintainerBrain {
     return decision;
   }
 
+  /**
+   * 从评论内容中解析可修复的 finding 列表
+   */
+  async parseFindings(input: ParseFindingsInput): Promise<ReviewFinding[]> {
+    const prompt = this.buildParseFindingsPrompt(input);
+    const response = await this.options.llmClient.complete(prompt, '你是代码评审解析助手。请只输出 JSON。');
+    return this.extractFindingsFromResponse(response, input.position);
+  }
+
   private async recallMemories(
     userId: string,
     finding: ReviewFinding,
@@ -139,6 +154,83 @@ export class MaintainerBrain {
     );
     const raw = await this.options.llmClient.complete(prompt, this.systemPrompt());
     return this.parseDecision(raw);
+  }
+
+  private buildParseFindingsPrompt(input: ParseFindingsInput): string {
+    const positionHint = input.position?.newPath
+      ? `该评论所在文件：${input.position.newPath}，行号：${input.position.newLine ?? '未知'}`
+      : '评论中没有文件定位信息。';
+    return `请从以下代码评审评论中提取所有可修复的代码问题，输出 JSON 数组。
+
+评论内容：
+${input.body}
+
+${positionHint}
+
+输出格式：
+[
+  {
+    "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+    "file": "文件路径",
+    "line": 123,
+    "ruleId": "可选的规则编号",
+    "message": "问题描述",
+    "suggestion": "修改建议",
+    "autoFixable": true
+  }
+]
+
+注意：
+- 如果评论里没有需要修复的代码问题，返回空数组 []。
+- 如果评论是机器人签名、系统提示或 Maintainer 自己的回复，返回空数组 []。
+- 当评论中没有明确文件路径时，使用上面提供的文件和行号作为兜底。
+- 不要输出任何 JSON 以外的内容。`;
+  }
+
+  private extractFindingsFromResponse(
+    raw: string,
+    position?: ParseFindingsInput['position']
+  ): ReviewFinding[] {
+    const cleaned = this.extractJsonFromMarkdown(raw);
+    let parsed: unknown[] = [];
+    try {
+      parsed = JSON.parse(cleaned) as unknown[];
+      if (!Array.isArray(parsed)) return [];
+    } catch {
+      return [];
+    }
+
+    return parsed
+      .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+      .map((item) => {
+        let file = String(item.file ?? '');
+        let line = Number(item.line ?? 0);
+        if ((!file || line <= 0) && position) {
+          file = file || (position.newPath ?? position.oldPath ?? '');
+          line = line > 0 ? line : (position.newLine ?? position.oldLine ?? 1);
+        }
+        return {
+          severity: this.normalizeSeverity(String(item.severity ?? 'MEDIUM')),
+          file,
+          line: line > 0 ? line : 1,
+          ruleId: item.ruleId ? String(item.ruleId) : undefined,
+          message: String(item.message ?? '未描述的问题'),
+          suggestion: String(item.suggestion ?? '请查看 discussion 详情'),
+          autoFixable: item.autoFixable === true,
+        };
+      });
+  }
+
+  private normalizeSeverity(severity: string): ReviewFinding['severity'] {
+    const valid: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+    const upper = severity.toUpperCase();
+    return valid.includes(upper as ReviewFinding['severity']) ? (upper as ReviewFinding['severity']) : 'MEDIUM';
+  }
+
+  private extractJsonFromMarkdown(text: string): string {
+    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (codeBlockMatch) return codeBlockMatch[1].trim();
+    return text.trim();
   }
 
   private systemPrompt(): string {
