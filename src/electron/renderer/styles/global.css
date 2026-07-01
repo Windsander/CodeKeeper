@@ -197,6 +197,22 @@ body {
   font-weight: 500;
 }
 
+.theme-toggle {
+  margin-top: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  font-size: 14px;
+}
+
+.theme-toggle svg {
+  flex-shrink: 0;
+}
+
 .main-content {
   flex: 1;
   padding: 32px;
