@@ -1499,10 +1499,11 @@ select.input:focus {
   overflow: hidden;
 }
 
-/* 记忆图谱页签移除主内容区 padding 和滚动条，避免露出浅色背景 */
+/* 记忆图谱页签移除主内容区 padding、滚动条和滚动条预留槽，避免露出浅色背景 */
 .main-content.memory-page-active {
   padding: 0;
   overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 /* 记忆图谱内部滚动条统一为深色主题，避免默认浅色滚动条破坏暗色界面 */
@@ -1635,9 +1636,23 @@ select.input:focus {
   color: #8b949e;
 }
 
+.memory-graph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8b949e;
+  font-size: 14px;
+  text-align: center;
+  padding: 24px;
+}
+
 .memory-graph-viewport {
   flex: 1;
   min-height: 0;
+  width: 100%;
+  height: 100%;
   position: relative;
   overflow: hidden;
 }
@@ -1650,6 +1665,8 @@ select.input:focus {
 .memory-graph-canvas-wrap {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
 }
 

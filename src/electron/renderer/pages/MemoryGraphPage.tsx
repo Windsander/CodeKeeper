@@ -51,7 +51,12 @@ export function MemoryGraphPage() {
       {loading && <div className="memory-graph-loading">Loading…</div>}
 
       <div className={`memory-graph-viewport${tab === 'graph' ? '' : ' progress-active'}`}>
-        {!loading && tab === 'graph' && <MemoryGraphView graph={graph} />}
+        {!loading && !error && stats.totalMemories === 0 && (
+          <div className="memory-graph-empty">
+            暂无记忆数据，运行一次 reviewer / maintainer / archiver 后会自动聚合到这里。
+          </div>
+        )}
+        {!loading && tab === 'graph' && stats.totalMemories > 0 && <MemoryGraphView graph={graph} />}
         {!loading && tab === 'progress' && <MemoryProgressView stats={graph.stats} graph={graph} />}
       </div>
     </div>

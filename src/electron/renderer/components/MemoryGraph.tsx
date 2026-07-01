@@ -156,8 +156,20 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     });
 
     networkRef.current = network;
+
+    // 容器大小变化时重绘并适配，避免初始尺寸为 0 导致画布空白
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        network.redraw();
+        network.fit({ animation: false });
+      });
+      resizeObserver.observe(containerRef.current);
+    }
+
     return () => {
       positionsRef.current = network.getPositions();
+      if (resizeObserver) resizeObserver.disconnect();
       network.destroy();
     };
   }, [graph, onNodeSelect]);
