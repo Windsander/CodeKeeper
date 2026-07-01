@@ -19,7 +19,6 @@ import { getArchiveRoot } from '../../types.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
-import { inferFindingFromDiscussion, inferFindingsFromReviewSummary } from './shared/finding-utils.js';
 import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
@@ -152,6 +151,10 @@ export class MaintainerRunner extends BaseRoleRunner {
           note.body.includes(maintainerSignature(maintainerName))
         );
         const isInteractive = state.interactiveThreads[d.id]?.status === 'awaiting-reply';
+        // 如果已处理过且没有新 note，且非交互式，跳过
+        const processed = state.processedDiscussions?.[d.id];
+        const hasNewNotes = processed ? d.notes.length > processed.noteCount : true;
+        if (processed && !hasNewNotes && !isInteractive) return false;
         // 如果 Maintainer 已经处理过且不在交互等待中，跳过（避免重复回复）
         if (hasMaintainerNote && !isInteractive) return false;
         return true;
@@ -199,8 +202,16 @@ export class MaintainerRunner extends BaseRoleRunner {
     maintainerName: string,
     state: MrAgentState
   ): Promise<void> {
+    const recordProcessed = () => {
+      state.processedDiscussions ??= {};
+      state.processedDiscussions[discussion.id] = { noteCount: discussion.notes.length, processedAt: Date.now() };
+    };
+
     const firstNote = discussion.notes[0];
-    if (!firstNote) return;
+    if (!firstNote) {
+      recordProcessed();
+      return;
+    }
 
     // 如果本 discussion 正在交互式等待 Reviewer 回复，先处理新回复
     const existingThread = state.interactiveThreads?.[discussion.id];
@@ -214,6 +225,7 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       if (newReviewerNotes.length === 0) {
         console.log(`[MaintainerRunner] discussion ${discussion.id} 等待 Reviewer 回复中`);
+        recordProcessed();
         return;
       }
 
@@ -226,17 +238,16 @@ export class MaintainerRunner extends BaseRoleRunner {
         maintainerName,
         state
       );
+      recordProcessed();
       return;
     }
 
     // 解析 finding
-    let findings: ReviewFinding[];
-    if (firstNote.body.includes('CodeKeeper Advance MR 评审 Agent')) {
-      findings = inferFindingsFromReviewSummary(firstNote.body);
-    } else {
-      const inferred = inferFindingFromDiscussion(firstNote.body, discussion.position);
-      findings = inferred ? [inferred] : [];
-    }
+    let findings = await brain.parseFindings({
+      body: firstNote.body,
+      position: discussion.position,
+      isSummary: firstNote.body.includes('CodeKeeper Advance MR 评审 Agent'),
+    });
 
     // 无法从 body 解析时，若 position 提供了文件路径，则构造一个 synthetic finding
     if (findings.length === 0) {
@@ -267,6 +278,7 @@ export class MaintainerRunner extends BaseRoleRunner {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[MaintainerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
         }
+        recordProcessed();
         return;
       }
     }
@@ -285,6 +297,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       );
       if (fileContent === null) {
         console.warn(`[MaintainerRunner] 读取文件 ${finding.file} 失败，跳过`);
+        recordProcessed();
         return;
       }
 
@@ -300,6 +313,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       );
 
       await actor.applyDecision(mr, discussion, finding, decision, state);
+      recordProcessed();
       return;
     }
 
@@ -364,6 +378,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       ignoredItems,
       state
     );
+    recordProcessed();
   }
 
   /**
