@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { LayoutProvider } from '../../../src/electron/renderer/contexts/LayoutContext';
 import { ProjectDetail } from '../../../src/electron/renderer/pages/ProjectDetail';
 
 describe('ProjectDetail', () => {
@@ -20,9 +21,11 @@ describe('ProjectDetail', () => {
   it('应渲染 context tab', async () => {
     render(
       <MemoryRouter initialEntries={['/project/p1']}>
-        <Routes>
-          <Route path="/project/:id" element={<ProjectDetail />} />
-        </Routes>
+        <LayoutProvider>
+          <Routes>
+            <Route path="/project/:id" element={<ProjectDetail />} />
+          </Routes>
+        </LayoutProvider>
       </MemoryRouter>
     );
     await waitFor(() => {

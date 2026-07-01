@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
+import { LayoutProvider } from '../../../../src/electron/renderer/contexts/LayoutContext';
 import { RolePage } from '../../../../src/electron/renderer/pages/RolePage';
 import '../../../../src/electron/renderer/roles/reviewer-role.js';
 import '../../../../src/electron/renderer/roles/maintainer-role.js';
@@ -26,7 +27,11 @@ beforeEach(() => {
 });
 
 async function renderAndStabilize(ui: React.ReactElement) {
-  const result = render(ui);
+  const result = render(
+    <LayoutProvider>
+      {ui}
+    </LayoutProvider>
+  );
   await act(async () => {
     for (let i = 0; i < 5; i++) {
       await Promise.resolve();

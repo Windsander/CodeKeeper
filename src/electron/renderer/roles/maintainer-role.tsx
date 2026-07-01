@@ -1,11 +1,5 @@
 import { registerRoleUI } from './role-registry.js';
-
-/**
- * Maintainer 角色图标（占位）
- */
-function MaintainerIcon() {
-  return <span>M</span>;
-}
+import { MaintainerIcon } from '../components/icons.js';
 
 const DEFAULT_MAINTAINER_SOUL = `## Maintainer Soul
 

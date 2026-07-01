@@ -1,4 +1,6 @@
 import { useMemoryGraph } from '../hooks/useMemoryGraph';
+import { PageHeader } from '../components/PageHeader';
+import { MemoryGraphIcon } from '../components/icons';
 import { MemoryGraphView } from '../components/MemoryGraphView';
 
 /**
@@ -10,21 +12,11 @@ export function MemoryGraphPage() {
 
   return (
     <div className="memory-graph-page">
-      <header className="memory-graph-header">
-        <div className="memory-graph-header-left">
-          <div className="memory-graph-logo">🧠</div>
-          <h1 className="memory-graph-title">记忆图谱</h1>
-        </div>
-
-        <div className="memory-graph-header-right">
-          <div className="memory-graph-header-stats">
-            项目 {stats.projectCount} · 总记忆 {stats.totalMemories} · 关联 {stats.totalEdges} · 活跃 {stats.activeDays} 天
-          </div>
-          <button className="memory-graph-refresh" onClick={() => refresh()} title="刷新">
-            ↻
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        icon={<MemoryGraphIcon />}
+        title="记忆图谱"
+        onRefresh={() => refresh()}
+      />
 
       {error && <div className="memory-graph-alert">加载失败: {error}</div>}
       {loading && <div className="memory-graph-loading">Loading…</div>}

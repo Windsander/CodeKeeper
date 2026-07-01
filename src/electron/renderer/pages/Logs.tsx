@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
 import { useModelLogs } from '../hooks/useModelLogs';
+import { PageLayout } from '../components/PageLayout';
+import { LogsIcon } from '../components/icons';
 import { LogViewer } from '../components/LogViewer';
 
 type LogTab = 'all' | 'reviewer' | 'maintainer' | 'localModel';
@@ -64,7 +66,7 @@ function filterModelLogLine(line: string): boolean {
  * 用于兼容历史日志中重复 key 导致 JSON.parse 丢失内容的情况
  */
 function extractFirstStringField(raw: string, field: string): string | null {
-  const pattern = new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`);
+  const pattern = new RegExp(`"${field}"\\s*:\s*"((?:[^"\\\\]|\\\\.)*)"`);
   const match = raw.match(pattern);
   if (!match) return null;
   return match[1]
@@ -88,21 +90,14 @@ function formatLogLine(line: string): string {
 
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    const time =
-      typeof parsed.time === 'number'
-        ? new Date(parsed.time).toLocaleString('zh-CN')
-        : '';
-    const levelLabel =
-      typeof parsed.level === 'number'
-        ? LEVEL_LABELS[parsed.level] ?? String(parsed.level)
-        : '';
+    const time = typeof parsed.time === 'number' ? new Date(parsed.time).toLocaleString('zh-CN') : '';
+    const levelLabel = typeof parsed.level === 'number' ? LEVEL_LABELS[parsed.level] ?? String(parsed.level) : '';
     const role = typeof parsed.role === 'string' ? `[${parsed.role}]` : '';
 
     let message = '';
     if (typeof parsed.output === 'string') {
       message = parsed.output;
     } else if (typeof parsed.msg === 'string') {
-      // 历史日志中 msg 被占位符覆盖时，尝试从原始文本提取第一次出现的 msg 值
       if (parsed.msg === '[Role Agent]' || parsed.msg === '[Scan Worker]') {
         message = extractFirstStringField(text, 'msg') ?? parsed.msg;
       } else {
@@ -118,6 +113,9 @@ function formatLogLine(line: string): string {
   }
 }
 
+/**
+ * 日志页面：采用设置页风格的卡片 + 选项卡切换。
+ */
 export function Logs() {
   const [tab, setTab] = useState<LogTab>('all');
   const [lines, setLines] = useState(100);
@@ -138,7 +136,6 @@ export function Logs() {
     refresh: refreshModel,
   } = useModelLogs(lines);
 
-  // 每 2 秒自动刷新一次日志
   useEffect(() => {
     const id = setInterval(() => {
       if (!isLocalModelTab) {
@@ -163,20 +160,21 @@ export function Logs() {
   const loading = isLocalModelTab ? modelLoading : daemonLoading;
   const error = isLocalModelTab ? modelError : daemonError;
 
-  return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">日志</h1>
-        <button className="btn btn-primary" onClick={() => { if (!isLocalModelTab) refreshDaemon(); refreshModel(); }}>刷新</button>
-      </div>
+  const refresh = () => {
+    if (!isLocalModelTab) refreshDaemon();
+    refreshModel();
+  };
 
+  return (
+    <PageLayout icon={<LogsIcon />} title="日志" onRefresh={refresh}>
       <div className="card logs-card">
         <div className="logs-card-header">
-          <div className="logs-tabs">
+          <div className="tabs">
             {TABS.map((t) => (
               <button
                 key={t.key}
-                className={`logs-tab-btn${tab === t.key ? ' active' : ''}`}
+                type="button"
+                className={`tab-btn${tab === t.key ? ' active' : ''}`}
                 onClick={() => setTab(t.key)}
               >
                 {t.label}
@@ -206,6 +204,6 @@ export function Logs() {
           )}
         </div>
       </div>
-    </div>
+    </PageLayout>
   );
 }

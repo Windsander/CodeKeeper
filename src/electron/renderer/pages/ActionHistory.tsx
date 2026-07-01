@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
+import { PageLayout } from '../components/PageLayout';
+import { HistoryIcon, UndoIcon } from '../components/icons';
 import type { ArchiveAction } from '../../shared/types';
 
 interface HistoryItem extends ArchiveAction {
@@ -25,12 +27,7 @@ export function ActionHistory() {
   const items = data || [];
 
   return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">动作历史</h1>
-        <button className="btn btn-primary" onClick={() => refresh()}>刷新</button>
-      </div>
-
+    <PageLayout icon={<HistoryIcon />} title="动作历史" onRefresh={() => refresh()}>
       <div className="card">
         <div className="form-row" style={{ maxWidth: 480 }}>
           <input
@@ -48,7 +45,7 @@ export function ActionHistory() {
           <p>归档执行后，这里会显示已应用的归档动作。</p>
         </div>
       ) : (
-        <div className="card" style={{ overflow: 'auto' }}>
+        <div className="card" style={{ overflowX: 'auto' }}>
           <table className="table">
             <thead>
               <tr>
@@ -66,21 +63,19 @@ export function ActionHistory() {
                   <td>{item.type}</td>
                   <td>{item.sourcePath}</td>
                   <td>
-                    <span
-                      className={`badge ${
-                        item.status === 'applied' ? 'badge-success' : 'badge-info'
-                      }`}
-                    >
+                    <span className={`badge ${item.status === 'applied' ? 'badge-success' : 'badge-info'}`}>
                       {item.status}
                     </span>
                   </td>
                   <td>
                     {item.status === 'applied' && (
                       <button
-                        className="btn btn-danger btn-sm"
+                        className="action-undo-btn"
                         onClick={() => handleUndo(item.id, item.projectId)}
+                        title="撤销"
+                        aria-label="撤销"
                       >
-                        撤销
+                        <UndoIcon />
                       </button>
                     )}
                   </td>
@@ -90,6 +85,6 @@ export function ActionHistory() {
           </table>
         </div>
       )}
-    </div>
+    </PageLayout>
   );
 }

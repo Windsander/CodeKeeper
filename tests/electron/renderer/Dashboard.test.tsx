@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { BrowserRouter } from 'react-router-dom';
+import { LayoutProvider } from '../../../src/electron/renderer/contexts/LayoutContext';
 import { Dashboard } from '../../../src/electron/renderer/pages/Dashboard';
 
 describe('Dashboard', () => {
@@ -16,7 +17,13 @@ describe('Dashboard', () => {
   });
 
   it('应渲染项目列表', async () => {
-    render(<BrowserRouter><Dashboard /></BrowserRouter>);
+    render(
+      <BrowserRouter>
+        <LayoutProvider>
+          <Dashboard />
+        </LayoutProvider>
+      </BrowserRouter>
+    );
     await waitFor(() => {
       expect(screen.getByText('proj')).toBeTruthy();
       expect(screen.getByText('80%')).toBeTruthy();

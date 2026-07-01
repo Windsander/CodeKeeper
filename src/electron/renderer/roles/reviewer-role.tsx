@@ -1,11 +1,5 @@
 import { registerRoleUI } from './role-registry.js';
-
-/**
- * Reviewer 角色图标（占位）
- */
-function ReviewerIcon() {
-  return <span>R</span>;
-}
+import { ReviewerIcon } from '../components/icons.js';
 
 const DEFAULT_REVIEWER_SOUL = `## MR Reviewer Soul
 

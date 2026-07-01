@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryGraphPage } from '../../../../src/electron/renderer/pages/MemoryGraphPage';
 import { ThemeProvider } from '../../../../src/electron/renderer/contexts/ThemeContext';
+import { LayoutProvider } from '../../../../src/electron/renderer/contexts/LayoutContext';
 
 vi.mock('vis-network', () => ({
   Network: vi.fn().mockImplementation(() => ({
@@ -53,7 +54,9 @@ describe('MemoryGraphPage', () => {
   it('渲染记忆图谱标题和 Graph View，不含 Progress View 切换', async () => {
     render(
       <ThemeProvider>
-        <MemoryGraphPage />
+        <LayoutProvider initialCollapsed>
+          <MemoryGraphPage />
+        </LayoutProvider>
       </ThemeProvider>
     );
     expect(screen.getByText('记忆图谱')).toBeTruthy();

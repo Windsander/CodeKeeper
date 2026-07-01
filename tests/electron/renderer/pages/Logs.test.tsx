@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Logs } from '../../../../src/electron/renderer/pages/Logs';
+import { LayoutProvider } from '../../../../src/electron/renderer/contexts/LayoutContext';
 import { useModelLogs } from '../../../../src/electron/renderer/hooks/useModelLogs';
 
 // jsdom 未实现 scrollIntoView
@@ -12,6 +13,7 @@ vi.mock('../../../../src/electron/renderer/hooks/useIpc', () => ({
     loading: false,
     error: null,
     refresh: vi.fn(),
+    mutate: vi.fn(),
   }),
 }));
 
@@ -31,7 +33,11 @@ describe('Logs', () => {
   });
 
   it('默认渲染全部日志选项卡', () => {
-    render(<Logs />);
+    render(
+      <LayoutProvider>
+        <Logs />
+      </LayoutProvider>
+    );
 
     expect(screen.getByText('全部日志')).toBeTruthy();
     expect(screen.getByText('本地模型')).toBeTruthy();
@@ -39,7 +45,11 @@ describe('Logs', () => {
   });
 
   it('切换到本地模型选项卡显示过滤后的模型日志', () => {
-    render(<Logs />);
+    render(
+      <LayoutProvider>
+        <Logs />
+      </LayoutProvider>
+    );
 
     fireEvent.click(screen.getByText('本地模型'));
 
@@ -56,7 +66,11 @@ describe('Logs', () => {
       refresh: vi.fn(),
     });
 
-    render(<Logs />);
+    render(
+      <LayoutProvider>
+        <Logs />
+      </LayoutProvider>
+    );
     fireEvent.click(screen.getByText('本地模型'));
 
     expect(screen.queryByText(/GET \/docs/)).toBeNull();

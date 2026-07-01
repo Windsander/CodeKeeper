@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
 import { MemoryGraph } from '../../../../src/electron/renderer/components/MemoryGraph';
 import { ThemeProvider } from '../../../../src/electron/renderer/contexts/ThemeContext';
+import { LayoutProvider } from '../../../../src/electron/renderer/contexts/LayoutContext';
 
 vi.mock('vis-network', () => ({
   Network: vi.fn().mockImplementation(() => ({
@@ -44,7 +45,9 @@ describe('MemoryGraph', () => {
   it('渲染画布容器', () => {
     const { container } = render(
       <ThemeProvider>
-        <MemoryGraph graph={emptyGraph} />
+        <LayoutProvider initialCollapsed>
+          <MemoryGraph graph={emptyGraph} />
+        </LayoutProvider>
       </ThemeProvider>
     );
     expect(container.querySelector('.memory-graph-canvas')).toBeTruthy();

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { showOpenDialog } from '../api/electron-api';
 import { useIpc } from '../hooks/useIpc';
+import { PageLayout } from '../components/PageLayout';
+import { DashboardIcon } from '../components/icons';
 import { ProjectCard, type ProjectSummary } from '../components/ProjectCard';
 
 export function Dashboard() {
@@ -102,12 +104,7 @@ export function Dashboard() {
   if (error) return <div className="error-message">错误: {error}</div>;
 
   return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">仪表盘</h1>
-        <button className="btn btn-primary" onClick={() => refresh()}>刷新</button>
-      </div>
-
+    <PageLayout icon={<DashboardIcon />} title="仪表盘" onRefresh={() => refresh()}>
       <div className="card">
         <h3 className="card-title">注册新项目</h3>
 
@@ -183,6 +180,6 @@ export function Dashboard() {
           ))}
         </div>
       )}
-    </div>
+    </PageLayout>
   );
 }

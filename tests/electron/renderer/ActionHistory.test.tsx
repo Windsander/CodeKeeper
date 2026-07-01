@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { LayoutProvider } from '../../../src/electron/renderer/contexts/LayoutContext';
 import { ActionHistory } from '../../../src/electron/renderer/pages/ActionHistory';
 
 describe('ActionHistory', () => {
@@ -17,12 +18,14 @@ describe('ActionHistory', () => {
   it('应渲染历史列表', async () => {
     render(
       <MemoryRouter>
-        <ActionHistory />
+        <LayoutProvider>
+          <ActionHistory />
+        </LayoutProvider>
       </MemoryRouter>
     );
     await waitFor(() => {
       expect(screen.getByText('/x.md')).toBeTruthy();
-      expect(screen.getByText('撤销')).toBeTruthy();
+      expect(screen.getByRole('button', { name: '撤销' })).toBeTruthy();
     });
   });
 });

@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useIpc } from '../hooks/useIpc';
+import { PageLayout } from '../components/PageLayout';
+import { ProjectIcon } from '../components/icons';
 import { ContextView } from '../components/ContextView';
 import { SuggestionList } from '../components/SuggestionList';
 import { invoke } from '../api/electron-api';
@@ -45,8 +46,15 @@ export function ProjectDetail() {
     }
   };
 
+  const refreshAll = () => {
+    refreshContext();
+    refreshSuggestions();
+    refreshArchiveTree();
+    refreshStatus();
+  };
+
   return (
-    <div>
+    <PageLayout icon={<ProjectIcon />} title={project?.name ?? '项目详情'} onRefresh={refreshAll}>
       <Link to="/" className="back-link">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M19 12H5" />
@@ -54,45 +62,30 @@ export function ProjectDetail() {
         </svg>
         返回仪表盘
       </Link>
-      <div className="page-header">
-        <h1 className="page-title">{project?.name ?? '项目详情'}</h1>
-        <button className="btn btn-primary" onClick={scan} disabled={scanning}>
-          {scanning ? '扫描中...' : '立即扫描'}
-        </button>
-      </div>
+
       {project && (
         <div className="card" style={{ marginBottom: 20 }}>
-          <div className="project-meta">项目路径: {project.rootPath}</div>
-          {project.archiveRoot && <div className="project-meta">归档位置: {project.archiveRoot}</div>}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
+            <div>
+              <div className="project-meta">项目路径: {project.rootPath}</div>
+              {project.archiveRoot && <div className="project-meta">归档位置: {project.archiveRoot}</div>}
+            </div>
+            <button className="btn btn-primary" onClick={scan} disabled={scanning}>
+              {scanning ? '扫描中...' : '立即扫描'}
+            </button>
+          </div>
         </div>
       )}
+
       {scanError && <div className="error-message" style={{ marginBottom: 16 }}>扫描失败: {scanError}</div>}
+
       <div className="tabs">
-        <button
-          className={`tab-btn${tab === 'context' ? ' active' : ''}`}
-          onClick={() => setTab('context')}
-        >
-          Context
-        </button>
-        <button
-          className={`tab-btn${tab === 'activity' ? ' active' : ''}`}
-          onClick={() => setTab('activity')}
-        >
-          Activity Log
-        </button>
-        <button
-          className={`tab-btn${tab === 'archive' ? ' active' : ''}`}
-          onClick={() => setTab('archive')}
-        >
-          Archive
-        </button>
-        <button
-          className={`tab-btn${tab === 'status' ? ' active' : ''}`}
-          onClick={() => setTab('status')}
-        >
-          Status
-        </button>
+        <button className={`tab-btn${tab === 'context' ? ' active' : ''}`} onClick={() => setTab('context')}>Context</button>
+        <button className={`tab-btn${tab === 'activity' ? ' active' : ''}`} onClick={() => setTab('activity')}>Activity Log</button>
+        <button className={`tab-btn${tab === 'archive' ? ' active' : ''}`} onClick={() => setTab('archive')}>Archive</button>
+        <button className={`tab-btn${tab === 'status' ? ' active' : ''}`} onClick={() => setTab('status')}>Status</button>
       </div>
+
       <div className="card">
         {tab === 'context' && context && <ContextView content={context.content} />}
         {tab === 'activity' && suggestions && <SuggestionList content={suggestions.content} />}
@@ -101,6 +94,6 @@ export function ProjectDetail() {
           <pre className="log-viewer">{JSON.stringify(status, null, 2)}</pre>
         )}
       </div>
-    </div>
+    </PageLayout>
   );
 }

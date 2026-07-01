@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useIpc } from '../hooks/useIpc';
 import { invoke } from '../api/electron-api';
+import { PageLayout } from '../components/PageLayout';
 import { Toggle } from '../components/Toggle';
 import { RoleProjectConfig } from '../components/RoleProjectConfig';
 import { getRoleUI } from '../roles/role-registry.js';
@@ -64,7 +65,7 @@ function getStatusBadges(
     badges.push({
       label: '服务未启动',
       className: 'badge badge-secondary',
-      title: '点击上方"启动服务"后，该项目的 Agent 才会开始运行',
+      title: '点击服务状态卡片中的"启动服务"后，该项目的 Agent 才会开始运行',
     });
     return badges;
   }
@@ -77,38 +78,19 @@ function getStatusBadges(
     const error = agentStatus.lastError;
     switch (error.type) {
       case 'missing-token':
-        badges.push({
-          label: 'Token 缺失',
-          className: 'badge badge-danger',
-          title: error.message,
-        });
+        badges.push({ label: 'Token 缺失', className: 'badge badge-danger', title: error.message });
         break;
       case 'invalid-token':
-        badges.push({
-          label: 'Token 过期',
-          className: 'badge badge-danger',
-          title: error.message,
-        });
+        badges.push({ label: 'Token 过期', className: 'badge badge-danger', title: error.message });
         break;
       case 'gitlab-api':
-        badges.push({
-          label: 'GitLab API 错误',
-          className: 'badge badge-warning',
-          title: error.message,
-        });
+        badges.push({ label: 'GitLab API 错误', className: 'badge badge-warning', title: error.message });
         break;
       default:
-        badges.push({
-          label: 'Agent 异常',
-          className: 'badge badge-warning',
-          title: error.message,
-        });
+        badges.push({ label: 'Agent 异常', className: 'badge badge-warning', title: error.message });
     }
   } else if (agentStatus?.lastSuccessAt) {
-    badges.push({
-      label: `上次运行于 ${formatRelativeTime(agentStatus.lastSuccessAt)}`,
-      className: 'badge badge-info',
-    });
+    badges.push({ label: `上次运行于 ${formatRelativeTime(agentStatus.lastSuccessAt)}`, className: 'badge badge-info' });
   }
 
   return badges;
@@ -152,12 +134,7 @@ function ProjectCard({
           <div className="project-meta">{project.rootPath}</div>
           <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {badges.map((badge, idx) => (
-              <span
-                key={idx}
-                className={badge.className}
-                title={badge.title}
-                style={{ cursor: badge.title ? 'help' : undefined }}
-              >
+              <span key={idx} className={badge.className} title={badge.title} style={{ cursor: badge.title ? 'help' : undefined }}>
                 {badge.label}
               </span>
             ))}
@@ -173,11 +150,7 @@ function ProjectCard({
         </div>
       </div>
       {expanded && (
-        <RoleProjectConfig
-          role={role}
-          project={project}
-          onSaved={onSaved}
-        />
+        <RoleProjectConfig role={role} project={project} onSaved={onSaved} />
       )}
     </div>
   );
@@ -245,47 +218,44 @@ export function RolePage({ role }: RolePageProps) {
   const runningProjects = status?.runningProjects ?? [];
 
   return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">{ui.displayName}</h1>
-        <div style={{ display: 'flex', gap: 12 }}>
-          <button
-            className="btn btn-primary"
-            onClick={() => runAction(status?.running ? 'stop' : 'start')}
-            disabled={busy}
-          >
-            {busy ? '处理中...' : status?.running ? '停止服务' : '启动服务'}
-          </button>
-          {status?.running && (
-            <button
-              className="btn btn-primary"
-              onClick={() => runAction('restart')}
-              disabled={busy}
-            >
-              重启服务
-            </button>
-          )}
-        </div>
-      </div>
-
+    <PageLayout icon={<ui.icon />} title={ui.displayName}>
       {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
 
       <div className="card">
-        <div className="project-meta">
-          服务状态:
-          <span
-            style={{
-              marginLeft: 8,
-              color: status?.running ? 'var(--success)' : 'var(--text-secondary)',
-              fontWeight: 600,
-            }}
-          >
-            {status?.running
-              ? `运行中（${runningProjects.length} / ${status?.enabledProjects ?? 0} 个项目）`
-              : '已停止'}
-          </span>
+        <h3 className="card-title" style={{ marginBottom: 12 }}>服务状态</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+          <div>
+            <div className="project-meta">
+              服务状态:
+              <span
+                style={{
+                  marginLeft: 8,
+                  color: status?.running ? 'var(--success)' : 'var(--text-secondary)',
+                  fontWeight: 600,
+                }}
+              >
+                {status?.running
+                  ? `运行中（${runningProjects.length} / ${status?.enabledProjects ?? 0} 个项目）`
+                  : '已停止'}
+              </span>
+            </div>
+            <div className="project-meta">已启用 {ui.displayName} 的项目数: {status?.enabledProjects ?? 0}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => runAction(status?.running ? 'stop' : 'start')}
+              disabled={busy}
+            >
+              {busy ? '处理中...' : status?.running ? '停止服务' : '启动服务'}
+            </button>
+            {status?.running && (
+              <button className="btn btn-primary" onClick={() => runAction('restart')} disabled={busy}>
+                重启服务
+              </button>
+            )}
+          </div>
         </div>
-        <div className="project-meta">已启用 {ui.displayName} 的项目数: {status?.enabledProjects ?? 0}</div>
       </div>
 
       <div className="card">
@@ -299,7 +269,7 @@ export function RolePage({ role }: RolePageProps) {
           }}
         >
           为项目配置 GitLab 仓库信息并启用 {ui.displayName} 后，该项目将加入全局服务的轮询范围。
-          点击上方"启动服务"才会为所有已启用的项目启动 Agent；服务运行中单独勾选/取消项目可实时启动或停止该项目的 Agent。
+          点击服务状态卡片右上角"启动服务"才会为所有已启用的项目启动 Agent；服务运行中单独勾选/取消项目可实时启动或停止该项目的 Agent。
         </p>
 
         {!projects || projects.length === 0 ? (
@@ -333,6 +303,6 @@ export function RolePage({ role }: RolePageProps) {
           某个项目的 Token 问题只会影响该项目的 Agent，其他项目继续正常运行。
         </p>
       </div>
-    </div>
+    </PageLayout>
   );
 }

@@ -1,12 +1,20 @@
 import { app, BrowserWindow, Menu } from 'electron';
 import { join } from 'node:path';
 
+function getIconPath(): string | undefined {
+  if (process.env.VITE_DEV_SERVER_URL || !app.isPackaged) {
+    return join(app.getAppPath(), 'src/electron/renderer/public/icon.png');
+  }
+  return join(__dirname, '../renderer/icon.png');
+}
+
 export function createMainWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
     height: 1200,
     frame: false,
     titleBarStyle: 'hidden',
+    icon: getIconPath(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

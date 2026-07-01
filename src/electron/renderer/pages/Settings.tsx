@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useIpc } from '../hooks/useIpc';
 import { useServiceStatus } from '../hooks/useServiceStatus';
+import { PageLayout } from '../components/PageLayout';
+import { SettingsIcon } from '../components/icons';
 import { ServiceStatusPanel } from '../components/ServiceStatusPanel';
 import { Dropdown } from '../components/Dropdown';
 import {
@@ -797,17 +799,7 @@ export function Settings() {
   if (loading) return <div className="loading">加载中...</div>;
 
   return (
-    <div>
-      <div className="page-header">
-        <h1 className="page-title">设置</h1>
-        <div className="page-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {saved && <span className="badge badge-success">已保存</span>}
-          <button className="btn btn-primary" onClick={save} disabled={saving}>
-            {saving ? '保存中...' : '保存'}
-          </button>
-        </div>
-      </div>
-
+    <PageLayout icon={<SettingsIcon />} title="设置">
       <div className="settings-layout">
         <div className="settings-form-column">
           <div className="card">
@@ -833,6 +825,13 @@ export function Settings() {
                 {localModelError}
               </div>
             )}
+
+            <div className="settings-save-bar">
+              {saved && <span className="badge badge-success">已保存</span>}
+              <button className="btn btn-primary" onClick={save} disabled={saving}>
+                {saving ? '保存中...' : '保存'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -844,6 +843,6 @@ export function Settings() {
           />
         </div>
       </div>
-    </div>
+    </PageLayout>
   );
 }
