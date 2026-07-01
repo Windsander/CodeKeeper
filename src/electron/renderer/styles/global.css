@@ -1491,16 +1491,17 @@ select.input:focus {
 .memory-graph-page {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 40px);
-  margin: -32px;
+  width: 100%;
+  height: 100%;
   background: #0d1117;
   color: #c9d1d9;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   overflow: hidden;
 }
 
-/* 隐藏记忆图谱页在主内容区触发的外层滚动条，避免露出浅色背景 */
-.main-content:has(.memory-graph-page) {
+/* 记忆图谱页签移除主内容区 padding 和滚动条，避免露出浅色背景 */
+.main-content.memory-page-active {
+  padding: 0;
   overflow: hidden;
 }
 

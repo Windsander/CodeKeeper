@@ -125,9 +125,10 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       }
     );
 
-    // 初次稳定后关闭物理引擎，避免无意义的持续抖动
+    // 初次稳定后关闭物理引擎，避免无意义的持续抖动，并适配视图
     network.once('stabilizationIterationsDone', () => {
       network.setOptions({ physics: { enabled: false } });
+      network.fit({ animation: false });
     });
 
     network.on('click', (params) => {
