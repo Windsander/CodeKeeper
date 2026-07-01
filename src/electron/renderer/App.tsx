@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { TitleBar } from './components/TitleBar';
+import { ThemeProvider } from './contexts/ThemeContext';
+import { ThemeToggle } from './components/ThemeToggle';
 import { Dashboard } from './pages/Dashboard';
 import { ProjectDetail } from './pages/ProjectDetail';
 import { ActionHistory } from './pages/ActionHistory';
@@ -17,7 +19,9 @@ import './roles/maintainer-role.js';
 export function App() {
   return (
     <BrowserRouter>
-      <AppContent />
+      <ThemeProvider>
+        <AppContent />
+      </ThemeProvider>
     </BrowserRouter>
   );
 }
@@ -59,6 +63,7 @@ function AppContent() {
           <NavLink to="/settings" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
             设置
           </NavLink>
+          <ThemeToggle />
         </nav>
         <main className={`main-content${isMemoryRoute ? ' memory-page-active' : ''}`}>
           <Routes>
