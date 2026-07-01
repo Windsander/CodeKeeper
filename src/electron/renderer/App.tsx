@@ -7,6 +7,7 @@ import { Logs } from './pages/Logs';
 import { Settings } from './pages/Settings';
 import { MrReview } from './pages/MrReview';
 import { Maintainer } from './pages/Maintainer';
+import { MemoryStatsPage } from './pages/MemoryStatsPage';
 import { MemoryGraphPage } from './pages/MemoryGraphPage';
 import { getAllRoleUIs } from './roles/role-registry.js';
 // 触发角色 UI 注册（side-effect）
@@ -23,7 +24,7 @@ export function App() {
 
 function AppContent() {
   const location = useLocation();
-  const isMemoryPage = location.pathname === '/memory';
+  const isMemoryRoute = location.pathname === '/memory' || location.pathname === '/memory-stats';
 
   return (
     <div className="app-layout">
@@ -36,6 +37,9 @@ function AppContent() {
           </NavLink>
           <NavLink to="/memory" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
             记忆图谱
+          </NavLink>
+          <NavLink to="/memory-stats" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
+            记忆统计
           </NavLink>
           {getAllRoleUIs().map((ui) => (
             <NavLink
@@ -56,7 +60,7 @@ function AppContent() {
             设置
           </NavLink>
         </nav>
-        <main className={`main-content${isMemoryPage ? ' memory-page-active' : ''}`}>
+        <main className={`main-content${isMemoryRoute ? ' memory-page-active' : ''}`}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/project/:id" element={<ProjectDetail />} />
@@ -66,6 +70,7 @@ function AppContent() {
             <Route path="/reviewer" element={<MrReview />} />
             <Route path="/maintainer" element={<Maintainer />} />
             <Route path="/memory" element={<MemoryGraphPage />} />
+            <Route path="/memory-stats" element={<MemoryStatsPage />} />
           </Routes>
         </main>
       </div>

@@ -29,7 +29,11 @@ vi.mock('vis-data', () => ({
 
 vi.mock('../../../../src/electron/renderer/hooks/useMemoryGraph', () => ({
   useMemoryGraph: vi.fn(() => ({
-    graph: { nodes: [], edges: [], stats: { totalNodes: 0, totalEdges: 0, totalMemories: 0, projectCount: 0, activeDays: 0, dailyGrowth: [] } },
+    graph: {
+      nodes: [{ id: 'system', label: 'System', group: 'system' }],
+      edges: [],
+      stats: { totalNodes: 1, totalEdges: 0, totalMemories: 0, projectCount: 1, activeDays: 0, dailyGrowth: [] },
+    },
     loading: false,
     error: null,
     refresh: vi.fn(),
@@ -37,9 +41,10 @@ vi.mock('../../../../src/electron/renderer/hooks/useMemoryGraph', () => ({
 }));
 
 describe('MemoryGraphPage', () => {
-  it('渲染两个页签', () => {
+  it('渲染记忆图谱标题和 Graph View，不含 Progress View 切换', () => {
     render(<MemoryGraphPage />);
-    expect(screen.getByText('Graph View')).toBeTruthy();
-    expect(screen.getByText('Progress View')).toBeTruthy();
+    expect(screen.getByText('记忆图谱')).toBeTruthy();
+    expect(screen.queryByText('Graph View')).toBeNull();
+    expect(screen.queryByText('Progress View')).toBeNull();
   });
 });
