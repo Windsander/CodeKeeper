@@ -1,24 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
+import { useTheme } from '../contexts/ThemeContext.js';
 import type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from '../../shared/types.js';
 
-interface MemoryGraphProps {
-  graph: MemoryGraph;
-  onNodeSelect?: (node: MemoryGraphNode) => void;
-}
-
-const GROUP_COLORS: Record<string, string> = {
-  system: '#d29922',
-  project: '#a371f7',
-  topic: '#58a6ff',
-  episode: '#3fb950',
-  agent_case: '#238636',
-  agent_skill: '#d29922',
-  profile: '#ff6b9d',
-  agent: '#f78166',
-  user: '#ff6b9d',
-};
+const GROUP_KEYS = ['system', 'project', 'topic', 'episode', 'agent_case', 'agent_skill', 'profile', 'agent', 'user'] as const;
+type GroupKey = (typeof GROUP_KEYS)[number];
 
 const GROUP_LABELS: Record<string, string> = {
   system: 'System',
@@ -31,6 +18,25 @@ const GROUP_LABELS: Record<string, string> = {
   agent: 'Agent',
   user: 'User',
 };
+
+/**
+ * 从当前主题的 CSS 变量读取节点颜色。
+ */
+function readGraphColors(): Record<GroupKey, string> {
+  const style = getComputedStyle(document.documentElement);
+  const get = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  return {
+    system: get('--graph-node-system', '#4f46e5'),
+    project: get('--graph-node-project', '#059669'),
+    topic: get('--graph-node-topic', '#2563eb'),
+    episode: get('--graph-node-episode', '#d97706'),
+    agent_case: get('--graph-node-agent_case', '#15803d'),
+    agent_skill: get('--graph-node-agent_skill', '#b45309'),
+    profile: get('--graph-node-profile', '#db2777'),
+    agent: get('--graph-node-agent', '#ea580c'),
+    user: get('--graph-node-user', '#db2777'),
+  };
+}
 
 function edgeKey(e: MemoryGraphEdge): string {
   return `${e.from}>${e.to}|${e.label ?? ''}`;
@@ -51,31 +57,45 @@ function graphsEqual(a: MemoryGraph, b: MemoryGraph): boolean {
   return true;
 }
 
+interface MemoryGraphProps {
+  graph: MemoryGraph;
+  onNodeSelect?: (node: MemoryGraphNode) => void;
+}
+
 /**
  * 使用 vis-network 渲染力导向记忆图（EverOS 风格）
  */
 export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
+  const { theme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
+  const nodesRef = useRef<DataSet | null>(null);
   const graphRef = useRef(graph);
   const stableGraph = useMemo(() => {
     if (graphsEqual(graphRef.current, graph)) return graphRef.current;
     graphRef.current = graph;
     return graph;
   }, [graph]);
-  const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
+  const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_LABELS)));
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    const colors = readGraphColors();
+    const style = getComputedStyle(document.documentElement);
+    const textPrimary = style.getPropertyValue('--graph-text-primary').trim() || '#1f2937';
+    const edgeColor = style.getPropertyValue('--graph-edge').trim() || '#9ca3af';
+    const edgeHighlight = style.getPropertyValue('--graph-edge-highlight').trim() || '#2563eb';
+
     const nodes = new DataSet(
       stableGraph.nodes.map((n) => ({
         ...n,
-        color: GROUP_COLORS[n.group],
+        color: colors[n.group as GroupKey],
         hidden: !activeGroups.has(n.group),
       }))
     );
+    nodesRef.current = nodes;
     const edges = new DataSet(stableGraph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` })));
 
     const network = new Network(
@@ -85,12 +105,12 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
         nodes: {
           shape: 'dot',
           size: 18,
-          font: { color: '#c9d1d9', size: 13, face: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif' },
+          font: { color: textPrimary, size: 13, face: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif' },
           borderWidth: 2,
           shadow: { enabled: true, color: 'rgba(0,0,0,0.5)', size: 10, x: 0, y: 0 },
         },
         edges: {
-          color: { color: '#30363d', highlight: '#58a6ff', hover: '#58a6ff' },
+          color: { color: edgeColor, highlight: edgeHighlight, hover: edgeHighlight },
           width: 1,
           smooth: { enabled: true, type: 'continuous', roundness: 0.5 },
         },
@@ -134,8 +154,35 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     });
 
     networkRef.current = network;
-    return () => network.destroy();
+    return () => {
+      network.destroy();
+      nodesRef.current = null;
+    };
   }, [stableGraph, onNodeSelect, activeGroups]);
+
+  /**
+   * 主题变化时更新节点颜色与网络选项，不重建 Network。
+   */
+  useEffect(() => {
+    const network = networkRef.current;
+    const nodes = nodesRef.current;
+    if (!network || !nodes) return;
+
+    const colors = readGraphColors();
+    const style = getComputedStyle(document.documentElement);
+    const textPrimary = style.getPropertyValue('--graph-text-primary').trim() || '#1f2937';
+    const edgeColor = style.getPropertyValue('--graph-edge').trim() || '#9ca3af';
+    const edgeHighlight = style.getPropertyValue('--graph-edge-highlight').trim() || '#2563eb';
+
+    nodes.forEach((node) => {
+      nodes.update({ id: node.id, color: colors[node.group as GroupKey] });
+    });
+
+    network.setOptions({
+      nodes: { font: { color: textPrimary } },
+      edges: { color: { color: edgeColor, highlight: edgeHighlight, hover: edgeHighlight } },
+    });
+  }, [theme]);
 
   const toggleGroup = (group: string) => {
     setActiveGroups((prev) => {
@@ -150,6 +197,8 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const zoomOut = () => networkRef.current?.moveTo({ scale: (networkRef.current.getScale() ?? 1) / 1.2 });
   const fit = () => networkRef.current?.fit({ animation: true });
 
+  const colors = readGraphColors();
+
   return (
     <div className="memory-graph-canvas-wrap">
       <div className="memory-graph-bg" />
@@ -158,7 +207,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       <div className="memory-graph-filter">
         <div className="memory-graph-filter-title">Filter by type</div>
         <div className="memory-graph-filter-chips">
-          {Object.entries(GROUP_COLORS).map(([group, color]) => (
+          {Object.entries(colors).map(([group, color]) => (
             <button
               key={group}
               className={`memory-graph-filter-chip${activeGroups.has(group) ? ' active' : ''}`}
@@ -175,7 +224,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       <div className="memory-graph-legend">
         {Object.entries(GROUP_LABELS).map(([group, label]) => (
           <div key={group} className="memory-graph-legend-item">
-            <span className="memory-graph-legend-dot" style={{ backgroundColor: GROUP_COLORS[group] }} />
+            <span className="memory-graph-legend-dot" style={{ backgroundColor: colors[group as GroupKey] }} />
             {label}
           </div>
         ))}
@@ -194,7 +243,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
         >
           <span
             className="memory-graph-tooltip-type"
-            style={{ backgroundColor: GROUP_COLORS[tooltip.node.group], color: '#0d1117' }}
+            style={{ backgroundColor: colors[tooltip.node.group as GroupKey], color: 'var(--graph-bg)' }}
           >
             {GROUP_LABELS[tooltip.node.group]}
           </span>

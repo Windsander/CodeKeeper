@@ -23,6 +23,31 @@
   --scrollbar-width: 8px;
   --scrollbar-thumb: rgba(0, 0, 0, 0.15);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.25);
+
+  /* 记忆图谱 */
+  --graph-bg: #f5f7fa;
+  --graph-bg-gradient-1: #e0e7ff;
+  --graph-bg-gradient-2: #dbeafe;
+  --graph-header-bg: rgba(255, 255, 255, 0.95);
+  --graph-header-border: #e5e7eb;
+  --graph-text-primary: #1f2937;
+  --graph-text-secondary: #6b7280;
+  --graph-panel-bg: rgba(255, 255, 255, 0.98);
+  --graph-panel-border: #e5e7eb;
+  --graph-tooltip-bg: rgba(255, 255, 255, 0.98);
+  --graph-tooltip-border: #e5e7eb;
+  --graph-chip-bg: rgba(255, 255, 255, 0.9);
+  --graph-node-system: #4f46e5;
+  --graph-node-project: #059669;
+  --graph-node-topic: #2563eb;
+  --graph-node-episode: #d97706;
+  --graph-node-agent_case: #15803d;
+  --graph-node-agent_skill: #b45309;
+  --graph-node-profile: #db2777;
+  --graph-node-agent: #ea580c;
+  --graph-node-user: #db2777;
+  --graph-edge: #9ca3af;
+  --graph-edge-highlight: #2563eb;
 }
 
 [data-theme='dark'] {
@@ -42,6 +67,31 @@
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.4);
   --scrollbar-thumb: rgba(255, 255, 255, 0.15);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
+
+  /* 记忆图谱 */
+  --graph-bg: #0d1117;
+  --graph-bg-gradient-1: #1a1040;
+  --graph-bg-gradient-2: #0f2027;
+  --graph-header-bg: rgba(13, 17, 23, 0.95);
+  --graph-header-border: #30363d;
+  --graph-text-primary: #f0f6fc;
+  --graph-text-secondary: #8b949e;
+  --graph-panel-bg: rgba(13, 17, 23, 0.98);
+  --graph-panel-border: #30363d;
+  --graph-tooltip-bg: rgba(22, 27, 34, 0.98);
+  --graph-tooltip-border: #30363d;
+  --graph-chip-bg: rgba(22, 27, 34, 0.9);
+  --graph-node-system: #d29922;
+  --graph-node-project: #a371f7;
+  --graph-node-topic: #58a6ff;
+  --graph-node-episode: #3fb950;
+  --graph-node-agent_case: #238636;
+  --graph-node-agent_skill: #d29922;
+  --graph-node-profile: #ff6b9d;
+  --graph-node-agent: #f78166;
+  --graph-node-user: #ff6b9d;
+  --graph-edge: #30363d;
+  --graph-edge-highlight: #58a6ff;
 }
 
 /* iOS 风格滚动条：细、透明轨道、悬浮显示，不挤压内容 */
@@ -1537,8 +1587,8 @@ select.input:focus {
   flex-direction: column;
   width: 100%;
   height: 100%;
-  background: #0d1117;
-  color: #c9d1d9;
+  background: var(--graph-bg);
+  color: var(--graph-text-secondary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   overflow: hidden;
 }
@@ -1550,23 +1600,23 @@ select.input:focus {
   scrollbar-gutter: auto;
 }
 
-/* 记忆图谱内部滚动条统一为深色主题，避免默认浅色滚动条破坏暗色界面 */
+/* 记忆图谱内部滚动条跟随主题 */
 .memory-graph-page ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 .memory-graph-page ::-webkit-scrollbar-track {
-  background: #0d1117;
+  background: var(--graph-bg);
 }
 
 .memory-graph-page ::-webkit-scrollbar-thumb {
-  background: #30363d;
+  background: var(--graph-panel-border);
   border-radius: 4px;
 }
 
 .memory-graph-page ::-webkit-scrollbar-thumb:hover {
-  background: #484f58;
+  background: var(--graph-edge);
 }
 
 .memory-graph-header {
@@ -1574,8 +1624,8 @@ select.input:focus {
   align-items: center;
   gap: 16px;
   padding: 12px 24px;
-  border-bottom: 1px solid #30363d;
-  background: rgba(13, 17, 23, 0.95);
+  border-bottom: 1px solid var(--graph-header-border);
+  background: var(--graph-header-bg);
   backdrop-filter: blur(10px);
   flex-shrink: 0;
   z-index: 100;
@@ -1595,21 +1645,21 @@ select.input:focus {
   align-items: center;
   justify-content: center;
   font-size: 20px;
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--graph-panel-bg);
+  border: 1px solid var(--graph-panel-border);
   border-radius: 8px;
 }
 
 .memory-graph-title {
   font-size: 18px;
   font-weight: 600;
-  color: #f0f6fc;
+  color: var(--graph-text-primary);
   margin: 0;
 }
 
 .memory-graph-view-toggle {
   display: flex;
-  background: #161b22;
+  background: var(--graph-panel-bg);
   border-radius: 8px;
   padding: 4px;
   gap: 4px;
@@ -1620,7 +1670,7 @@ select.input:focus {
   padding: 8px 16px;
   border: none;
   background: transparent;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   font-size: 13px;
   font-weight: 500;
   border-radius: 6px;
@@ -1628,11 +1678,11 @@ select.input:focus {
   transition: all 0.2s;
 }
 
-.memory-graph-view-btn:hover { color: #c9d1d9; }
+.memory-graph-view-btn:hover { color: var(--graph-text-primary); }
 
 .memory-graph-view-btn.active {
-  background: #30363d;
-  color: #f0f6fc;
+  background: var(--graph-panel-border);
+  color: var(--graph-text-primary);
 }
 
 .memory-graph-header-right {
@@ -1644,15 +1694,15 @@ select.input:focus {
 
 .memory-graph-header-stats {
   font-size: 13px;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
 }
 
 .memory-graph-refresh {
   width: 32px;
   height: 32px;
-  border: 1px solid #30363d;
-  background: #161b22;
-  color: #c9d1d9;
+  border: 1px solid var(--graph-panel-border);
+  background: var(--graph-panel-bg);
+  color: var(--graph-text-primary);
   border-radius: 8px;
   cursor: pointer;
   display: flex;
@@ -1663,8 +1713,8 @@ select.input:focus {
 }
 
 .memory-graph-refresh:hover {
-  background: #30363d;
-  color: #f0f6fc;
+  background: var(--graph-panel-border);
+  color: var(--graph-text-primary);
 }
 
 .memory-graph-alert {
@@ -1677,7 +1727,7 @@ select.input:focus {
 .memory-graph-loading {
   padding: 40px;
   text-align: center;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
 }
 
 .memory-graph-empty {
@@ -1686,7 +1736,7 @@ select.input:focus {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   font-size: 14px;
   text-align: center;
   padding: 24px;
@@ -1697,11 +1747,11 @@ select.input:focus {
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(13, 17, 23, 0.9);
-  border: 1px solid #30363d;
+  background: var(--graph-panel-bg);
+  border: 1px solid var(--graph-panel-border);
   border-radius: 8px;
   padding: 10px 16px;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   font-size: 13px;
   pointer-events: none;
   z-index: 70;
@@ -1733,9 +1783,9 @@ select.input:focus {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse at 20% 20%, #1a1040 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 80%, #0f2027 0%, transparent 50%),
-    radial-gradient(ellipse at 50% 50%, #0d1117 0%, #0d1117 100%);
+    radial-gradient(ellipse at 20% 20%, var(--graph-bg-gradient-1) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, var(--graph-bg-gradient-2) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 50%, var(--graph-bg) 0%, var(--graph-bg) 100%);
   z-index: 0;
 }
 
@@ -1750,9 +1800,9 @@ select.input:focus {
   position: absolute;
   top: 20px;
   left: 20px;
-  background: rgba(22, 27, 34, 0.9);
+  background: var(--graph-chip-bg);
   backdrop-filter: blur(10px);
-  border: 1px solid #30363d;
+  border: 1px solid var(--graph-panel-border);
   border-radius: 12px;
   padding: 14px;
   z-index: 50;
@@ -1761,7 +1811,7 @@ select.input:focus {
 
 .memory-graph-filter-title {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 10px;
@@ -1801,9 +1851,9 @@ select.input:focus {
   position: absolute;
   bottom: 20px;
   left: 20px;
-  background: rgba(22, 27, 34, 0.9);
+  background: var(--graph-chip-bg);
   backdrop-filter: blur(10px);
-  border: 1px solid #30363d;
+  border: 1px solid var(--graph-panel-border);
   border-radius: 12px;
   padding: 14px;
   font-size: 12px;
@@ -1815,7 +1865,7 @@ select.input:focus {
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
-  color: #c9d1d9;
+  color: var(--graph-text-primary);
 }
 
 .memory-graph-legend-item:last-child { margin-bottom: 0; }
@@ -1840,11 +1890,11 @@ select.input:focus {
 .memory-graph-zoom-btn {
   width: 36px;
   height: 36px;
-  border: 1px solid #30363d;
-  background: rgba(22, 27, 34, 0.9);
+  border: 1px solid var(--graph-panel-border);
+  background: var(--graph-chip-bg);
   backdrop-filter: blur(10px);
   border-radius: 8px;
-  color: #c9d1d9;
+  color: var(--graph-text-primary);
   font-size: 18px;
   cursor: pointer;
   transition: all 0.2s;
@@ -1854,19 +1904,19 @@ select.input:focus {
 }
 
 .memory-graph-zoom-btn:hover {
-  background: #30363d;
-  color: #f0f6fc;
+  background: var(--graph-panel-border);
+  color: var(--graph-text-primary);
 }
 
 .memory-graph-debug {
   position: absolute;
   top: 20px;
   right: 20px;
-  background: rgba(13, 17, 23, 0.9);
-  border: 1px solid #30363d;
+  background: var(--graph-panel-bg);
+  border: 1px solid var(--graph-panel-border);
   border-radius: 8px;
   padding: 8px 12px;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   font-size: 11px;
   font-family: monospace;
   z-index: 55;
@@ -1876,9 +1926,9 @@ select.input:focus {
 /* ========== Tooltip ========== */
 .memory-graph-tooltip {
   position: fixed;
-  background: rgba(22, 27, 34, 0.98);
+  background: var(--graph-tooltip-bg);
   backdrop-filter: blur(10px);
-  border: 1px solid #30363d;
+  border: 1px solid var(--graph-tooltip-border);
   border-radius: 12px;
   padding: 14px;
   max-width: 300px;
@@ -1890,12 +1940,12 @@ select.input:focus {
 .memory-graph-tooltip h3 {
   font-size: 15px;
   margin: 8px 0 6px;
-  color: #f0f6fc;
+  color: var(--graph-text-primary);
 }
 
 .memory-graph-tooltip p {
   font-size: 12px;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   line-height: 1.5;
   margin: 0;
 }
@@ -1912,9 +1962,9 @@ select.input:focus {
 .memory-graph-tooltip-meta {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid #30363d;
+  border-top: 1px solid var(--graph-tooltip-border);
   font-size: 11px;
-  color: #6e7681;
+  color: var(--graph-text-secondary);
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
@@ -1927,8 +1977,8 @@ select.input:focus {
   right: 0;
   width: 380px;
   height: 100%;
-  background: rgba(13, 17, 23, 0.98);
-  border-left: 1px solid #30363d;
+  background: var(--graph-panel-bg);
+  border-left: 1px solid var(--graph-panel-border);
   overflow: hidden;
   transform: translateX(100%);
   transition: transform 0.3s ease;
@@ -1946,9 +1996,9 @@ select.input:focus {
   width: 32px;
   height: 32px;
   border: none;
-  background: #21262d;
+  background: var(--graph-panel-border);
   border-radius: 8px;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1959,8 +2009,8 @@ select.input:focus {
 }
 
 .memory-node-panel-close:hover {
-  background: #30363d;
-  color: #f0f6fc;
+  background: var(--graph-panel-border);
+  color: var(--graph-text-primary);
 }
 
 .memory-node-panel-content {
@@ -1988,14 +2038,14 @@ select.input:focus {
 .memory-node-panel-title {
   font-size: 22px;
   font-weight: 600;
-  color: #f0f6fc;
+  color: var(--graph-text-primary);
   margin: 0 0 4px;
   line-height: 1.3;
 }
 
 .memory-node-panel-subtitle {
   font-size: 13px;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   margin: 0;
 }
 
@@ -2005,7 +2055,7 @@ select.input:focus {
 
 .memory-node-panel-section-title {
   font-size: 11px;
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 12px;
@@ -2016,9 +2066,10 @@ select.input:focus {
 
 .memory-node-panel-description {
   font-size: 14px;
-  color: #c9d1d9;
+  color: var(--graph-text-primary);
   line-height: 1.6;
-  background: #161b22;
+  background: var(--graph-panel-bg);
+  border: 1px solid var(--graph-panel-border);
   border-radius: 8px;
   padding: 14px;
   word-break: break-word;
@@ -2028,7 +2079,8 @@ select.input:focus {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: #161b22;
+  background: var(--graph-panel-bg);
+  border: 1px solid var(--graph-panel-border);
   border-radius: 8px;
   padding: 14px;
 }
@@ -2037,11 +2089,11 @@ select.input:focus {
   display: flex;
   justify-content: space-between;
   font-size: 13px;
-  color: #c9d1d9;
+  color: var(--graph-text-primary);
 }
 
 .memory-node-panel-meta-label {
-  color: #8b949e;
+  color: var(--graph-text-secondary);
 }
 
 .memory-node-panel-connections {
@@ -2055,19 +2107,20 @@ select.input:focus {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: #161b22;
+  background: var(--graph-panel-bg);
+  border: 1px solid var(--graph-panel-border);
   border-radius: 8px;
   font-size: 13px;
   cursor: pointer;
   transition: all 0.2s;
   border: none;
-  color: #c9d1d9;
+  color: var(--graph-text-primary);
   text-align: left;
   width: 100%;
 }
 
 .memory-node-panel-connection:hover {
-  background: #21262d;
+  background: var(--graph-panel-border);
   transform: translateX(4px);
 }
 
@@ -2086,9 +2139,9 @@ select.input:focus {
 }
 
 .memory-node-panel-connection-label {
-  color: #8b949e;
+  color: var(--graph-text-secondary);
   font-size: 11px;
-  background: #21262d;
+  background: var(--graph-panel-border);
   padding: 2px 8px;
   border-radius: 4px;
   flex-shrink: 0;
@@ -2114,15 +2167,15 @@ select.input:focus {
 }
 
 .memory-progress-stat-card {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 20px;
 }
 
 .memory-progress-stat-label {
   font-size: 12px;
-  color: #8b949e;
+  color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 8px;
@@ -2131,20 +2184,20 @@ select.input:focus {
 .memory-progress-stat-value {
   font-size: 32px;
   font-weight: 600;
-  color: #f0f6fc;
+  color: var(--text-primary);
 }
 
 .memory-progress-stat-trend {
   font-size: 12px;
-  color: #3fb950;
+  color: var(--success);
   margin-top: 4px;
 }
 
-.memory-progress-stat-trend.neutral { color: #8b949e; }
+.memory-progress-stat-trend.neutral { color: var(--text-secondary); }
 
 .memory-progress-card {
-  background: #161b22;
-  border: 1px solid #30363d;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
   border-radius: 12px;
   padding: 24px;
   margin-bottom: 24px;
@@ -2153,7 +2206,7 @@ select.input:focus {
 .memory-progress-card-title {
   font-size: 14px;
   font-weight: 600;
-  color: #f0f6fc;
+  color: var(--text-primary);
   margin-bottom: 20px;
   display: flex;
   align-items: center;
@@ -2186,7 +2239,7 @@ select.input:focus {
 
 .memory-progress-bar {
   width: 100%;
-  background: linear-gradient(to top, #238636, #3fb950);
+  background: linear-gradient(to top, var(--success), #34d399);
   border-radius: 4px 4px 0 0;
   min-height: 4px;
   transition: height 0.3s ease;
@@ -2200,12 +2253,12 @@ select.input:focus {
   bottom: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
   padding: 4px 8px;
   border-radius: 6px;
   font-size: 11px;
-  color: #c9d1d9;
+  color: var(--text-primary);
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
@@ -2216,7 +2269,7 @@ select.input:focus {
 
 .memory-progress-bar-label {
   font-size: 10px;
-  color: #8b949e;
+  color: var(--text-secondary);
   margin-top: 8px;
 }
 
@@ -2232,7 +2285,7 @@ select.input:focus {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: #30363d;
+  background: var(--border-color);
 }
 
 .memory-progress-day {
@@ -2248,15 +2301,15 @@ select.input:focus {
   top: 4px;
   width: 16px;
   height: 16px;
-  background: #238636;
-  border: 3px solid #0d1117;
+  background: var(--success);
+  border: 3px solid var(--main-bg);
   border-radius: 50%;
   z-index: 1;
 }
 
 .memory-progress-dot.today {
-  background: #58a6ff;
-  box-shadow: 0 0 12px rgba(88, 166, 255, 0.4);
+  background: var(--primary);
+  box-shadow: 0 0 12px rgba(79, 70, 229, 0.4);
 }
 
 .memory-progress-day-header {
@@ -2269,13 +2322,13 @@ select.input:focus {
 .memory-progress-day-date {
   font-size: 14px;
   font-weight: 600;
-  color: #f0f6fc;
+  color: var(--text-primary);
 }
 
 .memory-progress-day-badge {
   font-size: 11px;
-  color: #8b949e;
-  background: #21262d;
+  color: var(--text-secondary);
+  background: var(--main-bg);
   padding: 2px 10px;
   border-radius: 9999px;
 }
@@ -2287,23 +2340,23 @@ select.input:focus {
 }
 
 .memory-progress-item {
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--main-bg);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 12px;
-  border-left: 3px solid #58a6ff;
+  border-left: 3px solid var(--primary);
 }
 
 .memory-progress-item-title {
   font-size: 13px;
-  color: #f0f6fc;
+  color: var(--text-primary);
   font-weight: 500;
   margin-bottom: 4px;
 }
 
 .memory-progress-item-desc {
   font-size: 12px;
-  color: #8b949e;
+  color: var(--text-secondary);
   line-height: 1.5;
 }
 
