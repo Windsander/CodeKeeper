@@ -60,14 +60,14 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const nodesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
   const edgesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
   const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
-  const lastGraphRef = useRef<MemoryGraph>(graph);
+  const lastGraphRef = useRef<MemoryGraph | null>(null);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
 
   // 仅在图谱结构真正变化时重建 Network，并保留已有节点位置
   useEffect(() => {
     if (!containerRef.current) return;
-    if (graphsEqual(lastGraphRef.current, graph)) return;
+    if (lastGraphRef.current && graphsEqual(lastGraphRef.current, graph)) return;
     lastGraphRef.current = graph;
 
     // 销毁旧网络前记录位置

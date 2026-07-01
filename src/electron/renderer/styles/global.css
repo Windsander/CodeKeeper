@@ -1499,6 +1499,11 @@ select.input:focus {
   overflow: hidden;
 }
 
+/* 隐藏记忆图谱页在主内容区触发的外层滚动条，避免露出浅色背景 */
+.main-content:has(.memory-graph-page) {
+  overflow: hidden;
+}
+
 /* 记忆图谱内部滚动条统一为深色主题，避免默认浅色滚动条破坏暗色界面 */
 .memory-graph-page ::-webkit-scrollbar {
   width: 8px;
