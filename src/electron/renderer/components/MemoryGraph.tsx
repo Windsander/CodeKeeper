@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import { Network } from 'vis-network';
-import { DataSet } from 'vis-data';
 import type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from '../../shared/types.js';
 
 interface MemoryGraphProps {
@@ -57,13 +56,13 @@ function graphsEqual(a: MemoryGraph, b: MemoryGraph): boolean {
 export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
-  const nodesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
-  const edgesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
+  const nodesRef = useRef<MemoryGraphNode[] | null>(null);
+  const edgesRef = useRef<MemoryGraphEdge[] | null>(null);
   const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const lastGraphRef = useRef<MemoryGraph | null>(null);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
-  const [debugInfo, setDebugInfo] = useState({ nodeCount: 0, width: 0, height: 0, networkCreated: false, positions: '' });
+  const [debugInfo, setDebugInfo] = useState({ nodeCount: 0, width: 0, height: 0, networkCreated: false, positions: '', error: '' });
 
   // 仅在图谱结构真正变化时重建 Network，并保留已有节点位置
   useEffect(() => {
@@ -73,7 +72,11 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
 
     // 销毁旧网络前记录位置
     if (networkRef.current) {
-      positionsRef.current = networkRef.current.getPositions();
+      try {
+        positionsRef.current = networkRef.current.getPositions();
+      } catch {
+        // 旧网络未就绪时忽略
+      }
       networkRef.current.destroy();
       networkRef.current = null;
       nodesRef.current = null;
@@ -81,53 +84,57 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     }
 
     const rect = containerRef.current.getBoundingClientRect();
-    setDebugInfo((prev) => ({ ...prev, nodeCount: graph.nodes.length, width: rect.width, height: rect.height }));
+    setDebugInfo((prev) => ({ ...prev, nodeCount: graph.nodes.length, width: rect.width, height: rect.height, error: '' }));
 
-    const nodes = new DataSet(
-      graph.nodes.map((n) => {
-        const pos = positionsRef.current[n.id];
-        return {
-          ...n,
-          color: GROUP_COLORS[n.group],
-          hidden: !activeGroups.has(n.group),
-          x: pos?.x,
-          y: pos?.y,
-        };
-      })
-    );
-    const edges = new DataSet(graph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` })));
+    const nodes = graph.nodes.map((n) => {
+      const pos = positionsRef.current[n.id];
+      return {
+        ...n,
+        color: GROUP_COLORS[n.group],
+        hidden: !activeGroups.has(n.group),
+        x: pos?.x,
+        y: pos?.y,
+      };
+    });
+    const edges = graph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` }));
     nodesRef.current = nodes;
     edgesRef.current = edges;
 
-    const network = new Network(
-      containerRef.current,
-      { nodes, edges },
-      {
-        nodes: {
-          shape: 'dot',
-          size: 18,
-          font: { color: '#c9d1d9', size: 13, face: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif' },
-          borderWidth: 2,
-          shadow: { enabled: true, color: 'rgba(0,0,0,0.5)', size: 10, x: 0, y: 0 },
-        },
-        edges: {
-          color: { color: '#30363d', highlight: '#58a6ff', hover: '#58a6ff' },
-          width: 1,
-          smooth: { enabled: true, type: 'continuous', roundness: 0.5 },
-        },
-        physics: {
-          barnesHut: {
-            gravitationalConstant: -4000,
-            centralGravity: 0.3,
-            springLength: 180,
-            springConstant: 0.04,
-            damping: 0.09,
+    let network: Network;
+    try {
+      network = new Network(
+        containerRef.current,
+        { nodes, edges },
+        {
+          nodes: {
+            shape: 'dot',
+            size: 18,
+            font: { color: '#c9d1d9', size: 13, face: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif' },
+            borderWidth: 2,
+            shadow: { enabled: true, color: 'rgba(0,0,0,0.5)', size: 10, x: 0, y: 0 },
           },
-          stabilization: { iterations: 200 },
-        },
-        interaction: { hover: true, tooltipDelay: 200 },
-      }
-    );
+          edges: {
+            color: { color: '#30363d', highlight: '#58a6ff', hover: '#58a6ff' },
+            width: 1,
+            smooth: { enabled: true, type: 'continuous', roundness: 0.5 },
+          },
+          physics: {
+            barnesHut: {
+              gravitationalConstant: -4000,
+              centralGravity: 0.3,
+              springLength: 180,
+              springConstant: 0.04,
+              damping: 0.09,
+            },
+            stabilization: { iterations: 200 },
+          },
+          interaction: { hover: true, tooltipDelay: 200 },
+        }
+      );
+    } catch (err) {
+      setDebugInfo((prev) => ({ ...prev, error: err instanceof Error ? err.message : String(err) }));
+      return;
+    }
 
     networkRef.current = network;
     setDebugInfo((prev) => ({ ...prev, networkCreated: true }));
@@ -188,7 +195,11 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     }
 
     return () => {
-      positionsRef.current = network.getPositions();
+      try {
+        positionsRef.current = network.getPositions();
+      } catch {
+        // ignore
+      }
       if (resizeObserver) resizeObserver.disconnect();
       network.destroy();
     };
@@ -196,12 +207,12 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
 
   // 类型过滤不重建网络，仅更新 hidden 属性
   useEffect(() => {
-    if (!nodesRef.current) return;
-    const updates = graph.nodes.map((n) => ({
-      id: n.id,
+    if (!networkRef.current || !nodesRef.current || !edgesRef.current) return;
+    const nodes = nodesRef.current.map((n) => ({
+      ...n,
       hidden: !activeGroups.has(n.group),
     }));
-    nodesRef.current.update(updates);
+    networkRef.current.setData({ nodes, edges: edgesRef.current });
   }, [activeGroups, graph.nodes]);
 
   const toggleGroup = (group: string) => {
@@ -258,6 +269,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
         nodes: {debugInfo.nodeCount} | canvas: {Math.round(debugInfo.width)}×{Math.round(debugInfo.height)} | network: {debugInfo.networkCreated ? 'yes' : 'no'}
         <br />
         pos: {debugInfo.positions || 'pending'}
+        {debugInfo.error && <><br />err: {debugInfo.error}</>}
       </div>
 
       {tooltip?.node && (

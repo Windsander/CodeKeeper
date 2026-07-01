@@ -8,10 +8,12 @@ vi.mock('vis-network', () => ({
     once: vi.fn(),
     destroy: vi.fn(),
     setOptions: vi.fn(),
+    setData: vi.fn(),
     getScale: vi.fn().mockReturnValue(1),
     getPositions: vi.fn().mockReturnValue({}),
     moveTo: vi.fn(),
     fit: vi.fn(),
+    redraw: vi.fn(),
     canvasToDOM: vi.fn().mockReturnValue({ x: 0, y: 0 }),
   })),
 }));
