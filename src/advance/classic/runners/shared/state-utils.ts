@@ -45,6 +45,8 @@ export interface MrAgentState {
   discussions: Record<string, PostedDiscussion[]>;
   /** 交互式 discussion 追踪 */
   interactiveThreads: Record<string, InteractiveThread>;
+  /** 已处理过的非交互式 discussion，用于避免重复解析 */
+  processedDiscussions?: Record<string, { noteCount: number; processedAt: number }>;
 }
 
 export function getStatePath(project: Project): string {
@@ -65,6 +67,9 @@ export function loadState(project: Project): MrAgentState {
     }
     if (!parsed.interactiveThreads) {
       parsed.interactiveThreads = {};
+    }
+    if (!parsed.processedDiscussions) {
+      parsed.processedDiscussions = {};
     }
     return parsed;
   } catch {
