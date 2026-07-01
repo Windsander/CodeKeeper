@@ -1,6 +1,7 @@
 import { app, ipcMain, shell, BrowserWindow, dialog } from 'electron';
 import { createMainWindow } from './window-manager';
 import { ElectronIpcClient } from './ipc-client';
+import { loadTheme, saveTheme } from './theme-persistence.js';
 import type { IpcPushEvent } from '../shared/types';
 
 const client = new ElectronIpcClient();
@@ -47,6 +48,13 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('open-external', async (_event, url: string) => {
     await shell.openExternal(url);
+  });
+
+  ipcMain.handle('theme.get', () => loadTheme());
+  ipcMain.handle('theme.set', (_event, params: { theme: 'light' | 'dark' }) => {
+    const theme = params.theme === 'light' ? 'light' : 'dark';
+    saveTheme(theme);
+    return { success: true };
   });
 
   ipcMain.handle('show-open-dialog', async (_event, options: {

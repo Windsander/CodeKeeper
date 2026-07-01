@@ -1,6 +1,8 @@
 import type { IpcPushEvent } from '../../shared/types';
 
 export interface ElectronAPI {
+  invoke(method: 'theme.get'): Promise<'light' | 'dark'>;
+  invoke(method: 'theme.set', params: { theme: 'light' | 'dark' }): Promise<{ success: boolean }>;
   invoke(method: string, params?: unknown): Promise<unknown>;
   onPush(callback: (event: IpcPushEvent) => void): () => void;
   openExternal(url: string): Promise<void>;
