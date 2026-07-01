@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
-import type { MemoryGraph, MemoryGraphNode } from '../../shared/types.js';
+import type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from '../../shared/types.js';
 
 interface MemoryGraphProps {
   graph: MemoryGraph;
@@ -32,12 +32,37 @@ const GROUP_LABELS: Record<string, string> = {
   user: 'User',
 };
 
+function edgeKey(e: MemoryGraphEdge): string {
+  return `${e.from}>${e.to}|${e.label ?? ''}`;
+}
+
+function graphsEqual(a: MemoryGraph, b: MemoryGraph): boolean {
+  if (a.nodes.length !== b.nodes.length || a.edges.length !== b.edges.length) return false;
+  const aNodeIds = a.nodes.map((n) => n.id).sort();
+  const bNodeIds = b.nodes.map((n) => n.id).sort();
+  for (let i = 0; i < aNodeIds.length; i++) {
+    if (aNodeIds[i] !== bNodeIds[i]) return false;
+  }
+  const aEdges = a.edges.map(edgeKey).sort();
+  const bEdges = b.edges.map(edgeKey).sort();
+  for (let i = 0; i < aEdges.length; i++) {
+    if (aEdges[i] !== bEdges[i]) return false;
+  }
+  return true;
+}
+
 /**
  * 使用 vis-network 渲染力导向记忆图（EverOS 风格）
  */
 export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
+  const graphRef = useRef(graph);
+  const stableGraph = useMemo(() => {
+    if (graphsEqual(graphRef.current, graph)) return graphRef.current;
+    graphRef.current = graph;
+    return graph;
+  }, [graph]);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
 
@@ -45,13 +70,13 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     if (!containerRef.current) return;
 
     const nodes = new DataSet(
-      graph.nodes.map((n) => ({
+      stableGraph.nodes.map((n) => ({
         ...n,
         color: GROUP_COLORS[n.group],
         hidden: !activeGroups.has(n.group),
       }))
     );
-    const edges = new DataSet(graph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` })));
+    const edges = new DataSet(stableGraph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` })));
 
     const network = new Network(
       containerRef.current,
@@ -87,13 +112,13 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     network.on('click', (params) => {
       if (params.nodes.length > 0 && onNodeSelect) {
         const nodeId = params.nodes[0] as string;
-        const node = graph.nodes.find((n) => n.id === nodeId);
+        const node = stableGraph.nodes.find((n) => n.id === nodeId);
         if (node) onNodeSelect(node);
       }
     });
 
     network.on('hoverNode', (params) => {
-      const node = graph.nodes.find((n) => n.id === params.node);
+      const node = stableGraph.nodes.find((n) => n.id === params.node);
       if (!node) return;
       const domCoords = network.canvasToDOM(network.getPositions([params.node])[params.node]);
       const rect = containerRef.current!.getBoundingClientRect();
@@ -110,7 +135,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
 
     networkRef.current = network;
     return () => network.destroy();
-  }, [graph, onNodeSelect, activeGroups]);
+  }, [stableGraph, onNodeSelect, activeGroups]);
 
   const toggleGroup = (group: string) => {
     setActiveGroups((prev) => {
