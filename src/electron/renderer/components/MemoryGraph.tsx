@@ -59,24 +59,17 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const networkRef = useRef<Network | null>(null);
   const nodesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
   const edgesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
-  const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const lastGraphRef = useRef<MemoryGraph | null>(null);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
 
-  // 仅在图谱结构真正变化时重建 Network，并保留已有节点位置
+  // 仅在图谱结构真正变化时重建 Network
   useEffect(() => {
     if (!containerRef.current) return;
     if (lastGraphRef.current && graphsEqual(lastGraphRef.current, graph)) return;
     lastGraphRef.current = graph;
 
-    // 销毁旧网络前记录位置
     if (networkRef.current) {
-      try {
-        positionsRef.current = networkRef.current.getPositions();
-      } catch {
-        // 旧网络未就绪时忽略
-      }
       networkRef.current.destroy();
       networkRef.current = null;
       nodesRef.current = null;
@@ -84,16 +77,11 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     }
 
     const nodes = new DataSet(
-      graph.nodes.map((n) => {
-        const pos = positionsRef.current[n.id];
-        return {
-          ...n,
-          color: GROUP_COLORS[n.group],
-          hidden: !activeGroups.has(n.group),
-          // 只有已有坐标才设置 x/y，避免 undefined 导致节点无法渲染
-          ...(pos ? { x: pos.x, y: pos.y } : {}),
-        };
-      })
+      graph.nodes.map((n) => ({
+        ...n,
+        color: GROUP_COLORS[n.group],
+        hidden: !activeGroups.has(n.group),
+      }))
     );
     const edges = new DataSet(graph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` })));
     nodesRef.current = nodes;
@@ -155,11 +143,6 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
 
     networkRef.current = network;
     return () => {
-      try {
-        positionsRef.current = network.getPositions();
-      } catch {
-        // ignore
-      }
       network.destroy();
     };
   }, [graph, onNodeSelect]);
