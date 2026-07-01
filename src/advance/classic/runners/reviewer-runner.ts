@@ -13,6 +13,7 @@ import { loadSoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { getArchiveRoot } from '../../types.js';
+import { loadState, saveState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
 import type { Project, RoleConfig } from '../../types.js';
 import type { MergeRequest, MrDiff } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
@@ -50,6 +51,7 @@ export class ReviewerRunner extends BaseRoleRunner {
    */
   protected async runProject(project: Project, config: RoleConfig): Promise<void> {
     const provider = new GitLabProvider(project.gitlab!);
+    const state = loadState(project);
 
     const soul = loadSoulContent(project, 'reviewer');
     const projectContext = loadProjectContext(getArchiveRoot(project));
@@ -69,7 +71,7 @@ export class ReviewerRunner extends BaseRoleRunner {
       soulContent: soul.content || undefined,
       projectContext,
     };
-    const actor = new ReviewerActor({ provider });
+    const actor = new ReviewerActor({ provider, project });
 
     console.log(`[ReviewerRunner] 扫描项目 ${project.name} 的 open MRs...`);
     console.log(`[ReviewerRunner] 项目 ${project.name} 使用 filter: ${JSON.stringify(config.filter ?? {})}`);
@@ -111,7 +113,16 @@ export class ReviewerRunner extends BaseRoleRunner {
         continue;
       }
 
-      let memoryClient: MemoryClient | undefined;
+      let shaInfo;
+      try {
+        shaInfo = await provider.getMRShaInfo(mr.iid);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[ReviewerRunner] 获取 MR !${mr.iid} SHA 失败: ${message}`);
+      }
+
+      const stateKey = getDiscussionStateKey(mr);
+      state.discussions[stateKey] ??= [];
       if (mcpUrl) {
         memoryClient = new MemoryClient({
           mcpUrl,
@@ -147,7 +158,12 @@ export class ReviewerRunner extends BaseRoleRunner {
       }
 
       try {
-        await actor.postReview(mr, result);
+        await actor.postReview(mr, result, {
+          diffs,
+          shaInfo,
+          stateKey,
+          state,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] MR !${mr.iid} 发布评论失败: ${message}`);
