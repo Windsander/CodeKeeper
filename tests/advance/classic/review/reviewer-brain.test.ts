@@ -115,7 +115,6 @@ describe('ReviewerBrain', () => {
     const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallForReview: vi.fn().mockResolvedValue(['项目使用 TypeScript 严格模式']),
-      recordReview: vi.fn(),
     } as unknown as NonNullable<
       import('../../../../src/advance/classic/review/reviewer-brain.js').ReviewerBrainOptions['memoryClient']
     >;

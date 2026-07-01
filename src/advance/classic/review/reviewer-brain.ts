@@ -43,16 +43,6 @@ export class ReviewerBrain {
 
     const result = this.parseReviewResponse(response);
 
-    if (this.options.memoryClient) {
-      await this.options.memoryClient.recordReview({
-        mrIid: mr.iid,
-        title: mr.title,
-        findingsCount: result.findings.length,
-        summary: result.summary,
-        findings: result.findings,
-      });
-    }
-
     return result;
   }
 
