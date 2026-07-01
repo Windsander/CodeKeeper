@@ -1496,6 +1496,26 @@ select.input:focus {
   background: #0d1117;
   color: #c9d1d9;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+}
+
+/* 记忆图谱内部滚动条统一为深色主题，避免默认浅色滚动条破坏暗色界面 */
+.memory-graph-page ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.memory-graph-page ::-webkit-scrollbar-track {
+  background: #0d1117;
+}
+
+.memory-graph-page ::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 4px;
+}
+
+.memory-graph-page ::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
 }
 
 .memory-graph-header {
