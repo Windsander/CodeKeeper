@@ -63,7 +63,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const lastGraphRef = useRef<MemoryGraph | null>(null);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
-  const [debugInfo, setDebugInfo] = useState({ nodeCount: 0, width: 0, height: 0, networkCreated: false });
+  const [debugInfo, setDebugInfo] = useState({ nodeCount: 0, width: 0, height: 0, networkCreated: false, positions: '' });
 
   // 仅在图谱结构真正变化时重建 Network，并保留已有节点位置
   useEffect(() => {
@@ -136,6 +136,19 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     network.once('stabilizationIterationsDone', () => {
       network.setOptions({ physics: { enabled: false } });
       network.fit({ animation: false });
+    });
+
+    // 第一次绘制后抓取前几个节点的坐标，用于排查节点是否被画到视野外
+    network.once('afterDrawing', () => {
+      const positions = network.getPositions();
+      const posStr = graph.nodes
+        .slice(0, 3)
+        .map((n) => {
+          const p = positions[n.id];
+          return `${n.id}(${Math.round(p?.x ?? 0)},${Math.round(p?.y ?? 0)})`;
+        })
+        .join(' ');
+      setDebugInfo((prev) => ({ ...prev, positions: posStr }));
     });
 
     network.on('click', (params) => {
@@ -243,6 +256,8 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
 
       <div className="memory-graph-debug">
         nodes: {debugInfo.nodeCount} | canvas: {Math.round(debugInfo.width)}×{Math.round(debugInfo.height)} | network: {debugInfo.networkCreated ? 'yes' : 'no'}
+        <br />
+        pos: {debugInfo.positions || 'pending'}
       </div>
 
       {tooltip?.node && (
