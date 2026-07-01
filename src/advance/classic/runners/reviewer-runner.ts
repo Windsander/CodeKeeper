@@ -13,7 +13,7 @@ import { loadSoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { getArchiveRoot } from '../../types.js';
-import { loadState, saveState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
+import { loadState, getDiscussionStateKey } from './shared/state-utils.js';
 import type { Project, RoleConfig } from '../../types.js';
 import type { MergeRequest, MrDiff } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
@@ -123,6 +123,7 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       const stateKey = getDiscussionStateKey(mr);
       state.discussions[stateKey] ??= [];
+      let memoryClient: MemoryClient | undefined;
       if (mcpUrl) {
         memoryClient = new MemoryClient({
           mcpUrl,
