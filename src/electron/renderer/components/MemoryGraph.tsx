@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Network } from 'vis-network';
+import { DataSet } from 'vis-data';
 import type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from '../../shared/types.js';
 
 interface MemoryGraphProps {
@@ -56,8 +57,8 @@ function graphsEqual(a: MemoryGraph, b: MemoryGraph): boolean {
 export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
-  const nodesRef = useRef<MemoryGraphNode[] | null>(null);
-  const edgesRef = useRef<MemoryGraphEdge[] | null>(null);
+  const nodesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
+  const edgesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
   const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
   const lastGraphRef = useRef<MemoryGraph | null>(null);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
@@ -86,17 +87,19 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     const rect = containerRef.current.getBoundingClientRect();
     setDebugInfo((prev) => ({ ...prev, nodeCount: graph.nodes.length, width: rect.width, height: rect.height, error: '' }));
 
-    const nodes = graph.nodes.map((n) => {
-      const pos = positionsRef.current[n.id];
-      return {
-        ...n,
-        color: GROUP_COLORS[n.group],
-        hidden: !activeGroups.has(n.group),
-        x: pos?.x,
-        y: pos?.y,
-      };
-    });
-    const edges = graph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` }));
+    const nodes = new DataSet(
+      graph.nodes.map((n) => {
+        const pos = positionsRef.current[n.id];
+        return {
+          ...n,
+          color: GROUP_COLORS[n.group],
+          hidden: !activeGroups.has(n.group),
+          x: pos?.x,
+          y: pos?.y,
+        };
+      })
+    );
+    const edges = new DataSet(graph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` })));
     nodesRef.current = nodes;
     edgesRef.current = edges;
 
@@ -139,12 +142,6 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     networkRef.current = network;
     setDebugInfo((prev) => ({ ...prev, networkCreated: true }));
 
-    // 初次稳定后关闭物理引擎，避免无意义的持续抖动，并适配视图
-    network.once('stabilizationIterationsDone', () => {
-      network.setOptions({ physics: { enabled: false } });
-      network.fit({ animation: false });
-    });
-
     // 第一次绘制后抓取前几个节点的坐标，用于排查节点是否被画到视野外
     network.once('afterDrawing', () => {
       const positions = network.getPositions();
@@ -182,37 +179,24 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       setTooltip(null);
     });
 
-    // 容器大小变化时重绘并适配，避免初始尺寸为 0 导致画布空白
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
-      resizeObserver = new ResizeObserver((entries) => {
-        const cr = entries[0].contentRect;
-        setDebugInfo((prev) => ({ ...prev, width: cr.width, height: cr.height }));
-        network.redraw();
-        network.fit({ animation: false });
-      });
-      resizeObserver.observe(containerRef.current);
-    }
-
     return () => {
       try {
         positionsRef.current = network.getPositions();
       } catch {
         // ignore
       }
-      if (resizeObserver) resizeObserver.disconnect();
       network.destroy();
     };
   }, [graph, onNodeSelect]);
 
   // 类型过滤不重建网络，仅更新 hidden 属性
   useEffect(() => {
-    if (!networkRef.current || !nodesRef.current || !edgesRef.current) return;
-    const nodes = nodesRef.current.map((n) => ({
-      ...n,
+    if (!nodesRef.current) return;
+    const updates = graph.nodes.map((n) => ({
+      id: n.id,
       hidden: !activeGroups.has(n.group),
     }));
-    networkRef.current.setData({ nodes, edges: edgesRef.current });
+    nodesRef.current.update(updates);
   }, [activeGroups, graph.nodes]);
 
   const toggleGroup = (group: string) => {
