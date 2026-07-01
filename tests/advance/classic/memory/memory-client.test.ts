@@ -85,4 +85,16 @@ describe('MemoryClient 记录方法', () => {
       },
     });
   });
+
+  it('tool 调用失败时抛出异常', async () => {
+    vi.spyOn(Client.prototype, 'callTool').mockRejectedValue(new Error('MCP 断开'));
+    const testClient = new MemoryClient({ mcpUrl: 'http://127.0.0.1:9999', context: mockContext });
+    await expect(testClient.recordReview({ mrIid: 1, title: 'MR', findingsCount: 0, summary: 'ok' })).rejects.toThrow('MCP 断开');
+  });
+
+  it('tool 返回 isError 时抛出异常', async () => {
+    vi.spyOn(Client.prototype, 'callTool').mockResolvedValue({ content: [{ type: 'text', text: 'invalid' }], isError: true });
+    const testClient = new MemoryClient({ mcpUrl: 'http://127.0.0.1:9999', context: mockContext });
+    await expect(testClient.recordReview({ mrIid: 1, title: 'MR', findingsCount: 0, summary: 'ok' })).rejects.toThrow('invalid');
+  });
 });

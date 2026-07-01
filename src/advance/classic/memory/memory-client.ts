@@ -99,13 +99,17 @@ export class MemoryClient implements IMemoryClient {
   ): Promise<{ content?: Array<{ type: string; text?: string }> } | undefined> {
     try {
       const result = await this.client.callTool({ name, arguments: args });
-      return result as { content?: Array<{ type: string; text?: string }> };
+      const cast = result as { content?: Array<{ type: string; text?: string }>; isError?: boolean };
+      if (cast.isError) {
+        const message = cast.content?.[0]?.text ?? 'MCP tool 返回错误';
+        logger.error({ tool: name, result }, `MemoryClient 调用 ${name} 失败`);
+        throw new Error(`MemoryClient ${name} 失败: ${message}`);
+      }
+      return cast;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error({ err, tool: name }, `MemoryClient 调用 ${name} 失败`);
-      // 记忆写入失败不阻断主流程
-      logger.warn({ tool: name, error: message }, '记忆写入失败，继续执行主流程');
-      return undefined;
+      throw new Error(`MemoryClient ${name} 失败: ${message}`);
     }
   }
 
