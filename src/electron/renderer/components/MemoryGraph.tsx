@@ -63,6 +63,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const lastGraphRef = useRef<MemoryGraph | null>(null);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
+  const [debugInfo, setDebugInfo] = useState({ nodeCount: 0, width: 0, height: 0, networkCreated: false });
 
   // 仅在图谱结构真正变化时重建 Network，并保留已有节点位置
   useEffect(() => {
@@ -78,6 +79,9 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       nodesRef.current = null;
       edgesRef.current = null;
     }
+
+    const rect = containerRef.current.getBoundingClientRect();
+    setDebugInfo((prev) => ({ ...prev, nodeCount: graph.nodes.length, width: rect.width, height: rect.height }));
 
     const nodes = new DataSet(
       graph.nodes.map((n) => {
@@ -125,6 +129,9 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       }
     );
 
+    networkRef.current = network;
+    setDebugInfo((prev) => ({ ...prev, networkCreated: true }));
+
     // 初次稳定后关闭物理引擎，避免无意义的持续抖动，并适配视图
     network.once('stabilizationIterationsDone', () => {
       network.setOptions({ physics: { enabled: false } });
@@ -155,12 +162,12 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       setTooltip(null);
     });
 
-    networkRef.current = network;
-
     // 容器大小变化时重绘并适配，避免初始尺寸为 0 导致画布空白
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
-      resizeObserver = new ResizeObserver(() => {
+      resizeObserver = new ResizeObserver((entries) => {
+        const cr = entries[0].contentRect;
+        setDebugInfo((prev) => ({ ...prev, width: cr.width, height: cr.height }));
         network.redraw();
         network.fit({ animation: false });
       });
@@ -232,6 +239,10 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
         <button className="memory-graph-zoom-btn" onClick={zoomIn} title="放大">+</button>
         <button className="memory-graph-zoom-btn" onClick={zoomOut} title="缩小">−</button>
         <button className="memory-graph-zoom-btn" onClick={fit} title="适配">⊡</button>
+      </div>
+
+      <div className="memory-graph-debug">
+        nodes: {debugInfo.nodeCount} | canvas: {Math.round(debugInfo.width)}×{Math.round(debugInfo.height)} | network: {debugInfo.networkCreated ? 'yes' : 'no'}
       </div>
 
       {tooltip?.node && (

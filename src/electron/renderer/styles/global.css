@@ -1814,6 +1814,21 @@ select.input:focus {
   color: #f0f6fc;
 }
 
+.memory-graph-debug {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(13, 17, 23, 0.9);
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #8b949e;
+  font-size: 11px;
+  font-family: monospace;
+  z-index: 55;
+  pointer-events: none;
+}
+
 /* ========== Tooltip ========== */
 .memory-graph-tooltip {
   position: fixed;
