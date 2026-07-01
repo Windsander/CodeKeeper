@@ -1479,6 +1479,26 @@ select.input:focus {
   padding-top: 12px;
 }
 
+[data-theme='dark'] .service-status-top-error {
+  background: rgba(220, 38, 38, 0.15);
+  color: #f87171;
+}
+
+[data-theme='dark'] .service-status-row--error {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: rgba(220, 38, 38, 0.1);
+}
+
+[data-theme='dark'] .service-status-row--error:hover {
+  border-color: #f87171;
+  background: rgba(220, 38, 38, 0.15);
+}
+
+[data-theme='dark'] .service-status-error-inner {
+  background: rgba(220, 38, 38, 0.15);
+  color: #f87171;
+}
+
 /* ---------- 设置页双栏布局 ---------- */
 
 .settings-layout {
