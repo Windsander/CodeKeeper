@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
-import type { MemoryGraph, MemoryGraphNode } from '../../shared/types.js';
+import type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from '../../shared/types.js';
 
 interface MemoryGraphProps {
   graph: MemoryGraph;
@@ -32,26 +32,72 @@ const GROUP_LABELS: Record<string, string> = {
   user: 'User',
 };
 
+function edgeKey(e: MemoryGraphEdge): string {
+  return `${e.from}>${e.to}|${e.label ?? ''}`;
+}
+
+function graphsEqual(a: MemoryGraph, b: MemoryGraph): boolean {
+  if (a.nodes.length !== b.nodes.length || a.edges.length !== b.edges.length) return false;
+  const aNodeIds = a.nodes.map((n) => n.id).sort();
+  const bNodeIds = b.nodes.map((n) => n.id).sort();
+  for (let i = 0; i < aNodeIds.length; i++) {
+    if (aNodeIds[i] !== bNodeIds[i]) return false;
+  }
+  const aEdges = a.edges.map(edgeKey).sort();
+  const bEdges = b.edges.map(edgeKey).sort();
+  for (let i = 0; i < aEdges.length; i++) {
+    if (aEdges[i] !== bEdges[i]) return false;
+  }
+  return true;
+}
+
 /**
  * 使用 vis-network 渲染力导向记忆图（EverOS 风格）
  */
 export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
+  const nodesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
+  const edgesRef = useRef<DataSet<Record<string, unknown>> | null>(null);
+  const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
+  const lastGraphRef = useRef<MemoryGraph | null>(null);
   const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_COLORS)));
   const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
 
+  // 仅在图谱结构真正变化时重建 Network，并保留已有节点位置
   useEffect(() => {
     if (!containerRef.current) return;
+    if (lastGraphRef.current && graphsEqual(lastGraphRef.current, graph)) return;
+    lastGraphRef.current = graph;
+
+    // 销毁旧网络前记录位置
+    if (networkRef.current) {
+      try {
+        positionsRef.current = networkRef.current.getPositions();
+      } catch {
+        // 旧网络未就绪时忽略
+      }
+      networkRef.current.destroy();
+      networkRef.current = null;
+      nodesRef.current = null;
+      edgesRef.current = null;
+    }
 
     const nodes = new DataSet(
-      graph.nodes.map((n) => ({
-        ...n,
-        color: GROUP_COLORS[n.group],
-        hidden: !activeGroups.has(n.group),
-      }))
+      graph.nodes.map((n) => {
+        const pos = positionsRef.current[n.id];
+        return {
+          ...n,
+          color: GROUP_COLORS[n.group],
+          hidden: !activeGroups.has(n.group),
+          // 只有已有坐标才设置 x/y，避免 undefined 导致节点无法渲染
+          ...(pos ? { x: pos.x, y: pos.y } : {}),
+        };
+      })
     );
     const edges = new DataSet(graph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` })));
+    nodesRef.current = nodes;
+    edgesRef.current = edges;
 
     const network = new Network(
       containerRef.current,
@@ -108,8 +154,25 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     });
 
     networkRef.current = network;
-    return () => network.destroy();
-  }, [graph, onNodeSelect, activeGroups]);
+    return () => {
+      try {
+        positionsRef.current = network.getPositions();
+      } catch {
+        // ignore
+      }
+      network.destroy();
+    };
+  }, [graph, onNodeSelect]);
+
+  // 类型过滤不重建网络，仅更新 hidden 属性
+  useEffect(() => {
+    if (!nodesRef.current) return;
+    const updates = graph.nodes.map((n) => ({
+      id: n.id,
+      hidden: !activeGroups.has(n.group),
+    }));
+    nodesRef.current.update(updates);
+  }, [activeGroups, graph.nodes]);
 
   const toggleGroup = (group: string) => {
     setActiveGroups((prev) => {
