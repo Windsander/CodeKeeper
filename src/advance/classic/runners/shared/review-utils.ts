@@ -110,3 +110,23 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
 
   return lines.join('\n');
 }
+
+/**
+ * 生成单条 finding 的 discussion thread 正文
+ */
+export function formatFindingThreadComment(finding: ReviewFinding): string {
+  const severityEmoji: Record<ReviewFinding['severity'], string> = {
+    CRITICAL: '🚨',
+    HIGH: '🔴',
+    MEDIUM: '🟠',
+    LOW: '🟡',
+  };
+  const parts = [
+    `${severityEmoji[finding.severity]} **${finding.severity}**${finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : ''}`,
+    '',
+    `**问题描述**：${finding.message}`,
+    '',
+    `**修改建议**：${finding.suggestion}`,
+  ];
+  return parts.join('\n');
+}
