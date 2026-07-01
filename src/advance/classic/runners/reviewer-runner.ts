@@ -111,16 +111,23 @@ export class ReviewerRunner extends BaseRoleRunner {
         continue;
       }
 
-      const memoryClient = mcpUrl
-        ? new MemoryClient({
-            mcpUrl,
-            context: {
-              ...baseMemoryContext,
-              sessionId: buildReviewerSessionId(project.id, mr.iid),
-            },
-          })
-        : undefined;
-      await memoryClient?.connect().catch(() => undefined);
+      let memoryClient: MemoryClient | undefined;
+      if (mcpUrl) {
+        memoryClient = new MemoryClient({
+          mcpUrl,
+          context: {
+            ...baseMemoryContext,
+            sessionId: buildReviewerSessionId(project.id, mr.iid),
+          },
+        });
+        try {
+          await memoryClient.connect();
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[ReviewerRunner] MR !${mr.iid} MemoryClient 连接失败: ${message}`);
+          memoryClient = undefined;
+        }
+      }
       const brain = new ReviewerBrain({ ...brainOptions, memoryClient });
 
       let result;
@@ -139,7 +146,30 @@ export class ReviewerRunner extends BaseRoleRunner {
         continue;
       }
 
-      await actor.postReview(mr, result);
+      try {
+        await actor.postReview(mr, result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[ReviewerRunner] MR !${mr.iid} 发布评论失败: ${message}`);
+        await memoryClient?.disconnect().catch(() => undefined);
+        continue;
+      }
+
+      if (memoryClient) {
+        try {
+          await memoryClient.recordReview({
+            mrIid: mr.iid,
+            title: mr.title,
+            findingsCount: result.findings.length,
+            summary: result.summary,
+            findings: result.findings,
+          });
+          console.log(`[ReviewerRunner] MR !${mr.iid} 记忆写入成功`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[ReviewerRunner] MR !${mr.iid} 记忆写入失败: ${message}`);
+        }
+      }
       await memoryClient?.disconnect().catch(() => undefined);
     }
   }
