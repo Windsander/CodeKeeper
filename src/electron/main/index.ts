@@ -40,6 +40,16 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('ipc-invoke', async (_event, method: string, params?: unknown) => {
+    // 主题相关调用由主进程本地处理，不转发给守护进程
+    if (method === 'theme.get') {
+      return loadTheme();
+    }
+    if (method === 'theme.set') {
+      const { theme } = params as { theme: 'light' | 'dark' };
+      saveTheme(theme === 'light' ? 'light' : 'dark');
+      return { success: true };
+    }
+
     if (!connected) {
       throw new Error('守护进程未连接');
     }

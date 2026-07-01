@@ -594,9 +594,16 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'memory.graph': async (ctx) => {
-    if (!ctx.everosUrl) throw new Error('EverOS 服务未启动');
-
     const projects = ctx.registry.list();
+
+    // EverOS 尚未就绪时返回空记忆数据（保留项目节点），避免 UI 轮询抛错
+    if (!ctx.everosUrl) {
+      return buildMemoryGraph({
+        projects: projects.map((p) => ({ id: p.id, name: p.name, rootPath: p.rootPath })),
+        getResults: new Map(),
+      });
+    }
+
     const knownUsers = new Set<string>();
     const knownAgents = new Set<string>(['reviewer', 'maintainer', 'archiver']);
     const getResults = new Map<string, EverOSMemoryGetResult>();
