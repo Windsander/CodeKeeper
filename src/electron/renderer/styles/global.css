@@ -1688,13 +1688,15 @@ select.input:focus {
   margin-left: 34px;
   margin-top: 2px;
   padding: 3px 9px;
-  display: inline-flex;
-  width: fit-content;
+  display: inline-block;
+  max-width: calc(100% - 44px);
   border-radius: 9999px;
   background: var(--main-bg);
   color: var(--text-secondary);
   font-size: 11px;
-  word-break: break-all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .service-status-error {

@@ -143,17 +143,23 @@ describe('ServiceStatusPanel', () => {
       embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null, progress: null },
       rerank: { state: 'idle', url: null, error: null, progress: null },
     };
+    const remoteModel: RemoteModelStatus = {
+      llm: { state: 'running', modelLabel: 'Claude', fullModel: 'claude-3-5-sonnet', baseUrl: 'https://api.anthropic.com/v1', error: null, lastCheckedAt: Date.now() },
+      multimodal: { state: 'running', modelLabel: 'GPT-4o', fullModel: 'gpt-4o', baseUrl: 'https://api.openai.com/v1', error: null, lastCheckedAt: Date.now() },
+    };
 
     render(
       <ServiceStatusPanel
         daemon={daemon}
         localModel={localModel}
-        remoteModel={defaultRemoteModel}
+        remoteModel={remoteModel}
       />
     );
 
     expect(screen.getByText('http://127.0.0.1:8000')).toBeTruthy();
     expect(screen.getByText('http://127.0.0.1:12345')).toBeTruthy();
+    expect(screen.getByText('https://api.anthropic.com/v1')).toBeTruthy();
+    expect(screen.getByText('https://api.openai.com/v1')).toBeTruthy();
   });
 
 });

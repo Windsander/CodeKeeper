@@ -207,6 +207,7 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
                     nodeKey="remoteModel-llm"
                     icon="💬"
                     status={remoteModel.llm.state}
+                    url={remoteModel.llm.baseUrl}
                     error={remoteModel.llm.error ?? null}
                     expandedKeys={expandedKeys}
                     onToggle={toggle}
@@ -216,6 +217,7 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
                     nodeKey="remoteModel-multimodal"
                     icon="🖼️"
                     status={remoteModel.multimodal.state}
+                    url={remoteModel.multimodal.baseUrl}
                     error={remoteModel.multimodal.error ?? null}
                     expandedKeys={expandedKeys}
                     onToggle={toggle}
