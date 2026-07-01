@@ -39,7 +39,7 @@ export function MemoryGraphPage() {
 
         <div className="memory-graph-header-right">
           <div className="memory-graph-header-stats">
-            总记忆 {stats.totalMemories} · 关联 {stats.totalEdges} · 活跃 {stats.activeDays} 天
+            项目 {stats.projectCount} · 总记忆 {stats.totalMemories} · 关联 {stats.totalEdges} · 活跃 {stats.activeDays} 天
           </div>
           <button className="memory-graph-refresh" onClick={() => refresh()} title="刷新">
             ↻
@@ -51,13 +51,22 @@ export function MemoryGraphPage() {
       {loading && <div className="memory-graph-loading">Loading…</div>}
 
       <div className={`memory-graph-viewport${tab === 'graph' ? '' : ' progress-active'}`}>
-        {!loading && !error && stats.totalMemories === 0 && (
+        {!loading && !error && stats.projectCount === 0 && (
           <div className="memory-graph-empty">
+            暂无项目，请先注册项目后再查看记忆图谱。
+          </div>
+        )}
+        {!loading && !error && stats.projectCount > 0 && tab === 'graph' && (
+          <MemoryGraphView graph={graph} />
+        )}
+        {!loading && !error && stats.projectCount > 0 && stats.totalMemories === 0 && tab === 'graph' && (
+          <div className="memory-graph-empty-hint">
             暂无记忆数据，运行一次 reviewer / maintainer / archiver 后会自动聚合到这里。
           </div>
         )}
-        {!loading && tab === 'graph' && stats.totalMemories > 0 && <MemoryGraphView graph={graph} />}
-        {!loading && tab === 'progress' && <MemoryProgressView stats={graph.stats} graph={graph} />}
+        {!loading && !error && stats.projectCount > 0 && tab === 'progress' && (
+          <MemoryProgressView stats={graph.stats} graph={graph} />
+        )}
       </div>
     </div>
   );

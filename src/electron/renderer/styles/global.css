@@ -1648,6 +1648,21 @@ select.input:focus {
   padding: 24px;
 }
 
+.memory-graph-empty-hint {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(13, 17, 23, 0.9);
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 10px 16px;
+  color: #8b949e;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 70;
+}
+
 .memory-graph-viewport {
   flex: 1;
   min-height: 0;
