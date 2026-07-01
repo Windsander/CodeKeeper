@@ -69,7 +69,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   const { theme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | null>(null);
-  const nodesRef = useRef<DataSet | null>(null);
+  const nodesRef = useRef<DataSet<any> | null>(null);
   const graphRef = useRef(graph);
   const stableGraph = useMemo(() => {
     if (graphsEqual(graphRef.current, graph)) return graphRef.current;
@@ -174,7 +174,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     const edgeColor = style.getPropertyValue('--graph-edge').trim() || '#9ca3af';
     const edgeHighlight = style.getPropertyValue('--graph-edge-highlight').trim() || '#2563eb';
 
-    nodes.forEach((node) => {
+    nodes.forEach((node: any) => {
       nodes.update({ id: node.id, color: colors[node.group as GroupKey] });
     });
 

@@ -1,0 +1,50 @@
+<h2>设计方案 1/4：架构 overview</h2>
+<p class="subtitle">Graph View + Progress View 双页签记忆可视化的整体数据流</p>
+
+<div class="mockup">
+  <div class="mockup-header">架构图</div>
+  <div class="mockup-body" style="font-family:system-ui,monospace;font-size:13px;line-height:1.6">
+    <div style="display:flex;flex-direction:column;gap:12px;align-items:center">
+      <div style="border:2px solid #58a6ff;border-radius:8px;padding:12px 24px;background:#161b22;width:260px;text-align:center">
+        Electron <strong>MemoryGraphPage</strong><br/>
+        <span style="color:#8b949e">Graph View / Progress View 页签</span>
+      </div>
+      <div style="color:#8b949e">↕ useIpc('memory.graph')</div>
+      <div style="border:2px solid #a371f7;border-radius:8px;padding:12px 24px;background:#161b22;width:260px;text-align:center">
+        Daemon <strong>MemoryGraphHandler</strong><br/>
+        <span style="color:#8b949e">聚合图、枚举 owner、调 EverOS /get</span>
+      </div>
+      <div style="color:#8b949e">↕ HTTP /api/v1/memory/get</div>
+      <div style="border:2px solid #3fb950;border-radius:8px;padding:12px 24px;background:#161b22;width:260px;text-align:center">
+        EverOS Server<br/>
+        <span style="color:#8b949e">按 (app, project, owner, kind) 返回条目</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>关键决策</h3>
+  <ul>
+    <li><strong>后端聚合</strong>：Daemon 负责把 EverOS 返回的扁平条目转换成 { nodes, edges }，前端只渲染。</li>
+    <li><strong>跨项目 + System 顶层</strong>：以 CodeKeeper-System 为根，下面挂每个项目；跨项目 skill / profile 挂到 System 下。</li>
+    <li><strong>写入侧修正 session 语义</strong>：Reviewer 按 MR、Maintainer 按 MR/discussion、Archiver 按 8h 窗口生成 sessionId，让话题层自然正确。</li>
+    <li><strong>历史数据不迁移</strong>：只展示 session 语义修复后写入的记忆。</li>
+    <li><strong>前端库</strong>：vis-network，与 EverOS Demo 一致。</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>新增/修改文件</h3>
+  <ul>
+    <li><code>src/advance/ipc/handlers.ts</code>：新增 <code>memory.graph</code> handler。</li>
+    <li><code>src/advance/classic/memory/graph-builder.ts</code>（新）：图聚合逻辑。</li>
+    <li><code>src/advance/classic/memory/everos-api.ts</code>：新增 <code>everosMemoryGetAllOwners()</code> / <code>everosMemoryGet()</code>。</li>
+    <li><code>src/electron/shared/types.ts</code>：新增 <code>MemoryGraph</code> / <code>MemoryGraphNode</code> / <code>MemoryGraphEdge</code>。</li>
+    <li><code>src/electron/renderer/pages/MemoryGraphPage.tsx</code>（新）：替换原 MemoryBrowser 页面。</li>
+    <li><code>src/electron/renderer/components/MemoryGraph.tsx</code>（新）：vis-network 封装。</li>
+    <li><code>src/electron/renderer/components/MemoryProgressView.tsx</code>（新）：Progress View。</li>
+    <li><code>src/electron/renderer/App.tsx</code>：/memory 路由指向新页面。</li>
+    <li><code>src/advance/classic/runners/*-runner.ts</code>：修正 sessionId 生成。</li>
+  </ul>
+</div>
