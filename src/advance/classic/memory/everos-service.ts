@@ -67,36 +67,53 @@ export class EverOSService {
 
       let stdout = '';
       let stderr = '';
+      let stdoutLineBuffer = '';
+      let stderrLineBuffer = '';
 
       child.stdout?.on('data', (chunk) => {
         const text = chunk.toString();
         stdout += text;
-        for (const line of text.split('\n')) {
-          const trimmed = line.trim();
-          if (trimmed && this.shouldLogStdoutLine(trimmed)) {
-            logger.info({ everos: trimmed }, '[EverOS]');
+        stdoutLineBuffer = this.flushLogLines(stdoutLineBuffer + text, (line) => {
+          if (this.shouldLogStdoutLine(line)) {
+            logger.info({ everos: line }, '[EverOS]');
           }
-        }
+        });
         this.tryParseUrl(stdout, resolve);
       });
 
       child.stderr?.on('data', (chunk) => {
         const text = chunk.toString();
         stderr += text;
-        for (const line of text.split('\n')) {
-          const trimmed = line.trim();
-          if (trimmed && this.shouldLogStderrLine(trimmed)) {
-            logger.warn({ everos: trimmed }, '[EverOS]');
+        stderrLineBuffer = this.flushLogLines(stderrLineBuffer + text, (line) => {
+          if (this.shouldLogStderrLine(line)) {
+            logger.warn({ everos: line }, '[EverOS]');
           }
-        }
+        });
       });
 
+      const flushRemainingLogs = () => {
+        this.flushLogLines(stdoutLineBuffer + '\n', (line) => {
+          if (this.shouldLogStdoutLine(line)) {
+            logger.info({ everos: line }, '[EverOS]');
+          }
+        });
+        stdoutLineBuffer = '';
+        this.flushLogLines(stderrLineBuffer + '\n', (line) => {
+          if (this.shouldLogStderrLine(line)) {
+            logger.warn({ everos: line }, '[EverOS]');
+          }
+        });
+        stderrLineBuffer = '';
+      };
+
       child.on('error', (err) => {
+        flushRemainingLogs();
         this.process = null;
         reject(new Error(`启动 EverOS 失败: ${err.message}`));
       });
 
       child.on('exit', (code) => {
+        flushRemainingLogs();
         this.process = null;
         if (!this.everosUrl) {
           reject(new Error(`EverOS 进程退出 code=${code}, stdout=${stdout}, stderr=${stderr}`));
@@ -227,6 +244,19 @@ export class EverOSService {
   private shouldLogStdoutLine(line: string): boolean {
     // 过滤掉 Uvicorn 常规成功访问日志，避免记忆查询等高频率请求刷屏
     return !this.isRoutineAccessLog(line);
+  }
+
+  /**
+   * 将缓冲区文本按行切分，输出完整行并返回未结束的部分
+   */
+  private flushLogLines(buffer: string, emit: (line: string) => void): string {
+    const lines = buffer.split('\n');
+    const remaining = lines.pop() ?? '';
+    for (const raw of lines) {
+      const trimmed = raw.replace(/\r$/, '').trim();
+      if (trimmed) emit(trimmed);
+    }
+    return remaining;
   }
 
   private shouldLogStderrLine(line: string): boolean {
