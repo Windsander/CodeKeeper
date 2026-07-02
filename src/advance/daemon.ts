@@ -302,10 +302,13 @@ export class Daemon {
     this.everosState = 'starting';
     this.everosError = null;
 
-    // EverOS 必须依赖远端 LLM 配置才能启动
+    // EverOS 必须依赖远端 LLM 配置才能启动，且要求 OpenAI 兼容协议
     const effectiveLlmUrl = this.options.apiUrl || this.getDefaultLlmBaseUrl(this.options.provider);
     if (!this.options.apiKey || !effectiveLlmUrl) {
-      const message = 'EverOS 需要远端 LLM 配置：请先在设置页填写 API Key 和 Base URL';
+      const providerHint = this.options.provider === 'anthropic'
+        ? '当前 Provider 为 Anthropic，EverOS LLM 需要 OpenAI 兼容的 Base URL，请在设置页填写代理地址或切换到 OpenAI 兼容 Provider。'
+        : '请先在设置页填写 API Key 和 Base URL。';
+      const message = `EverOS 需要远端 LLM 配置：${providerHint}`;
       logger.warn(message);
       this.everosState = 'error';
       this.everosError = message;
@@ -486,11 +489,16 @@ export class Daemon {
     if (rerankUrl) env.EVEROS_RERANK__BASE_URL = rerankUrl;
     env.EVEROS_RERANK__MODEL = rerankModel;
 
-    // LLM：使用 Agent 通用配置；若未填写 Base URL，按 provider 补全默认值
+    // LLM：EverOS 的 LLM 客户端使用 OpenAI 兼容协议；优先使用用户填写的 Base URL，
+    // OpenAI 官方 provider 留空时补全默认值，Anthropic 原生 API 不兼容，不自动补全
     const effectiveLlmUrl = agent.apiUrl || this.getDefaultLlmBaseUrl(this.options.provider);
     if (agent.apiKey) env.EVEROS_LLM__API_KEY = agent.apiKey;
     if (effectiveLlmUrl) env.EVEROS_LLM__BASE_URL = effectiveLlmUrl;
     if (agent.model) env.EVEROS_LLM__MODEL = agent.model;
+    logger.debug(
+      { provider: this.options.provider, baseUrl: effectiveLlmUrl ?? 'unset', model: agent.model || 'default' },
+      '构建 EverOS LLM 环境变量'
+    );
 
     // Multimodal：仅使用显式配置，未配置时不回退到 Agent LLM
     const mmKey = cfg.multimodalApiKey;
@@ -504,14 +512,11 @@ export class Daemon {
   }
 
   private getDefaultLlmBaseUrl(provider?: string): string | undefined {
-    switch (provider) {
-      case 'anthropic':
-        return 'https://api.anthropic.com/v1';
-      case 'openai':
-        return 'https://api.openai.com/v1';
-      default:
-        return undefined;
+    // EverOS 的 LLM 模块只支持 OpenAI 兼容协议；Anthropic 原生 /v1/messages 不兼容
+    if (provider === 'openai') {
+      return 'https://api.openai.com/v1';
     }
+    return undefined;
   }
 
   private llmRequestInterval(): number {
