@@ -174,12 +174,18 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       if (memoryClient) {
         try {
+          const comments = await provider.getReviewerComments(mr.iid);
           await memoryClient.recordReview({
             mrIid: mr.iid,
             title: mr.title,
             findingsCount: result.findings.length,
             summary: result.summary,
             findings: result.findings,
+            comments: comments.map((c) => ({
+              author: c.author,
+              body: c.body,
+              createdAt: c.createdAt,
+            })),
           });
           console.log(`[ReviewerRunner] MR !${mr.iid} 记忆写入成功`);
         } catch (err) {

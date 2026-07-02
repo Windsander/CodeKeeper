@@ -12,7 +12,7 @@ import { logger } from '../../../core/logger.js';
 import { SecretSanitizer } from './secret-sanitizer.js';
 import type { MemoryContext, ProjectKnowledgeItem } from './types.js';
 import { sanitizeEverOSId } from './types.js';
-import { everosMemoryAdd, everosMemorySearch, everosMemoryFlush, type EverOSSearchItem } from './everos-api.js';
+import { everosMemoryAdd, everosMemoryAddMessages, everosMemorySearch, everosMemoryFlush, type EverOSSearchItem } from './everos-api.js';
 
 export interface EverOSMcpServerOptions {
   /** EverOS HTTP API URL */
@@ -115,6 +115,19 @@ export class EverOSMcpServer {
               findingsCount: { type: 'number' },
               summary: { type: 'string' },
               findings: { type: 'array' },
+              comments: {
+                type: 'array',
+                description: '远端已有的 review/comment 列表，会作为 user 消息写入记忆',
+                items: {
+                  type: 'object',
+                  properties: {
+                    author: { type: 'string' },
+                    body: { type: 'string' },
+                    createdAt: { type: 'string' },
+                  },
+                  required: ['author', 'body', 'createdAt'],
+                },
+              },
             },
             required: ['context', 'mrIid', 'title', 'findingsCount', 'summary'],
           },
@@ -307,33 +320,54 @@ export class EverOSMcpServer {
     const ctx = args.context;
     const summary = this.sanitizer.sanitize(String(args.summary ?? ''));
     const findings = Array.isArray(args.findings) ? args.findings : [];
+    const comments = Array.isArray(args.comments) ? args.comments : [];
     const mrIid = String(args.mrIid ?? 0);
     const title = String(args.title ?? '');
     const findingsText = this.formatFindingsForMemory(findings);
     const reviewContent = `Reviewer 评审 MR !${mrIid}: ${title}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${findingsText}`;
 
-    // 同时写入 user 请求与 assistant 评审结果，确保 EverOS 用户侧流水线能立即提取出 episode
-    await everosMemoryAdd(this.everosUrl, {
-      appId: ctx.appId,
-      projectId: ctx.projectId,
-      sessionId: ctx.sessionId,
-      senderId: ctx.userId,
-      role: 'user',
-      content: `请求评审 MR !${mrIid}: ${title}`,
-    });
-    await everosMemoryAdd(this.everosUrl, {
-      appId: ctx.appId,
-      projectId: ctx.projectId,
-      sessionId: ctx.sessionId,
-      senderId: ctx.agentId,
-      role: 'assistant',
-      content: reviewContent,
-    });
+    const messages: import('./everos-api.js').EverOSAddMessage[] = [];
+
+    // 先写入远端真人用户的 review/comment，作为 user 消息
+    for (const raw of comments) {
+      const comment = raw as Record<string, unknown>;
+      const author = String(comment.author ?? '');
+      const body = String(comment.body ?? '');
+      const createdAt = String(comment.createdAt ?? '');
+      if (!author || !body) continue;
+      messages.push({
+        senderId: author,
+        role: 'user',
+        content: this.sanitizer.sanitize(body),
+        timestamp: this.parseTimestampMs(createdAt),
+      });
+    }
+
+    // 再写入系统请求与 assistant 评审结果，确保 EverOS 用户侧流水线能提取 episode
+    messages.push(
+      {
+        senderId: ctx.userId,
+        role: 'user',
+        content: `请求评审 MR !${mrIid}: ${title}`,
+      },
+      {
+        senderId: ctx.agentId,
+        role: 'assistant',
+        content: reviewContent,
+      }
+    );
+
+    await everosMemoryAddMessages(this.everosUrl, ctx, messages);
 
     // flush 会触发 LLM 边界检测与流水线，耗时较长；放到后台执行，避免 MCP 请求超时
     this.flushSession(ctx).catch((err) => {
       logger.error({ err, sessionId: ctx.sessionId }, 'record_review 后台 flush 失败');
     });
+  }
+
+  private parseTimestampMs(iso: string): number | undefined {
+    const ts = Date.parse(iso);
+    return Number.isNaN(ts) ? undefined : ts;
   }
 
   private async flushSession(ctx: MemoryContext): Promise<void> {

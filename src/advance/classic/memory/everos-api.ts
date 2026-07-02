@@ -1,7 +1,7 @@
 import { sanitizeEverOSId } from './types.js';
 
 /**
- * EverOS /api/v1/memory/add 请求参数
+ * EverOS /api/v1/memory/add 单条消息封装
  */
 export interface EverOSAddParams {
   appId: string;
@@ -13,21 +13,42 @@ export interface EverOSAddParams {
 }
 
 /**
+ * 批量写入时的单条消息（支持自定义时间戳，用于回放远端历史评论）
+ */
+export interface EverOSAddMessage {
+  senderId: string;
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
+  timestamp?: number;
+}
+
+/**
  * 向 EverOS 写入一条记忆消息
  */
 export async function everosMemoryAdd(everosUrl: string, params: EverOSAddParams): Promise<void> {
+  await everosMemoryAddMessages(everosUrl, params, [
+    { senderId: params.senderId, role: params.role, content: params.content },
+  ]);
+}
+
+/**
+ * 向 EverOS 批量写入同一 session 的多条记忆消息
+ */
+export async function everosMemoryAddMessages(
+  everosUrl: string,
+  params: Pick<EverOSAddParams, 'appId' | 'projectId' | 'sessionId'>,
+  messages: EverOSAddMessage[]
+): Promise<void> {
   const body = {
     app_id: sanitizeEverOSId(params.appId),
     project_id: sanitizeEverOSId(params.projectId),
     session_id: sanitizeEverOSId(params.sessionId),
-    messages: [
-      {
-        sender_id: sanitizeEverOSId(params.senderId),
-        role: params.role,
-        timestamp: Date.now(),
-        content: params.content,
-      },
-    ],
+    messages: messages.map((m) => ({
+      sender_id: sanitizeEverOSId(m.senderId),
+      role: m.role,
+      timestamp: m.timestamp ?? Date.now(),
+      content: m.content,
+    })),
   };
 
   const res = await fetch(`${everosUrl}/api/v1/memory/add`, {

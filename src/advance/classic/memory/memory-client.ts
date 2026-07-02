@@ -48,6 +48,7 @@ export class MemoryClient implements IMemoryClient {
     findingsCount: number;
     summary: string;
     findings?: Array<MemoryFinding>;
+    comments?: Array<{ author: string; body: string; createdAt: string }>;
   }): Promise<void> {
     await this.callTool('record_review', { ...input, context: this.context });
   }

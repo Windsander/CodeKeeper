@@ -65,6 +65,8 @@ export interface IMemoryClient {
     summary: string;
     /** 评审发现的简要列表（可选） */
     findings?: Array<MemoryFinding>;
+    /** 远端已有的 review/comment 列表（可选），会作为 user 消息写入记忆 */
+    comments?: Array<{ author: string; body: string; createdAt: string }>;
   }): Promise<void>;
 
   recordFixAttempt(input: {
