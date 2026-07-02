@@ -15,7 +15,7 @@ import { MemoryClient } from '../memory/memory-client.js';
 import { getArchiveRoot } from '../../types.js';
 import { loadState, getDiscussionStateKey } from './shared/state-utils.js';
 import type { Project, RoleConfig } from '../../types.js';
-import type { MergeRequest, MrDiff } from '../provider/types.js';
+import type { MergeRequest, MrDiff, ReviewFinding } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
@@ -158,6 +158,20 @@ export class ReviewerRunner extends BaseRoleRunner {
         continue;
       }
 
+      const findingsHash = computeFindingsHash(result.findings);
+      const previousReview = state.reviewState?.[stateKey];
+      const mrUpdatedAt = new Date(mr.updatedAt).getTime();
+      if (
+        previousReview &&
+        previousReview.findingsHash === findingsHash &&
+        !Number.isNaN(mrUpdatedAt) &&
+        mrUpdatedAt <= previousReview.reviewedAt
+      ) {
+        console.log(`[ReviewerRunner] MR !${mr.iid} 评审结果未变化且 MR 无更新，跳过发布与记忆写入`);
+        await memoryClient?.disconnect().catch(() => undefined);
+        continue;
+      }
+
       try {
         await actor.postReview(mr, result, {
           diffs,
@@ -175,13 +189,18 @@ export class ReviewerRunner extends BaseRoleRunner {
       if (memoryClient) {
         try {
           const comments = await provider.getReviewerComments(mr.iid);
+          const lastReviewedAt = previousReview?.reviewedAt ?? 0;
+          const newComments = comments.filter((c) => {
+            const ts = new Date(c.createdAt).getTime();
+            return !Number.isNaN(ts) && ts > lastReviewedAt;
+          });
           await memoryClient.recordReview({
             mrIid: mr.iid,
             title: mr.title,
             findingsCount: result.findings.length,
             summary: result.summary,
             findings: result.findings,
-            comments: comments.map((c) => ({
+            comments: newComments.map((c) => ({
               author: c.author,
               body: c.body,
               createdAt: c.createdAt,
@@ -193,7 +212,28 @@ export class ReviewerRunner extends BaseRoleRunner {
           console.error(`[ReviewerRunner] MR !${mr.iid} 记忆写入失败: ${message}`);
         }
       }
+
+      // 更新评审状态，避免周期性轮询导致重复 summary/记忆
+      state.reviewState ??= {};
+      state.reviewState[stateKey] = { findingsHash, reviewedAt: Date.now() };
+
       await memoryClient?.disconnect().catch(() => undefined);
     }
   }
+}
+
+function computeFindingsHash(findings: ReviewFinding[]): string {
+  const canonical = [...findings]
+    .sort((a, b) => {
+      if (a.file !== b.file) return a.file.localeCompare(b.file);
+      return a.line - b.line;
+    })
+    .map((f) => ({
+      severity: f.severity,
+      file: f.file,
+      line: f.line,
+      message: f.message,
+      ruleId: f.ruleId,
+    }));
+  return JSON.stringify(canonical);
 }
