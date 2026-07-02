@@ -638,8 +638,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         mergeResult(projectResult, caseRes);
         mergeResult(projectResult, skillRes);
 
-        const owners = extractOwnersFromGetResult(caseRes);
-        for (const uid of owners.users) knownUsers.add(uid);
+        const caseOwners = extractOwnersFromGetResult(caseRes);
+        for (const uid of caseOwners.users) knownUsers.add(uid);
       }
 
       getResults.set(project.id, projectResult);
@@ -671,6 +671,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         );
         mergeResult(projectResult, episodeRes);
         mergeResult(projectResult, profileRes);
+
+        // 从 episodes 里也收集用户，避免 agent_case 为空时遗漏真实用户
+        const episodeOwners = extractOwnersFromGetResult(episodeRes);
+        for (const uid of episodeOwners.users) knownUsers.add(uid);
       }
     }
 

@@ -331,41 +331,36 @@ export class EverOSMcpServer {
     const findingsText = this.formatFindingsForMemory(findings);
     const reviewContent = `Reviewer 评审 MR !${mrIid}: ${title}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${findingsText}`;
 
-    const messages: import('./everos-api.js').EverOSAddMessage[] = [];
-
-    // 先写入远端真人用户的 review/comment，作为 user 消息；限制数量与长度，避免拖垮 EverOS 流水线
+    // 为了生成可被 EverOS 正确提取的 agent_case，user/assistant 消息需要落在同一个 memcell 内。
+    // 因此把所有远端评论合并到一条 user 消息中（保留作者信息），再紧跟 assistant 评审结果。
+    let userContent = `请求评审 MR !${mrIid}: ${title}`;
+    const commentParts: string[] = [];
     for (const raw of comments.slice(0, this.maxCommentCount)) {
       const comment = raw as Record<string, unknown>;
       const author = String(comment.author ?? '');
       let body = String(comment.body ?? '');
-      const createdAt = String(comment.createdAt ?? '');
       if (!author || !body) continue;
       if (body.length > this.maxCommentContentLength) {
         body = `${body.slice(0, this.maxCommentContentLength)}…（已截断）`;
       }
-      messages.push({
-        senderId: author,
-        role: 'user',
-        content: this.sanitizer.sanitize(body),
-        timestamp: this.parseTimestampMs(createdAt),
-      });
+      commentParts.push(`- ${author}: ${body}`);
+    }
+    if (commentParts.length > 0) {
+      userContent += `\n\n远端评论：\n${commentParts.join('\n')}`;
     }
 
-    // 若远端没有真人评论，补一条系统请求作为 user 锚点，确保能提取 episode
-    if (messages.length === 0) {
-      messages.push({
+    const messages: import('./everos-api.js').EverOSAddMessage[] = [
+      {
         senderId: ctx.userId,
         role: 'user',
-        content: `请求评审 MR !${mrIid}: ${title}`,
-      });
-    }
-
-    // 最后写入 assistant 评审结果
-    messages.push({
-      senderId: ctx.agentId,
-      role: 'assistant',
-      content: reviewContent,
-    });
+        content: this.sanitizer.sanitize(userContent),
+      },
+      {
+        senderId: ctx.agentId,
+        role: 'assistant',
+        content: reviewContent,
+      },
+    ];
 
     // EverOS /add 端点会同步执行 LLM 提取流水线，耗时可能超过 MCP 默认 60s 超时；
     // 整个写入+flush 流程放到后台执行，MCP 立即返回 ok，避免阻塞 Reviewer/Maintainer 主流程
@@ -379,11 +374,6 @@ export class EverOSMcpServer {
     await everosMemoryAddMessages(this.everosUrl, ctx, messages);
     await this.flushSession(ctx);
     logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, 'record_review 后台记忆写入完成');
-  }
-
-  private parseTimestampMs(iso: string): number | undefined {
-    const ts = Date.parse(iso);
-    return Number.isNaN(ts) ? undefined : ts;
   }
 
   private async flushSession(ctx: MemoryContext): Promise<void> {
