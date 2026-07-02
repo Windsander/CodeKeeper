@@ -19,6 +19,8 @@ export interface EverOSMcpServerOptions {
   everosUrl: string;
   /** 监听端口；0 表示随机 */
   port?: number;
+  /** 当 record_review 产生新的 user/agent owner 时回调，用于更新项目 owner 注册表 */
+  onMemoryOwners?: (projectId: string, owners: Array<{ ownerId: string; ownerType: 'user' | 'agent' }>) => void;
 }
 
 /**
@@ -29,6 +31,7 @@ export class EverOSMcpServer {
   private httpServer: HttpServer | null = null;
   private readonly everosUrl: string;
   private readonly port: number;
+  private readonly onMemoryOwners?: (projectId: string, owners: Array<{ ownerId: string; ownerType: 'user' | 'agent' }>) => void;
   private readonly sanitizer = new SecretSanitizer();
 
   /** 单条评论写入记忆时的最大字符数，避免过大 payload 拖慢 EverOS 流水线 */
@@ -39,6 +42,7 @@ export class EverOSMcpServer {
   constructor(options: EverOSMcpServerOptions) {
     this.everosUrl = options.everosUrl;
     this.port = options.port ?? 0;
+    this.onMemoryOwners = options.onMemoryOwners;
 
     this.server = new Server(
       {
@@ -331,36 +335,51 @@ export class EverOSMcpServer {
     const findingsText = this.formatFindingsForMemory(findings);
     const reviewContent = `Reviewer 评审 MR !${mrIid}: ${title}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${findingsText}`;
 
-    // 为了生成可被 EverOS 正确提取的 agent_case，user/assistant 消息需要落在同一个 memcell 内。
-    // 因此把所有远端评论合并到一条 user 消息中（保留作者信息），再紧跟 assistant 评审结果。
-    let userContent = `请求评审 MR !${mrIid}: ${title}`;
-    const commentParts: string[] = [];
+    const messages: import('./everos-api.js').EverOSAddMessage[] = [];
+
+    // 远端真人评论：使用实际评论人作为 sender_id，写入该用户下的记忆
     for (const raw of comments.slice(0, this.maxCommentCount)) {
       const comment = raw as Record<string, unknown>;
       const author = String(comment.author ?? '');
       let body = String(comment.body ?? '');
+      const createdAt = String(comment.createdAt ?? '');
       if (!author || !body) continue;
       if (body.length > this.maxCommentContentLength) {
         body = `${body.slice(0, this.maxCommentContentLength)}…（已截断）`;
       }
-      commentParts.push(`- ${author}: ${body}`);
-    }
-    if (commentParts.length > 0) {
-      userContent += `\n\n远端评论：\n${commentParts.join('\n')}`;
+      messages.push({
+        senderId: author,
+        role: 'user',
+        content: this.sanitizer.sanitize(body),
+        timestamp: this.parseTimestampMs(createdAt),
+      });
     }
 
-    const messages: import('./everos-api.js').EverOSAddMessage[] = [
-      {
-        senderId: ctx.userId,
-        role: 'user',
-        content: this.sanitizer.sanitize(userContent),
-      },
-      {
-        senderId: ctx.agentId,
-        role: 'assistant',
-        content: reviewContent,
-      },
+    // 追加一条系统请求作为 user 锚点，确保 reviewer 的 assistant 回复能形成 agent_case
+    messages.push({
+      senderId: ctx.userId,
+      role: 'user',
+      content: `请求评审 MR !${mrIid}: ${title}`,
+    });
+
+    // 最后写入 assistant 评审结果
+    messages.push({
+      senderId: ctx.agentId,
+      role: 'assistant',
+      content: reviewContent,
+    });
+
+    // 记录本次涉及的所有 owner，便于 memory.graph 按需拉取
+    const owners: Array<{ ownerId: string; ownerType: 'user' | 'agent' }> = [
+      { ownerId: ctx.userId, ownerType: 'user' },
+      { ownerId: ctx.agentId, ownerType: 'agent' },
     ];
+    for (const raw of comments.slice(0, this.maxCommentCount)) {
+      const comment = raw as Record<string, unknown>;
+      const author = String(comment.author ?? '');
+      if (author) owners.push({ ownerId: author, ownerType: 'user' });
+    }
+    this.onMemoryOwners?.(ctx.projectId, owners);
 
     // EverOS /add 端点会同步执行 LLM 提取流水线，耗时可能超过 MCP 默认 60s 超时；
     // 整个写入+flush 流程放到后台执行，MCP 立即返回 ok，避免阻塞 Reviewer/Maintainer 主流程
@@ -374,6 +393,11 @@ export class EverOSMcpServer {
     await everosMemoryAddMessages(this.everosUrl, ctx, messages);
     await this.flushSession(ctx);
     logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, 'record_review 后台记忆写入完成');
+  }
+
+  private parseTimestampMs(iso: string): number | undefined {
+    const ts = Date.parse(iso);
+    return Number.isNaN(ts) ? undefined : ts;
   }
 
   private async flushSession(ctx: MemoryContext): Promise<void> {

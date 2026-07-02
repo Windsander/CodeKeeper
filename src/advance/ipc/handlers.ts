@@ -608,7 +608,15 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const knownAgents = new Set<string>(['reviewer', 'maintainer', 'archiver']);
     const getResults = new Map<string, EverOSMemoryGetResult>();
 
-    // 第一轮：用已知固定 agent 拉取 agent 侧数据，同时发现 users
+    // 从 metadata store 读取本项目已注册的记忆 owner（真实用户 + Agent）
+    for (const project of projects) {
+      for (const { ownerId, ownerType } of ctx.store.listMemoryOwners(project.id)) {
+        if (ownerType === 'user') knownUsers.add(ownerId);
+        else knownAgents.add(ownerId);
+      }
+    }
+
+    // 第一轮：用已知 agent 拉取 agent 侧数据，同时从 agent_case 中发现用户
     for (const project of projects) {
       const projectResult: EverOSMemoryGetResult = {
         episodes: [], profiles: [], agent_cases: [], agent_skills: [], total_count: 0,

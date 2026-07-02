@@ -349,7 +349,14 @@ export class Daemon {
       const everosUrl = await this.everosService.start();
       this.handlerContext.everosUrl = everosUrl;
       this.everosHttpUrl = everosUrl;
-      this.everosMcpServer = new EverOSMcpServer({ everosUrl });
+      this.everosMcpServer = new EverOSMcpServer({
+        everosUrl,
+        onMemoryOwners: (projectId, owners) => {
+          for (const { ownerId, ownerType } of owners) {
+            this.options.store.recordMemoryOwner(projectId, ownerId, ownerType);
+          }
+        },
+      });
       this.everosMcpUrl = await this.everosMcpServer.start();
       this.serviceRegistry.setMemoryMcpUrl(this.everosMcpUrl);
       this.everosState = 'running';

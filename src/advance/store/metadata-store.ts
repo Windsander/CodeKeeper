@@ -125,6 +125,19 @@ export class MetadataStore {
       CREATE INDEX IF NOT EXISTS idx_deleted_memory_project ON deleted_memory_sessions(project_id);
     `);
 
+    // 创建 memory_owners 表（记录每个项目下出现过的记忆 owner，便于图谱按需拉取）
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_owners (
+        project_id TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        owner_type TEXT NOT NULL CHECK(owner_type IN ('user', 'agent')),
+        first_seen_at INTEGER NOT NULL,
+        last_seen_at INTEGER NOT NULL,
+        PRIMARY KEY (project_id, owner_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_owners_project ON memory_owners(project_id);
+    `);
+
     // 旧版 action_history 中 move/create/merge 类型迁移到新语义
     this.db.exec(`
       UPDATE action_history SET type = 'copy' WHERE type IN ('move', 'create');
@@ -1123,6 +1136,26 @@ export class MetadataStore {
       .prepare('SELECT session_id FROM deleted_memory_sessions WHERE project_id = ?')
       .all(projectId) as Array<{ session_id: string }>;
     return rows.map((r) => r.session_id);
+  }
+
+  // ---------- 记忆 owner 注册表 ----------
+
+  recordMemoryOwner(projectId: string, ownerId: string, ownerType: 'user' | 'agent'): void {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO memory_owners (project_id, owner_id, owner_type, first_seen_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(project_id, owner_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`
+      )
+      .run(projectId, ownerId, ownerType, now, now);
+  }
+
+  listMemoryOwners(projectId: string): Array<{ ownerId: string; ownerType: 'user' | 'agent' }> {
+    const rows = this.db
+      .prepare('SELECT owner_id, owner_type FROM memory_owners WHERE project_id = ?')
+      .all(projectId) as Array<{ owner_id: string; owner_type: 'user' | 'agent' }>;
+    return rows.map((r) => ({ ownerId: r.owner_id, ownerType: r.owner_type }));
   }
 }
 
