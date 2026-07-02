@@ -631,6 +631,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
           ownerId: agentId,
           memoryType: 'agent_skill',
         });
+        logger.info(
+          { projectId: project.id, agentId, cases: caseRes.total_count, skills: skillRes.total_count },
+          'memory.graph 拉取 agent 侧数据'
+        );
         mergeResult(projectResult, caseRes);
         mergeResult(projectResult, skillRes);
 
@@ -661,15 +665,24 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
           ownerId: userId,
           memoryType: 'profile',
         });
+        logger.info(
+          { projectId: project.id, userId, episodes: episodeRes.total_count, profiles: profileRes.total_count },
+          'memory.graph 拉取 user 侧数据'
+        );
         mergeResult(projectResult, episodeRes);
         mergeResult(projectResult, profileRes);
       }
     }
 
-    return buildMemoryGraph({
+    const graph = buildMemoryGraph({
       projects: projects.map((p) => ({ id: p.id, name: p.name, rootPath: p.rootPath })),
       getResults,
     });
+    logger.info(
+      { nodes: graph.nodes.length, edges: graph.edges.length, stats: graph.stats },
+      'memory.graph 构建完成'
+    );
+    return graph;
   },
 
   // ---------- Daemon 状态 IPC Handler ----------

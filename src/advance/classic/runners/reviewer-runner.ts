@@ -243,7 +243,7 @@ export class ReviewerRunner extends BaseRoleRunner {
               createdAt: c.createdAt,
             })),
           });
-          console.log(`[ReviewerRunner] MR !${mr.iid} 记忆写入成功`);
+          console.log(`[ReviewerRunner] MR !${mr.iid} 记忆写入请求已提交（EverOS 后台异步处理）`);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[ReviewerRunner] MR !${mr.iid} 记忆写入失败: ${message}`);
