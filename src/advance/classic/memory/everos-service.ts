@@ -236,7 +236,8 @@ export class EverOSService {
 
   private isRoutineAccessLog(line: string): boolean {
     // 匹配形如：127.0.0.1:62800 - "POST /api/v1/memory/get HTTP/1.1" 200
-    return /^\d{1,3}(?:\.\d{1,3}){3}:\d+\s+-\s+"[A-Z]+\s+\S+\s+HTTP\/\d(?:\.\d)?"\s+(?:2\d{2}|304)\b/.test(line);
+    // 实际 stdout 行可能带前置时间戳和 [info ] 前缀，因此不锚定行首
+    return /\d{1,3}(?:\.\d{1,3}){3}:\d+\s+-\s+"[A-Z]+\s+\S+\s+HTTP\/\d(?:\.\d)?"\s+(?:2\d{2}|304)\b/.test(line);
   }
 
   private tryParseUrl(stdout: string, resolve: (url: string) => void): void {
