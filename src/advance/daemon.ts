@@ -374,17 +374,26 @@ export class Daemon {
     everos?: import('./config/daemon-config.js').EverOSConfig;
   }): void {
     const persisted: import('./config/daemon-config.js').DaemonPersistedConfig = {};
-    let memoryConfigChanged = false;
+
+    const isChanged = <T>(oldValue: T, newValue: T | undefined): boolean =>
+      newValue !== undefined && newValue !== oldValue;
+
+    const memoryConfigChanged =
+      isChanged(this.options.apiKey, config.apiKey) ||
+      isChanged(this.options.apiUrl, config.apiUrl) ||
+      isChanged(this.options.provider, config.provider) ||
+      isChanged(this.options.model, config.model) ||
+      isChanged(this.options.embeddingModel, config.embeddingModel) ||
+      isChanged(this.options.rerankModel, config.rerankModel) ||
+      isChanged(this.options.everos, config.everos);
 
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
       persisted.apiKey = config.apiKey;
-      memoryConfigChanged = true;
     }
     if (config.apiUrl !== undefined) {
       this.options.apiUrl = config.apiUrl;
       persisted.apiUrl = config.apiUrl;
-      memoryConfigChanged = true;
     }
     if (config.provider !== undefined) {
       this.options.provider = config.provider;
@@ -393,7 +402,6 @@ export class Daemon {
     if (config.model !== undefined) {
       this.options.model = config.model;
       persisted.model = config.model;
-      memoryConfigChanged = true;
     }
     if (config.headers !== undefined) {
       this.options.headers = config.headers;
@@ -409,24 +417,24 @@ export class Daemon {
       this.options.llmRequestsPerMinute = config.llmRequestsPerMinute;
       persisted.llmRequestsPerMinute = config.llmRequestsPerMinute;
     }
+
+    const embeddingModelChanged = isChanged(this.options.embeddingModel, config.embeddingModel);
+    const rerankModelChanged = isChanged(this.options.rerankModel, config.rerankModel);
     if (config.embeddingModel !== undefined) {
       this.options.embeddingModel = config.embeddingModel;
       persisted.embeddingModel = config.embeddingModel;
-      memoryConfigChanged = true;
     }
     if (config.rerankModel !== undefined) {
       this.options.rerankModel = config.rerankModel;
       persisted.rerankModel = config.rerankModel;
-      memoryConfigChanged = true;
     }
     if (config.everos !== undefined) {
       this.options.everos = config.everos;
       persisted.everos = config.everos;
-      memoryConfigChanged = true;
     }
 
     // 本地模型名变更时替换 manager 实例，使新模型在下次启动时生效
-    if (config.embeddingModel !== undefined || config.rerankModel !== undefined) {
+    if (embeddingModelChanged || rerankModelChanged) {
       this.localModelManager.stop();
       this.localModelManager = new LocalModelServiceManager({
         embeddingModel: this.options.embeddingModel,
@@ -439,30 +447,55 @@ export class Daemon {
       saveDaemonConfig(persisted);
     }
 
-    // 记忆相关配置变化后，先启动本地模型服务，再自动重试启动 EverOS
+    // 记忆相关配置真正发生变化时：先停掉 EverOS，再启动本地模型服务，最后用新 env 重启 EverOS
     if (this.running && memoryConfigChanged) {
-      this.localModelManager
-        .start()
-        .then(() => this.startEverOS())
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          logger.warn({ err }, `配置更新后本地模型服务/EverOS 启动失败: ${message}`);
-        });
+      this.stopEverOS().then(() =>
+        this.localModelManager
+          .start()
+          .then(async () => {
+            const status = this.localModelManager.getStatus();
+            const ready = status.embedding.state === 'running' && status.rerank.state === 'running';
+            if (ready) {
+              await this.startEverOS();
+            } else {
+              logger.warn({ status }, '配置更新后本地模型服务未完全就绪，EverOS 保持停止');
+            }
+          })
+          .catch((err) => {
+            const message = err instanceof Error ? err.message : String(err);
+            logger.warn({ err }, `配置更新后本地模型服务/EverOS 启动失败: ${message}`);
+          })
+      );
     }
 
     // 远端模型配置变化后刷新连通性检测
-    if (
-      this.running &&
-      (config.apiKey !== undefined ||
-        config.apiUrl !== undefined ||
-        config.provider !== undefined ||
-        config.model !== undefined ||
-        config.everos !== undefined)
-    ) {
+    const remoteConfigChanged =
+      config.apiKey !== undefined ||
+      config.apiUrl !== undefined ||
+      config.provider !== undefined ||
+      config.model !== undefined ||
+      config.everos !== undefined;
+    if (this.running && remoteConfigChanged) {
       this.checkRemoteModels().catch((err) =>
         logger.warn({ err }, '配置更新后远端模型检测失败')
       );
     }
+  }
+
+  private async stopEverOS(): Promise<void> {
+    if (this.everosStarting) {
+      // 正在启动时避免竞态，简单置标记让启动完成后自然结束
+      this.everosStarting = false;
+    }
+    this.everosState = 'idle';
+    this.everosError = null;
+    this.everosHttpUrl = null;
+    this.everosMcpUrl = null;
+    this.handlerContext.everosUrl = undefined;
+    await this.everosMcpServer?.stop();
+    this.everosMcpServer = null;
+    this.everosService?.stop();
+    this.everosService = null;
   }
 
   private buildEverOSEnv(): NodeJS.ProcessEnv {
