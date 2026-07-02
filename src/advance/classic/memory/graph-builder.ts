@@ -12,6 +12,9 @@ export interface BuildMemoryGraphInput {
   getResults: Map<string, EverOSMemoryGetResult>;
 }
 
+const SYSTEM_USER_ID = 'codekeeper-system';
+const SYSTEM_NODE_ID = 'system';
+
 export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
   const nodes = new Map<string, MemoryGraphNode>();
   const edges = new Map<string, MemoryGraphEdge>();
@@ -23,8 +26,8 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
   const caseProjects = new Map<string, string>();
   const projectNodeMap = new Map<string, string>();
 
-  nodes.set('system', {
-    id: 'system',
+  nodes.set(SYSTEM_NODE_ID, {
+    id: SYSTEM_NODE_ID,
     label: 'CodeKeeper-System',
     group: 'system',
     title: 'CodeKeeper-System',
@@ -180,6 +183,14 @@ function processEntry(
       : [item.agent_id as string];
   for (const ownerId of ownerList) {
     if (!ownerId) continue;
+
+    // 系统身份（如 codekeeper-system）产生的 episode 不创建独立 user 节点，
+    // 直接挂到 system 节点下，避免与真正的远端用户混淆。
+    if (group === 'episode' && ownerId === SYSTEM_USER_ID) {
+      addEdge(edges, SYSTEM_NODE_ID, nodeId, 'authored');
+      continue;
+    }
+
     const ownerGroup = group === 'episode' ? 'user' : 'agent';
     const ownerNodeId = `${ownerGroup}:${ownerId}`;
     if (!nodes.has(ownerNodeId)) {

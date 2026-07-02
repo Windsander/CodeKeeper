@@ -309,7 +309,8 @@ export class EverOSMcpServer {
     const findings = Array.isArray(args.findings) ? args.findings : [];
     const mrIid = String(args.mrIid ?? 0);
     const title = String(args.title ?? '');
-    const reviewContent = `Reviewer 评审 MR !${mrIid}: ${title}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${JSON.stringify(findings, null, 2)}`;
+    const findingsText = this.formatFindingsForMemory(findings);
+    const reviewContent = `Reviewer 评审 MR !${mrIid}: ${title}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${findingsText}`;
 
     // 同时写入 user 请求与 assistant 评审结果，确保 EverOS 用户侧流水线能立即提取出 episode
     await everosMemoryAdd(this.everosUrl, {
@@ -329,13 +330,31 @@ export class EverOSMcpServer {
       content: reviewContent,
     });
 
-    // 单次评审消息通常为 assistant-only，EverOS 边界检测会累积而不提取；
-    // 主动 flush 使本次评审立即进入记忆流水线，确保后续可以召回。
+    // flush 会触发 LLM 边界检测与流水线，耗时较长；放到后台执行，避免 MCP 请求超时
+    this.flushSession(ctx).catch((err) => {
+      logger.error({ err, sessionId: ctx.sessionId }, 'record_review 后台 flush 失败');
+    });
+  }
+
+  private async flushSession(ctx: MemoryContext): Promise<void> {
     await everosMemoryFlush(this.everosUrl, {
       appId: ctx.appId,
       projectId: ctx.projectId,
       sessionId: ctx.sessionId,
     });
+  }
+
+  private formatFindingsForMemory(findings: unknown[]): string {
+    const items = findings
+      .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
+      .map((f) => {
+        const severity = String(f.severity ?? 'LOW');
+        const file = String(f.file ?? 'unknown');
+        const line = Number(f.line ?? 0);
+        const message = String(f.message ?? '');
+        return `- [${severity}] ${file}:${line} ${message}`;
+      });
+    return items.join('\n') || '无详细问题描述';
   }
 
   private async handleRecordProjectKnowledge(ctx: MemoryContext, items: ProjectKnowledgeItem[]): Promise<void> {
