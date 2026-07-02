@@ -48,7 +48,15 @@ export interface MrAgentState {
   /** 已处理过的非交互式 discussion，用于避免重复解析 */
   processedDiscussions?: Record<string, { noteCount: number; processedAt: number }>;
   /** 每个分支对的最后一次评审状态，用于避免重复发布 summary/记忆 */
-  reviewState?: Record<string, { findingsHash: string; reviewedAt: number }>;
+  reviewState?: Record<
+    string,
+    {
+      findingsHash: string;
+      findingsKeys: string[];
+      reviewedAt: number;
+      headSha?: string;
+    }
+  >;
 }
 
 export function getStatePath(project: Project): string {

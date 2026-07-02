@@ -112,8 +112,42 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
 }
 
 /**
- * 生成单条 finding 的 discussion thread 正文
+ * 生成追加评审评论正文
+ *
+ * 当 MR 有新 commit 或发现新问题时，在原 summary 下追加一条补充说明。
  */
+export function formatSupplementaryReviewComment(mr: MergeRequest, newFindings: ReviewFinding[]): string {
+  const now = new Date().toLocaleString('zh-CN', { hour12: false });
+  const severityOrder: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+  const groups = groupFindingsBySeverity(newFindings);
+  const total = newFindings.length;
+
+  const lines: string[] = [
+    `### 📝 补充评审（MR 有更新）`,
+    ``,
+    `**MR**: ${mr.title}<br>`,
+    `**新增发现项**: ${total} 个`,
+    ``,
+  ];
+
+  for (const severity of severityOrder) {
+    const items = groups[severity];
+    if (items.length === 0) continue;
+    const meta = SEVERITY_META[severity];
+    lines.push(`- ${meta.icon} **${meta.label}** (${items.length})`);
+    for (const finding of items) {
+      const ruleTag = finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : '';
+      lines.push(
+        `  - \`${finding.file}:${finding.line}\`${ruleTag} ${finding.message}<br>**建议**：${finding.suggestion}`
+      );
+    }
+    lines.push(``);
+  }
+
+  lines.push(`---`, ``, `*补充于 ${now} · CodeKeeper Advance MR 评审 Agent*`);
+
+  return lines.join('\n');
+}
 export function formatFindingThreadComment(finding: ReviewFinding): string {
   const severityEmoji: Record<ReviewFinding['severity'], string> = {
     CRITICAL: '🚨',

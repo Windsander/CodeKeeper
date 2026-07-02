@@ -14,7 +14,7 @@ import { loadProjectContext } from '../context/project-context-loader.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { getArchiveRoot } from '../../types.js';
 import { loadState, getDiscussionStateKey } from './shared/state-utils.js';
-import type { Project, RoleConfig } from '../../types.js';
+import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
 import type { MergeRequest, MrDiff, ReviewFinding } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
@@ -71,7 +71,11 @@ export class ReviewerRunner extends BaseRoleRunner {
       soulContent: soul.content || undefined,
       projectContext,
     };
-    const actor = new ReviewerActor({ provider, project });
+    const actor = new ReviewerActor({
+      provider,
+      project,
+      threadRiskLevels: (config as ReviewerConfig).threadRiskLevels,
+    });
 
     console.log(`[ReviewerRunner] 扫描项目 ${project.name} 的 open MRs...`);
     console.log(`[ReviewerRunner] 项目 ${project.name} 使用 filter: ${JSON.stringify(config.filter ?? {})}`);
@@ -159,26 +163,51 @@ export class ReviewerRunner extends BaseRoleRunner {
       }
 
       const findingsHash = computeFindingsHash(result.findings);
+      const findingsKeys = result.findings.map((f) => getFindingKey(f));
       const previousReview = state.reviewState?.[stateKey];
+      const headSha = shaInfo?.headSha ?? '';
       const mrUpdatedAt = new Date(mr.updatedAt).getTime();
+
+      const headChanged = previousReview ? previousReview.headSha !== headSha : true;
+      const findingsChanged = previousReview ? previousReview.findingsHash !== findingsHash : true;
+
       if (
         previousReview &&
-        previousReview.findingsHash === findingsHash &&
+        !headChanged &&
+        !findingsChanged &&
         !Number.isNaN(mrUpdatedAt) &&
         mrUpdatedAt <= previousReview.reviewedAt
       ) {
-        console.log(`[ReviewerRunner] MR !${mr.iid} 评审结果未变化且 MR 无更新，跳过发布与记忆写入`);
+        console.log(`[ReviewerRunner] MR !${mr.iid} 无新 commit、无新发现，跳过发布与记忆写入`);
         await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
 
+      const newFindings = previousReview
+        ? result.findings.filter((f) => !previousReview.findingsKeys.includes(getFindingKey(f)))
+        : result.findings;
+
       try {
-        await actor.postReview(mr, result, {
-          diffs,
-          shaInfo,
-          stateKey,
-          state,
-        });
+        if (!previousReview) {
+          await actor.postReview(mr, result, {
+            diffs,
+            shaInfo,
+            stateKey,
+            state,
+          });
+        } else if (newFindings.length > 0) {
+          await actor.appendSupplementaryReview(mr, newFindings);
+        }
+
+        // 为新增 CRITICAL/HIGH finding 开 threads（已有 findingKey 的不会重复创建）
+        if (newFindings.length > 0) {
+          await actor.createFindingThreads(mr, newFindings, {
+            diffs,
+            shaInfo,
+            stateKey,
+            state,
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] MR !${mr.iid} 发布评论失败: ${message}`);
@@ -215,7 +244,7 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       // 更新评审状态，避免周期性轮询导致重复 summary/记忆
       state.reviewState ??= {};
-      state.reviewState[stateKey] = { findingsHash, reviewedAt: Date.now() };
+      state.reviewState[stateKey] = { findingsHash, findingsKeys, reviewedAt: Date.now(), headSha };
 
       await memoryClient?.disconnect().catch(() => undefined);
     }
@@ -236,4 +265,8 @@ function computeFindingsHash(findings: ReviewFinding[]): string {
       ruleId: f.ruleId,
     }));
   return JSON.stringify(canonical);
+}
+
+function getFindingKey(finding: ReviewFinding): string {
+  return `${finding.file}:${finding.line}:${finding.ruleId ?? 'generic'}`;
 }

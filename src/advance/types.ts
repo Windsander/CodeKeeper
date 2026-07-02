@@ -35,6 +35,8 @@ export interface BaseRoleConfig {
  */
 export interface ReviewerConfig extends BaseRoleConfig {
   role: 'reviewer';
+  /** 需要创建代码行级 discussion thread 的严重等级，未配置时默认 CRITICAL + HIGH */
+  threadRiskLevels?: Array<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>;
 }
 
 /**
