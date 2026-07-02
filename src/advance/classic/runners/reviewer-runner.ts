@@ -13,9 +13,9 @@ import { loadSoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { getArchiveRoot } from '../../types.js';
-import { loadState, getDiscussionStateKey } from './shared/state-utils.js';
+import { loadState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
 import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
-import type { MergeRequest, MrDiff, ReviewFinding } from '../provider/types.js';
+import type { MergeRequest, MrDiff, ReviewFinding, Discussion } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
@@ -246,9 +246,110 @@ export class ReviewerRunner extends BaseRoleRunner {
       state.reviewState ??= {};
       state.reviewState[stateKey] = { findingsHash, findingsKeys, reviewedAt: Date.now(), headSha };
 
+      // 处理别人对 Reviewer 自己开的 discussion threads 的新回复
+      try {
+        const discussions = await provider.getDiscussions(mr.iid);
+        await this.handleThreadReplies(mr, discussions, result.findings, state, stateKey, provider, brain);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[ReviewerRunner] MR !${mr.iid} 处理 discussion 回复失败: ${message}`);
+      }
+
       await memoryClient?.disconnect().catch(() => undefined);
     }
   }
+
+  /**
+   * 处理 Reviewer 自己创建的 discussion threads 中的人类回复
+   */
+  private async handleThreadReplies(
+    mr: MergeRequest,
+    discussions: Discussion[],
+    originalFindings: ReviewFinding[],
+    state: MrAgentState,
+    stateKey: string,
+    provider: GitLabProvider,
+    brain: ReviewerBrain
+  ): Promise<void> {
+    const reviewerDiscussionIds = new Set(
+      (state.discussions[stateKey] ?? []).map((p) => p.discussionId)
+    );
+    if (reviewerDiscussionIds.size === 0) return;
+
+    const reviewerThreads = discussions.filter(
+      (d) => reviewerDiscussionIds.has(d.id) && !d.resolved && d.resolvable
+    );
+    if (reviewerThreads.length === 0) return;
+
+    const previousReview = state.reviewState?.[stateKey];
+    const baselineTime = previousReview?.reviewedAt ?? 0;
+
+    for (const discussion of reviewerThreads) {
+      const threadState = state.reviewerThreadState?.[discussion.id];
+      const lastRepliedAt = threadState?.lastRepliedAt ?? baselineTime;
+
+      const targetNotes = discussion.notes
+        .filter((note) => {
+          const ts = new Date(note.createdAt).getTime();
+          return (
+            !Number.isNaN(ts) &&
+            ts > lastRepliedAt &&
+            !isAgentAuthoredNote(note.body)
+          );
+        })
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+      if (targetNotes.length === 0) continue;
+
+      const threadNotes = discussion.notes.map((n) => ({
+        author: n.author,
+        body: n.body,
+        createdAt: n.createdAt,
+      }));
+
+      let latestRepliedAt = lastRepliedAt;
+      for (const note of targetNotes) {
+        const decision = await brain.replyToComment({
+          mr,
+          originalFindings,
+          threadNotes,
+          targetNote: {
+            author: note.author,
+            body: note.body,
+            createdAt: note.createdAt,
+          },
+        });
+
+        if (!decision.shouldReply || !decision.replyBody?.trim()) {
+          console.log(`[ReviewerRunner] discussion ${discussion.id} 的回复判断: ${decision.reason}`);
+          continue;
+        }
+
+        const replyBody = `${decision.replyBody}\n\n${REVIEWER_REPLY_SIGNATURE}`;
+        try {
+          await provider.addDiscussionNote(mr.iid, discussion.id, replyBody);
+          console.log(`[ReviewerRunner] 已回复 discussion ${discussion.id}: ${decision.reason}`);
+          const noteTs = new Date(note.createdAt).getTime();
+          if (noteTs > latestRepliedAt) latestRepliedAt = noteTs;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[ReviewerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
+        }
+      }
+
+      if (latestRepliedAt > lastRepliedAt) {
+        state.reviewerThreadState ??= {};
+        state.reviewerThreadState[discussion.id] = { lastRepliedAt: latestRepliedAt };
+      }
+    }
+  }
+}
+
+const REVIEWER_REPLY_SIGNATURE = '— CodeKeeper Reviewer';
+
+function isAgentAuthoredNote(body: string): boolean {
+  // 跳过 Maintainer/Reviewer 自己发出的 note，避免 self-reply 循环
+  return body.includes(REVIEWER_REPLY_SIGNATURE) || body.includes('— CodeKeeper Maintainer');
 }
 
 function computeFindingsHash(findings: ReviewFinding[]): string {

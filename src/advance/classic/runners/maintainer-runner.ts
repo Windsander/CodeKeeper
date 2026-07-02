@@ -19,7 +19,7 @@ import { getArchiveRoot } from '../../types.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
-import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
+import { loadState, saveState, type MrAgentState, getDiscussionStateKey } from './shared/state-utils.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
@@ -138,6 +138,11 @@ export class MaintainerRunner extends BaseRoleRunner {
       await memoryClient?.connect().catch(() => undefined);
       const brain = new MaintainerBrain({ ...brainOptions, memoryClient });
 
+      const stateKey = getDiscussionStateKey(mr);
+      const reviewerDiscussionIds = new Set(
+        (state.discussions[stateKey] ?? []).map((p) => p.discussionId)
+      );
+
       console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
       discussions.forEach((d, idx) => {
         console.log(
@@ -147,6 +152,8 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       const pendingDiscussions = discussions.filter((d) => {
         if (d.resolved || !d.resolvable) return false;
+        // Reviewer 自己开的 thread 由 Reviewer 自己回复，Maintainer 不抢答
+        if (reviewerDiscussionIds.has(d.id)) return false;
         const hasMaintainerNote = d.notes.some((note) =>
           note.body.includes(maintainerSignature(maintainerName))
         );

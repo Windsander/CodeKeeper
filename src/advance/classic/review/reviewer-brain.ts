@@ -21,7 +21,8 @@ export interface ReviewerBrainOptions {
  * ReviewerBrain
  *
  * Reviewer 的决策大脑：根据 MR diff、评审规则、项目背景，
- * 由 LLM 输出结构化的 findings 和整体 summary。
+ * 由 LLM 输出结构化的 findings 和整体 summary，
+ * 并判断是否需要回复别人对评审结论的评论。
  */
 export class ReviewerBrain {
   constructor(private readonly options: ReviewerBrainOptions) {}
@@ -44,6 +45,21 @@ export class ReviewerBrain {
     const result = this.parseReviewResponse(response);
 
     return result;
+  }
+
+  /**
+   * 判断是否需要回复别人对Reviewer评审结论的评论，并生成回复内容。
+   *
+   * 仅处理质疑、询问、要求澄清等需要认知层回应的场景；
+   * 对 LGTM、emoji、纯感谢等无需回复的内容返回 shouldReply=false。
+   */
+  async replyToComment(input: ReviewerReplyInput): Promise<ReviewerReplyResult> {
+    const prompt = this.buildReplyPrompt(input);
+    const response = await this.options.llmClient.complete(
+      prompt,
+      '你是严格的代码评审助手。请只输出 JSON。'
+    );
+    return this.parseReplyResponse(response);
   }
 
   private async recallContext(mr: MergeRequest, diffs: MrDiff[]): Promise<string> {
@@ -134,6 +150,78 @@ ${diffText}
     }
   }
 
+  private buildReplyPrompt(input: ReviewerReplyInput): string {
+    const findingsText = input.originalFindings
+      .map(
+        (f) =>
+          `- [${f.severity}] \`${f.file}:${f.line}\` ${f.message}\n  建议：${f.suggestion}`
+      )
+      .join('\n');
+
+    const notesText = input.threadNotes
+      .map((n, idx) => `【${idx + 1}】${n.author} (${n.createdAt}):\n${n.body}`)
+      .join('\n\n');
+
+    const soulSection = this.options.soulContent
+      ? `\n\nReviewer 个性与策略（SOUL.md）：\n${this.options.soulContent}`
+      : '';
+
+    const contextSection = this.options.projectContext
+      ? `\n\n项目背景与智库：\n${this.options.projectContext}`
+      : '';
+
+    return `你是对以下 Merge Request 进行评审的 Reviewer Agent。有用户在你在 GitLab MR 中创建的 discussion / comment 下发表了新意见，请你判断是否需要进行回复。
+
+MR 标题: ${input.mr.title}
+MR 描述: ${input.mr.description}
+源分支: ${input.mr.sourceBranch} -> 目标分支: ${input.mr.targetBranch}
+
+你最初的评审发现：
+${findingsText || '（无结构化 findings）'}
+
+该 discussion 的全部历史评论：
+${notesText}
+
+需要你判断是否回复的最新评论：
+【待回复】${input.targetNote.author} (${input.targetNote.createdAt}):
+${input.targetNote.body}
+
+评审规则：
+${this.options.rules}${soulSection}${contextSection}
+
+请严格按照以下 JSON 格式输出，不要包含任何其他文字：
+
+{
+  "shouldReply": true|false,
+  "replyBody": "如果需要回复，给出 concise 的回复正文（Markdown）；如果不需要回复，为空字符串",
+  "reason": "简短说明判断理由"
+}
+
+判断原则：
+- 如果是疑问、质疑、要求澄清、需要你进一步说明，shouldReply=true。
+- 如果是 "LGTM"、"thanks"、"👍"、纯表情、明显不需要回应的客套话，shouldReply=false。
+- 回复时保持 Reviewer 的专业、客观、简洁，不道歉、不承诺修改代码。
+- 如果用户指出你的 finding 确实有误，可以承认并说明会忽略或更新该 finding。`;
+  }
+
+  private parseReplyResponse(rawResponse: string): ReviewerReplyResult {
+    try {
+      const cleaned = this.extractJsonFromMarkdown(rawResponse);
+      const parsed = JSON.parse(cleaned) as {
+        shouldReply?: boolean;
+        replyBody?: string;
+        reason?: string;
+      };
+      return {
+        shouldReply: parsed.shouldReply === true,
+        replyBody: parsed.replyBody ?? '',
+        reason: parsed.reason ?? '未提供理由',
+      };
+    } catch {
+      return { shouldReply: false, replyBody: '', reason: 'LLM 回复解析失败，保守不回复' };
+    }
+  }
+
   private extractJsonFromMarkdown(text: string): string {
     const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (codeBlockMatch) {
@@ -173,4 +261,24 @@ ${diffText}
       .map((f, i) => (f.autoFixable ? i : -1))
       .filter((i) => i !== -1);
   }
+}
+
+export interface ReviewerReplyInput {
+  /** 当前 MR 信息 */
+  mr: MergeRequest;
+  /** Reviewer 最初提出的 findings */
+  originalFindings: ReviewFinding[];
+  /** 该 discussion 下的全部历史评论 */
+  threadNotes: Array<{ author: string; body: string; createdAt: string }>;
+  /** 需要判断是否回复的目标评论 */
+  targetNote: { author: string; body: string; createdAt: string };
+}
+
+export interface ReviewerReplyResult {
+  /** 是否需要回复 */
+  shouldReply: boolean;
+  /** 回复正文（Markdown） */
+  replyBody?: string;
+  /** 判断理由 */
+  reason: string;
 }

@@ -57,6 +57,8 @@ export interface MrAgentState {
       headSha?: string;
     }
   >;
+  /** Reviewer 对自己开的 discussion thread 的回复追踪，避免重复回复 */
+  reviewerThreadState?: Record<string, { lastRepliedAt: number }>;
 }
 
 export function getStatePath(project: Project): string {
@@ -83,6 +85,9 @@ export function loadState(project: Project): MrAgentState {
     }
     if (!parsed.reviewState) {
       parsed.reviewState = {};
+    }
+    if (!parsed.reviewerThreadState) {
+      parsed.reviewerThreadState = {};
     }
     return parsed;
   } catch {
