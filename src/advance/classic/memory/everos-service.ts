@@ -69,12 +69,26 @@ export class EverOSService {
       let stderr = '';
 
       child.stdout?.on('data', (chunk) => {
-        stdout += chunk.toString();
+        const text = chunk.toString();
+        stdout += text;
+        for (const line of text.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed && this.shouldLogStdoutLine(trimmed)) {
+            logger.info({ everos: trimmed }, '[EverOS]');
+          }
+        }
         this.tryParseUrl(stdout, resolve);
       });
 
       child.stderr?.on('data', (chunk) => {
-        stderr += chunk.toString();
+        const text = chunk.toString();
+        stderr += text;
+        for (const line of text.split('\n')) {
+          const trimmed = line.trim();
+          if (trimmed && this.shouldLogStderrLine(trimmed)) {
+            logger.warn({ everos: trimmed }, '[EverOS]');
+          }
+        }
       });
 
       child.on('error', (err) => {
@@ -208,6 +222,21 @@ export class EverOSService {
 
   private everosCliPath(): string {
     return join(this.venvPath(), process.platform === 'win32' ? 'Scripts\\everos.exe' : 'bin/everos');
+  }
+
+  private shouldLogStdoutLine(line: string): boolean {
+    // 过滤掉 Uvicorn 常规成功访问日志，避免记忆查询等高频率请求刷屏
+    return !this.isRoutineAccessLog(line);
+  }
+
+  private shouldLogStderrLine(line: string): boolean {
+    // stderr 一般只记录错误与警告，但同样过滤掉可能的访问日志
+    return !this.isRoutineAccessLog(line);
+  }
+
+  private isRoutineAccessLog(line: string): boolean {
+    // 匹配形如：127.0.0.1:62800 - "POST /api/v1/memory/get HTTP/1.1" 200
+    return /^\d{1,3}(?:\.\d{1,3}){3}:\d+\s+-\s+"[A-Z]+\s+\S+\s+HTTP\/\d(?:\.\d)?"\s+(?:2\d{2}|304)\b/.test(line);
   }
 
   private tryParseUrl(stdout: string, resolve: (url: string) => void): void {
