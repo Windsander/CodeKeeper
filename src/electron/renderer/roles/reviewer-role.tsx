@@ -14,11 +14,15 @@ registerRoleUI<'reviewer'>({
   icon: ReviewerIcon,
   soulFileName: 'MR-REVIEWER-SOUL.md',
   defaultSoulTemplate: DEFAULT_REVIEWER_SOUL,
-  projectConfigFields: [],
+  projectConfigFields: [
+    { key: 'reviewerName', label: '审查者名称', type: 'text', defaultValue: 'CodeKeeper Reviewer' },
+  ],
   defaultConfig: {
     role: 'reviewer',
     enabled: false,
     reviewSchedule: '*/10 * * * *',
     learningEnabled: true,
+    reviewerName: 'CodeKeeper Reviewer',
+    threadRiskLevels: ['CRITICAL', 'HIGH'],
   },
 });

@@ -136,6 +136,10 @@ export interface ReviewerConfig {
   enabled: boolean;
   reviewSchedule: string;
   learningEnabled: boolean;
+  /** Reviewer Agent 显示名称，用于评论签名 */
+  reviewerName?: string;
+  /** 需要创建代码行级 discussion thread 的严重等级，未配置时默认 CRITICAL + HIGH */
+  threadRiskLevels?: Array<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>;
   filter?: RoleFilter;
 }
 
