@@ -343,19 +343,21 @@ export class EverOSMcpServer {
       });
     }
 
-    // 再写入系统请求与 assistant 评审结果，确保 EverOS 用户侧流水线能提取 episode
-    messages.push(
-      {
+    // 若远端没有真人评论，补一条系统请求作为 user 锚点，确保能提取 episode
+    if (messages.length === 0) {
+      messages.push({
         senderId: ctx.userId,
         role: 'user',
         content: `请求评审 MR !${mrIid}: ${title}`,
-      },
-      {
-        senderId: ctx.agentId,
-        role: 'assistant',
-        content: reviewContent,
-      }
-    );
+      });
+    }
+
+    // 最后写入 assistant 评审结果
+    messages.push({
+      senderId: ctx.agentId,
+      role: 'assistant',
+      content: reviewContent,
+    });
 
     await everosMemoryAddMessages(this.everosUrl, ctx, messages);
 
