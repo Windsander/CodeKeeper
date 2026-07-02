@@ -18,8 +18,8 @@ import { GitLabProvider } from './classic/provider/gitlab-provider.js';
 import { EverOSService } from './classic/memory/everos-service.js';
 import { EverOSMcpServer } from './classic/memory/everos-mcp-server.js';
 import { LocalModelServiceManager } from './classic/memory/local-model-service.js';
-import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL } from './classic/memory/local-model-catalog.js';
-import { RemoteModelChecker } from './classic/memory/remote-model-checker.js';
+import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, getEmbeddingModelDimension, fetchEmbeddingModelDimension } from './classic/memory/local-model-catalog.js';
+import { RemoteModelChecker, cleanBaseUrl } from './classic/memory/remote-model-checker.js';
 import type { EverosStatus } from '../electron/shared/service-status.js';
 import type { RemoteModelStatus } from '../electron/shared/service-status.js';
 import path from 'node:path';
@@ -72,6 +72,7 @@ export class Daemon {
   private everosHttpUrl: string | null = null;
   private everosError: string | null = null;
   private localModelManager: LocalModelServiceManager;
+  private embeddingDim: number | null = null;
   private remoteModelChecker = new RemoteModelChecker();
   private remoteModelStatus: RemoteModelStatus = {
     llm: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
@@ -177,6 +178,14 @@ export class Daemon {
         const status = this.localModelManager.getStatus();
         const ready = status.embedding.state === 'running' && status.rerank.state === 'running';
         if (ready) {
+          // 根据实际选用的 HuggingFace embedding 模型解析输出维度，再启动 EverOS
+          const embedModel = this.options.embeddingModel ?? DEFAULT_EMBEDDING_MODEL;
+          this.embeddingDim = await fetchEmbeddingModelDimension(embedModel).catch(() => null);
+          if (this.embeddingDim) {
+            logger.info({ model: embedModel, dim: this.embeddingDim }, '已解析 embedding 模型维度');
+          } else {
+            logger.warn({ model: embedModel }, '无法从 HuggingFace 解析 embedding 维度，使用本地默认值');
+          }
           logger.info('本地模型服务已就绪，尝试启动/重启 EverOS');
           await this.startEverOS();
         } else {
@@ -303,7 +312,7 @@ export class Daemon {
     this.everosError = null;
 
     // EverOS 必须依赖远端 LLM 配置才能启动，且要求 OpenAI 兼容协议
-    const effectiveLlmUrl = this.options.apiUrl || this.getDefaultLlmBaseUrl(this.options.provider);
+    const effectiveLlmUrl = (this.options.apiUrl ? cleanBaseUrl(this.options.apiUrl) : undefined) || this.getDefaultLlmBaseUrl(this.options.provider);
     if (!this.options.apiKey || !effectiveLlmUrl) {
       const providerHint = this.options.provider === 'anthropic'
         ? '当前 Provider 为 Anthropic，EverOS LLM 需要 OpenAI 兼容的 Base URL，请在设置页填写代理地址或切换到 OpenAI 兼容 Provider。'
@@ -385,7 +394,8 @@ export class Daemon {
       isChanged(this.options.model, config.model) ||
       isChanged(this.options.embeddingModel, config.embeddingModel) ||
       isChanged(this.options.rerankModel, config.rerankModel) ||
-      isChanged(this.options.everos, config.everos);
+      (config.everos !== undefined &&
+        JSON.stringify(this.options.everos) !== JSON.stringify(config.everos));
 
     if (config.apiKey !== undefined) {
       this.options.apiKey = config.apiKey;
@@ -508,26 +518,40 @@ export class Daemon {
     const cfg = this.options.everos ?? {};
 
     // Embedding / Rerank：使用本地模型服务，未就绪时回退到 Agent 通用配置
+    // 本地 infinity_emb 使用 --url-prefix /v1，所以传给 EverOS 的 base_url 需要带 /v1 后缀
     const embedKey = agent.apiKey ?? 'local';
-    const embedUrl = this.localModelManager.getEmbeddingUrl() ?? agent.apiUrl;
+    const rawEmbedUrl = this.localModelManager.getEmbeddingUrl() ?? agent.apiUrl;
+    const embedUrl = rawEmbedUrl ? this.ensureLocalModelBaseUrl(rawEmbedUrl) : undefined;
     const embedModel = this.options.embeddingModel ?? DEFAULT_EMBEDDING_MODEL;
     if (embedKey) env.EVEROS_EMBEDDING__API_KEY = embedKey;
     if (embedUrl) env.EVEROS_EMBEDDING__BASE_URL = embedUrl;
     env.EVEROS_EMBEDDING__MODEL = embedModel;
+    env.EVEROS_EMBEDDING__DIM = String(this.embeddingDim ?? getEmbeddingModelDimension(embedModel));
 
     const rerankKey = agent.apiKey ?? 'local';
-    const rerankUrl = this.localModelManager.getRerankUrl() ?? agent.apiUrl;
+    const rawRerankUrl = this.localModelManager.getRerankUrl() ?? agent.apiUrl;
+    const rerankUrl = rawRerankUrl ? this.ensureLocalModelBaseUrl(rawRerankUrl) : undefined;
     const rerankModel = this.options.rerankModel ?? DEFAULT_RERANK_MODEL;
     if (rerankKey) env.EVEROS_RERANK__API_KEY = rerankKey;
     if (rerankUrl) env.EVEROS_RERANK__BASE_URL = rerankUrl;
     env.EVEROS_RERANK__MODEL = rerankModel;
+    // 本地 rerank 使用 infinity_emb 的 OpenAI-compatible /v1/rerank，显式指定 vllm provider
+    // 避免 EverOS 按 host 推断成 deepinfra
+    if (this.localModelManager.getRerankUrl()) {
+      env.EVEROS_RERANK__PROVIDER = 'vllm';
+    }
 
     // LLM：EverOS 的 LLM 客户端使用 OpenAI 兼容协议；优先使用用户填写的 Base URL，
     // OpenAI 官方 provider 留空时补全默认值，Anthropic 原生 API 不兼容，不自动补全
-    const effectiveLlmUrl = agent.apiUrl || this.getDefaultLlmBaseUrl(this.options.provider);
+    const effectiveLlmUrl = (agent.apiUrl ? cleanBaseUrl(agent.apiUrl) : undefined) || this.getDefaultLlmBaseUrl(this.options.provider);
     if (agent.apiKey) env.EVEROS_LLM__API_KEY = agent.apiKey;
     if (effectiveLlmUrl) env.EVEROS_LLM__BASE_URL = effectiveLlmUrl;
     if (agent.model) env.EVEROS_LLM__MODEL = agent.model;
+
+    // memorize 流水线可能调用 LLM，若 LLM 无响应会长期占用 per-session lock；
+    // 将 lock 超时从默认 360s 降到 120s，避免单个卡住的调用阻塞同一 MR session 的后续记忆写入
+    env.EVEROS_MEMORIZE__SESSION_LOCK_TIMEOUT_SECONDS = '120';
+
     logger.info(
       { provider: this.options.provider, baseUrl: effectiveLlmUrl ?? 'unset', model: agent.model || 'default' },
       '构建 EverOS LLM 环境变量'
@@ -550,6 +574,20 @@ export class Daemon {
       return 'https://api.openai.com/v1';
     }
     return undefined;
+  }
+
+  /**
+   * 确保本地模型服务的 base_url 带 /v1 前缀。
+   *
+   * infinity_emb 启动时带 --url-prefix /v1，OpenAI SDK 会再拼 /embeddings 或 /rerank；
+   * 如果直接传裸地址，EverOS 会请求 /embeddings 而不是 /v1/embeddings，导致 404。
+   */
+  private ensureLocalModelBaseUrl(url: string): string {
+    const trimmed = url.replace(/\/+$/, '');
+    if (trimmed.endsWith('/v1')) {
+      return trimmed;
+    }
+    return `${trimmed}/v1`;
   }
 
   private llmRequestInterval(): number {

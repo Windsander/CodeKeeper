@@ -31,6 +31,26 @@ export async function everosMemoryAdd(everosUrl: string, params: EverOSAddParams
   ]);
 }
 
+const DEFAULT_FETCH_TIMEOUT_MS = 120000;
+
+/**
+ * 带超时的 fetch 封装，避免 EverOS 无响应时无限挂起
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_FETCH_TIMEOUT_MS
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * 向 EverOS 批量写入同一 session 的多条记忆消息
  */
@@ -51,7 +71,7 @@ export async function everosMemoryAddMessages(
     })),
   };
 
-  const res = await fetch(`${everosUrl}/api/v1/memory/add`, {
+  const res = await fetchWithTimeout(`${everosUrl}/api/v1/memory/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -167,7 +187,7 @@ export async function everosMemoryFlush(
     session_id: sanitizeEverOSId(params.sessionId),
   };
 
-  const res = await fetch(`${everosUrl}/api/v1/memory/flush`, {
+  const res = await fetchWithTimeout(`${everosUrl}/api/v1/memory/flush`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -202,11 +222,11 @@ export async function everosMemorySearch(
     body.agent_id = sanitizeEverOSId(params.owner.agentId);
   }
 
-  const res = await fetch(`${everosUrl}/api/v1/memory/search`, {
+  const res = await fetchWithTimeout(`${everosUrl}/api/v1/memory/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
+  }, 60000);
   if (!res.ok) {
     throw new Error(`EverOS memory/search 失败: ${res.status} ${await res.text()}`);
   }

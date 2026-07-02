@@ -31,6 +31,11 @@ export class EverOSMcpServer {
   private readonly port: number;
   private readonly sanitizer = new SecretSanitizer();
 
+  /** 单条评论写入记忆时的最大字符数，避免过大 payload 拖慢 EverOS 流水线 */
+  private readonly maxCommentContentLength = 2000;
+  /** 单次 record_review 最多写入多少条远端评论，降低 EverOS 提取负载 */
+  private readonly maxCommentCount = 50;
+
   constructor(options: EverOSMcpServerOptions) {
     this.everosUrl = options.everosUrl;
     this.port = options.port ?? 0;
@@ -328,13 +333,16 @@ export class EverOSMcpServer {
 
     const messages: import('./everos-api.js').EverOSAddMessage[] = [];
 
-    // 先写入远端真人用户的 review/comment，作为 user 消息
-    for (const raw of comments) {
+    // 先写入远端真人用户的 review/comment，作为 user 消息；限制数量与长度，避免拖垮 EverOS 流水线
+    for (const raw of comments.slice(0, this.maxCommentCount)) {
       const comment = raw as Record<string, unknown>;
       const author = String(comment.author ?? '');
-      const body = String(comment.body ?? '');
+      let body = String(comment.body ?? '');
       const createdAt = String(comment.createdAt ?? '');
       if (!author || !body) continue;
+      if (body.length > this.maxCommentContentLength) {
+        body = `${body.slice(0, this.maxCommentContentLength)}…（已截断）`;
+      }
       messages.push({
         senderId: author,
         role: 'user',
@@ -359,12 +367,18 @@ export class EverOSMcpServer {
       content: reviewContent,
     });
 
-    await everosMemoryAddMessages(this.everosUrl, ctx, messages);
-
-    // flush 会触发 LLM 边界检测与流水线，耗时较长；放到后台执行，避免 MCP 请求超时
-    this.flushSession(ctx).catch((err) => {
-      logger.error({ err, sessionId: ctx.sessionId }, 'record_review 后台 flush 失败');
+    // EverOS /add 端点会同步执行 LLM 提取流水线，耗时可能超过 MCP 默认 60s 超时；
+    // 整个写入+flush 流程放到后台执行，MCP 立即返回 ok，避免阻塞 Reviewer/Maintainer 主流程
+    this.persistReview(ctx, messages).catch((err) => {
+      logger.error({ err, sessionId: ctx.sessionId }, 'record_review 后台记忆写入失败');
     });
+  }
+
+  private async persistReview(ctx: MemoryContext, messages: import('./everos-api.js').EverOSAddMessage[]): Promise<void> {
+    const start = Date.now();
+    await everosMemoryAddMessages(this.everosUrl, ctx, messages);
+    await this.flushSession(ctx);
+    logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, 'record_review 后台记忆写入完成');
   }
 
   private parseTimestampMs(iso: string): number | undefined {
@@ -400,26 +414,20 @@ export class EverOSMcpServer {
       content: this.sanitizer.sanitize(item.content),
     }));
     const content = `整理项目知识：\n${JSON.stringify(sanitized, null, 2)}`;
-    await everosMemoryAdd(this.everosUrl, {
-      appId: ctx.appId,
-      projectId: ctx.projectId,
-      sessionId: ctx.sessionId,
-      senderId: ctx.agentId,
-      role: 'assistant',
-      content,
+
+    // 项目知识写入为 best-effort，后台执行避免阻塞 MCP
+    this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content).catch((err) => {
+      logger.error({ err, sessionId: ctx.sessionId }, 'record_project_knowledge 后台记忆写入失败');
     });
   }
 
   private async handleRecordFixAttempt(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
     const ctx = args.context;
     const content = `Maintainer 在 MR !${String(args.mrIid ?? 0)} 尝试修复 ${String(args.file ?? '')}:${String(args.line ?? 0)}，结果=${args.success === true ? '成功' : '失败'}，理由=${String(args.reason ?? '')}`;
-    await everosMemoryAdd(this.everosUrl, {
-      appId: ctx.appId,
-      projectId: ctx.projectId,
-      sessionId: ctx.sessionId,
-      senderId: ctx.agentId,
-      role: 'assistant',
-      content,
+
+    // 修复记录为 best-effort，后台执行避免阻塞 MCP
+    this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content).catch((err) => {
+      logger.error({ err, sessionId: ctx.sessionId }, 'record_fix_attempt 后台记忆写入失败');
     });
   }
 
@@ -430,26 +438,33 @@ export class EverOSMcpServer {
     const decision = String(args.decision ?? '');
     const outcome = String(args.outcome ?? '');
     const sessionId = `interaction-${discussionId}`;
+    const interactionCtx: MemoryContext = { ...ctx, sessionId };
 
-    // Agent track：记录 Maintainer 视角的交互
+    // 交互记录为 best-effort，后台执行避免阻塞 MCP
+    Promise.all([
+      this.persistSingleMessage(interactionCtx, ctx.agentId, 'assistant', `与 ${userId} 的 discussion ${discussionId} 交互：决策=${decision}，结果=${outcome}`),
+      this.persistSingleMessage(interactionCtx, userId, 'user', `在 discussion ${discussionId} 中，Maintainer 决策=${decision}，结果=${outcome}`),
+    ]).catch((err) => {
+      logger.error({ err, sessionId }, 'record_interaction 后台记忆写入失败');
+    });
+  }
+
+  private async persistSingleMessage(
+    ctx: MemoryContext,
+    senderId: string,
+    role: 'user' | 'assistant' | 'tool',
+    content: string
+  ): Promise<void> {
+    const start = Date.now();
     await everosMemoryAdd(this.everosUrl, {
       appId: ctx.appId,
       projectId: ctx.projectId,
-      sessionId,
-      senderId: ctx.agentId,
-      role: 'assistant',
-      content: `与 ${userId} 的 discussion ${discussionId} 交互：决策=${decision}，结果=${outcome}`,
+      sessionId: ctx.sessionId,
+      senderId,
+      role,
+      content,
     });
-
-    // User track：记录用户视角的交互
-    await everosMemoryAdd(this.everosUrl, {
-      appId: ctx.appId,
-      projectId: ctx.projectId,
-      sessionId,
-      senderId: userId,
-      role: 'user',
-      content: `在 discussion ${discussionId} 中，Maintainer 决策=${decision}，结果=${outcome}`,
-    });
+    logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, '单条记忆后台写入完成');
   }
 
   private async handleRecallForReview(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
