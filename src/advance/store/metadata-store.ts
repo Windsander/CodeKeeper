@@ -214,9 +214,9 @@ export class MetadataStore {
 
   private normalizeRoles(raw: unknown): Record<Role, RoleConfig> {
     const defaults: Record<Role, RoleConfig> = {
-      reviewer: { role: 'reviewer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true, threadRiskLevels: ['CRITICAL', 'HIGH'] },
+      reviewer: { role: 'reviewer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true, reviewerName: 'CodeKeeper Reviewer', threadRiskLevels: ['CRITICAL', 'HIGH'] },
       maintainer: { role: 'maintainer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true, maintainerName: 'CodeKeeper Maintainer', autoFixEnabled: true, resolveOthersDiscussions: true },
-      archiver: { role: 'archiver', enabled: false, reviewSchedule: '0 2 * * *', learningEnabled: true },
+      archiver: { role: 'archiver', enabled: false, reviewSchedule: '0 2 * * *', learningEnabled: true, archiverName: 'CodeKeeper Archiver' },
     };
     if (!raw || typeof raw !== 'object') return defaults;
     return { ...defaults, ...(raw as Record<Role, RoleConfig>) };

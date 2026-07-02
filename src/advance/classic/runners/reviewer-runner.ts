@@ -14,6 +14,11 @@ import { loadProjectContext } from '../context/project-context-loader.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { getArchiveRoot } from '../../types.js';
 import { loadState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
+import {
+  formatAgentFooter,
+  isAgentAuthoredNote,
+  REVIEWER_ROLE_LABEL,
+} from './shared/review-utils.js';
 import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
 import type { MergeRequest, MrDiff, ReviewFinding, Discussion } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
@@ -71,10 +76,13 @@ export class ReviewerRunner extends BaseRoleRunner {
       soulContent: soul.content || undefined,
       projectContext,
     };
+    const reviewerConfig = config as ReviewerConfig;
+    const reviewerName = reviewerConfig.reviewerName ?? 'CodeKeeper Reviewer';
     const actor = new ReviewerActor({
       provider,
       project,
-      threadRiskLevels: (config as ReviewerConfig).threadRiskLevels,
+      reviewerName,
+      threadRiskLevels: reviewerConfig.threadRiskLevels,
     });
 
     console.log(`[ReviewerRunner] 扫描项目 ${project.name} 的 open MRs...`);
@@ -249,7 +257,7 @@ export class ReviewerRunner extends BaseRoleRunner {
       // 处理别人对 Reviewer 自己开的 discussion threads 的新回复
       try {
         const discussions = await provider.getDiscussions(mr.iid);
-        await this.handleThreadReplies(mr, discussions, result.findings, state, stateKey, provider, brain);
+        await this.handleThreadReplies(mr, discussions, result.findings, state, stateKey, provider, brain, reviewerName);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] MR !${mr.iid} 处理 discussion 回复失败: ${message}`);
@@ -269,7 +277,8 @@ export class ReviewerRunner extends BaseRoleRunner {
     state: MrAgentState,
     stateKey: string,
     provider: GitLabProvider,
-    brain: ReviewerBrain
+    brain: ReviewerBrain,
+    reviewerName: string
   ): Promise<void> {
     const reviewerDiscussionIds = new Set(
       (state.discussions[stateKey] ?? []).map((p) => p.discussionId)
@@ -308,6 +317,7 @@ export class ReviewerRunner extends BaseRoleRunner {
       }));
 
       let latestRepliedAt = lastRepliedAt;
+      const replyFooter = formatAgentFooter(REVIEWER_ROLE_LABEL, reviewerName);
       for (const note of targetNotes) {
         const decision = await brain.replyToComment({
           mr,
@@ -325,7 +335,7 @@ export class ReviewerRunner extends BaseRoleRunner {
           continue;
         }
 
-        const replyBody = `${decision.replyBody}\n\n${REVIEWER_REPLY_SIGNATURE}`;
+        const replyBody = `${decision.replyBody}\n\n${replyFooter}`;
         try {
           await provider.addDiscussionNote(mr.iid, discussion.id, replyBody);
           console.log(`[ReviewerRunner] 已回复 discussion ${discussion.id}: ${decision.reason}`);
@@ -343,13 +353,6 @@ export class ReviewerRunner extends BaseRoleRunner {
       }
     }
   }
-}
-
-const REVIEWER_REPLY_SIGNATURE = '— CodeKeeper Reviewer';
-
-function isAgentAuthoredNote(body: string): boolean {
-  // 跳过 Maintainer/Reviewer 自己发出的 note，避免 self-reply 循环
-  return body.includes(REVIEWER_REPLY_SIGNATURE) || body.includes('— CodeKeeper Maintainer');
 }
 
 function computeFindingsHash(findings: ReviewFinding[]): string {

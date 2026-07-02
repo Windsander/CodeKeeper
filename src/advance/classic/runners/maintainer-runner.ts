@@ -20,6 +20,7 @@ import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
 import { loadState, saveState, type MrAgentState, getDiscussionStateKey } from './shared/state-utils.js';
+import { formatAgentFooter, isAgentAuthoredNote, MAINTAINER_ROLE_LABEL } from './shared/review-utils.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
@@ -154,9 +155,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         if (d.resolved || !d.resolvable) return false;
         // Reviewer 自己开的 thread 由 Reviewer 自己回复，Maintainer 不抢答
         if (reviewerDiscussionIds.has(d.id)) return false;
-        const hasMaintainerNote = d.notes.some((note) =>
-          note.body.includes(maintainerSignature(maintainerName))
-        );
+        const hasMaintainerNote = d.notes.some((note) => isAgentAuthoredNote(note.body));
         const isInteractive = state.interactiveThreads[d.id]?.status === 'awaiting-reply';
         // 如果已处理过且没有新 note，且非交互式，跳过
         const processed = state.processedDiscussions?.[d.id];
@@ -225,7 +224,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     if (existingThread?.status === 'awaiting-reply') {
       const askedAt = existingThread.askedAt;
       const newReviewerNotes = discussion.notes.filter((note) => {
-        if (note.body.includes(maintainerSignature(maintainerName))) return false;
+        if (isAgentAuthoredNote(note.body)) return false;
         const noteTime = new Date(note.createdAt).getTime();
         return !Number.isNaN(noteTime) && noteTime > askedAt;
       });
@@ -279,7 +278,7 @@ export class MaintainerRunner extends BaseRoleRunner {
           await provider.addDiscussionNote(
             mr.iid,
             discussion.id,
-            `👋 ${maintainerName} 无法自动解析该 discussion，需要人工处理。\n\n${maintainerSignature(maintainerName)}`
+            `👋 ${maintainerName} 无法自动解析该 discussion，需要人工处理。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
           );
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -460,11 +459,4 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
     return null;
   }
-}
-
-/**
- * Maintainer 签名，用于识别自己已处理过的 discussion
- */
-function maintainerSignature(name: string): string {
-  return `— ${name}`;
 }

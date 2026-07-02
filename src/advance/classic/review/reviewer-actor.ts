@@ -3,13 +3,19 @@ import { buildDiffPosition, getFindingKey } from '../provider/discussion-mapper.
 import type { MergeRequest, MrDiff, MrShaInfo, ReviewFinding, ReviewResult } from '../provider/types.js';
 import { saveState, type MrAgentState } from '../runners/shared/state-utils.js';
 import type { Project } from '../../types.js';
-import { formatFindingThreadComment, formatReviewComment, formatSupplementaryReviewComment } from '../runners/shared/review-utils.js';
+import {
+  formatFindingThreadComment,
+  formatReviewComment,
+  formatSupplementaryReviewComment,
+} from '../runners/shared/review-utils.js';
 
 export interface ReviewerActorOptions {
   /** GitLab API 提供者 */
   provider: GitLabProvider;
   /** 当前项目，用于持久化 discussion 状态 */
   project?: Project;
+  /** Reviewer Agent 显示名称，用于评论签名 */
+  reviewerName?: string;
   /** 需要创建 discussion thread 的严重等级 */
   threadRiskLevels?: ReviewFinding['severity'][];
 }
@@ -38,7 +44,7 @@ export class ReviewerActor {
    * 发表评审 summary 评论，并按配置创建严重 finding 的 discussion threads
    */
   async postReview(mr: MergeRequest, result: ReviewResult, options?: PostReviewOptions): Promise<void> {
-    const comment = formatReviewComment(mr, result);
+    const comment = formatReviewComment(mr, result, this.options.reviewerName);
     try {
       await this.options.provider.postReviewComment(mr.iid, comment);
       console.log(`[ReviewerActor] 已在 MR !${mr.iid} 发表 summary 评论`);
@@ -56,7 +62,7 @@ export class ReviewerActor {
    */
   async appendSupplementaryReview(mr: MergeRequest, newFindings: ReviewFinding[]): Promise<void> {
     if (newFindings.length === 0) return;
-    const body = formatSupplementaryReviewComment(mr, newFindings);
+    const body = formatSupplementaryReviewComment(mr, newFindings, this.options.reviewerName);
     try {
       await this.options.provider.postReviewComment(mr.iid, body);
       console.log(`[ReviewerActor] 已在 MR !${mr.iid} 追加补充评审`);
@@ -98,7 +104,7 @@ export class ReviewerActor {
         continue;
       }
 
-      const body = formatFindingThreadComment(finding);
+      const body = formatFindingThreadComment(finding, this.options.reviewerName);
       try {
         const discussionId = await this.options.provider.createDiscussion(mr.iid, body, position);
         posted.push({

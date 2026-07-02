@@ -3,13 +3,14 @@ import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.
 import type { MrFixAgent } from './mr-fix-agent.js';
 import type { MaintainerDecision } from './maintainer-brain.js';
 import type { MrAgentState } from '../runners/shared/state-utils.js';
+import { formatAgentFooter, MAINTAINER_ROLE_LABEL } from '../runners/shared/review-utils.js';
 
 export interface MaintainerActorOptions {
   /** GitLab API 提供者 */
   provider: GitLabProvider;
   /** 修复执行器 */
   fixAgent: MrFixAgent;
-  /** Maintainer 署名，用于评论签名 */
+  /** Maintainer Agent 显示名称，用于评论签名 */
   maintainerName: string;
 }
 
@@ -98,7 +99,7 @@ export class MaintainerActor {
       return;
     }
 
-    const body = `${sections.join('\n\n')}\n\n${maintainerSignature(this.options.maintainerName)}`;
+    const body = `${sections.join('\n\n')}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`;
 
     try {
       await this.options.provider.addDiscussionNote(mr.iid, discussion.id, body);
@@ -145,7 +146,7 @@ export class MaintainerActor {
         await provider.addDiscussionNote(
           mr.iid,
           discussion.id,
-          `✅ ${maintainerName} 已根据 Reviewer 的意见自动修复并推送至本分支。\n\n请 Reviewer 复核变更。\n\n${maintainerSignature(maintainerName)}`
+          `✅ ${maintainerName} 已根据 Reviewer 的意见自动修复并推送至本分支。\n\n请 Reviewer 复核变更。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
         );
         console.log(`[MaintainerActor] 已修复并 resolve discussion ${discussion.id}`);
       } catch (error) {
@@ -159,7 +160,7 @@ export class MaintainerActor {
       await provider.addDiscussionNote(
         mr.iid,
         discussion.id,
-        `⏸️ ${maintainerName} 尝试按 Reviewer 描述修复但未成功：${fixResult.reason}\n\n请 Reviewer 确认是否需要人工处理。\n\n${maintainerSignature(maintainerName)}`
+        `⏸️ ${maintainerName} 尝试按 Reviewer 描述修复但未成功：${fixResult.reason}\n\n请 Reviewer 确认是否需要人工处理。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
       );
       console.log(`[MaintainerActor] 已追加修复失败说明`);
     } catch (error) {
@@ -180,7 +181,7 @@ export class MaintainerActor {
       await this.options.provider.addDiscussionNote(
         mr.iid,
         discussion.id,
-        `${question}\n\n${maintainerSignature(this.options.maintainerName)}`
+        `${question}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`
       );
       this.setAwaitingReply(state, discussion.id, question, filePath);
       console.log(`[MaintainerActor] 已在 discussion ${discussion.id} 提出澄清问题`);
@@ -196,7 +197,7 @@ export class MaintainerActor {
       await provider.addDiscussionNote(
         mr.iid,
         discussion.id,
-        `📝 ${maintainerName} 决定忽略本 discussion：${reason}\n\n${maintainerSignature(maintainerName)}`
+        `📝 ${maintainerName} 决定忽略本 discussion：${reason}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
       );
       console.log(`[MaintainerActor] 已忽略 discussion ${discussion.id}`);
     } catch (error) {
@@ -219,8 +220,4 @@ export class MaintainerActor {
       filePath,
     };
   }
-}
-
-function maintainerSignature(name: string): string {
-  return `— ${name}`;
 }

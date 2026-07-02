@@ -49,9 +49,37 @@ export function formatSummary(summary: string): string[] {
 }
 
 /**
+ * 角色签名中的角色标签
+ */
+export const REVIEWER_ROLE_LABEL = 'MR 评审 Agent';
+export const MAINTAINER_ROLE_LABEL = 'MR 维护 Agent';
+
+/**
+ * 判断一条 note body 是否由 CodeKeeper Agent 发出
+ */
+export function isAgentAuthoredNote(body: string): boolean {
+  return body.includes('CodeKeeper Advance');
+}
+
+/**
+ * 生成 Agent 身份签名 footer
+ *
+ * 统一格式：
+ *   ---
+ *   *生成于 YYYY/MM/DD HH:mm:ss · CodeKeeper Advance <角色标签> · <名称>*
+ */
+export function formatAgentFooter(roleLabel: string, agentName?: string): string {
+  const now = new Date().toLocaleString('zh-CN', { hour12: false });
+  const identity = agentName
+    ? `CodeKeeper Advance ${roleLabel} · ${agentName}`
+    : `CodeKeeper Advance ${roleLabel}`;
+  return `---\n*生成于 ${now} · ${identity}*`;
+}
+
+/**
  * 生成单条 finding 的 discussion body
  */
-export function formatFindingDiscussionBody(finding: ReviewFinding): string {
+export function formatFindingDiscussionBody(finding: ReviewFinding, agentName?: string): string {
   const meta = SEVERITY_META[finding.severity];
   const ruleTag = finding.ruleId ? ` · 规则 \`${finding.ruleId}\`` : '';
   return [
@@ -63,7 +91,7 @@ export function formatFindingDiscussionBody(finding: ReviewFinding): string {
     `**修改建议：**`,
     finding.suggestion,
     ``,
-    `*CodeKeeper Advance MR 评审 Agent*`,
+    formatAgentFooter(REVIEWER_ROLE_LABEL, agentName),
   ].join('\n');
 }
 
@@ -72,8 +100,7 @@ export function formatFindingDiscussionBody(finding: ReviewFinding): string {
  *
  * 仅用于 reviewer 角色，汇总所有 findings。
  */
-export function formatReviewComment(mr: MergeRequest, result: ReviewResult): string {
-  const now = new Date().toLocaleString('zh-CN', { hour12: false });
+export function formatReviewComment(mr: MergeRequest, result: ReviewResult, agentName?: string): string {
   const severityOrder: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
   const groups = groupFindingsBySeverity(result.findings);
   const total = result.findings.length;
@@ -106,7 +133,7 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
     }
   }
 
-  lines.push(`---`, ``, `*生成于 ${now} · CodeKeeper Advance MR 评审 Agent*`);
+  lines.push(formatAgentFooter(REVIEWER_ROLE_LABEL, agentName));
 
   return lines.join('\n');
 }
@@ -116,8 +143,7 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult): str
  *
  * 当 MR 有新 commit 或发现新问题时，在原 summary 下追加一条补充说明。
  */
-export function formatSupplementaryReviewComment(mr: MergeRequest, newFindings: ReviewFinding[]): string {
-  const now = new Date().toLocaleString('zh-CN', { hour12: false });
+export function formatSupplementaryReviewComment(mr: MergeRequest, newFindings: ReviewFinding[], agentName?: string): string {
   const severityOrder: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
   const groups = groupFindingsBySeverity(newFindings);
   const total = newFindings.length;
@@ -144,11 +170,11 @@ export function formatSupplementaryReviewComment(mr: MergeRequest, newFindings: 
     lines.push(``);
   }
 
-  lines.push(`---`, ``, `*补充于 ${now} · CodeKeeper Advance MR 评审 Agent*`);
+  lines.push(formatAgentFooter(REVIEWER_ROLE_LABEL, agentName));
 
   return lines.join('\n');
 }
-export function formatFindingThreadComment(finding: ReviewFinding): string {
+export function formatFindingThreadComment(finding: ReviewFinding, agentName?: string): string {
   const severityEmoji: Record<ReviewFinding['severity'], string> = {
     CRITICAL: '🚨',
     HIGH: '🔴',
@@ -161,6 +187,8 @@ export function formatFindingThreadComment(finding: ReviewFinding): string {
     `**问题描述**：${finding.message}`,
     '',
     `**修改建议**：${finding.suggestion}`,
+    '',
+    formatAgentFooter(REVIEWER_ROLE_LABEL, agentName),
   ];
   return parts.join('\n');
 }
