@@ -528,7 +528,7 @@ export class Daemon {
     if (agent.apiKey) env.EVEROS_LLM__API_KEY = agent.apiKey;
     if (effectiveLlmUrl) env.EVEROS_LLM__BASE_URL = effectiveLlmUrl;
     if (agent.model) env.EVEROS_LLM__MODEL = agent.model;
-    logger.debug(
+    logger.info(
       { provider: this.options.provider, baseUrl: effectiveLlmUrl ?? 'unset', model: agent.model || 'default' },
       '构建 EverOS LLM 环境变量'
     );
