@@ -302,6 +302,17 @@ export class Daemon {
     this.everosState = 'starting';
     this.everosError = null;
 
+    // EverOS 必须依赖远端 LLM 配置才能启动
+    const effectiveLlmUrl = this.options.apiUrl || this.getDefaultLlmBaseUrl(this.options.provider);
+    if (!this.options.apiKey || !effectiveLlmUrl) {
+      const message = 'EverOS 需要远端 LLM 配置：请先在设置页填写 API Key 和 Base URL';
+      logger.warn(message);
+      this.everosState = 'error';
+      this.everosError = message;
+      this.everosStarting = false;
+      return;
+    }
+
     try {
       if (this.everosService && this.everosMcpUrl) {
         this.everosState = 'running';
@@ -475,9 +486,10 @@ export class Daemon {
     if (rerankUrl) env.EVEROS_RERANK__BASE_URL = rerankUrl;
     env.EVEROS_RERANK__MODEL = rerankModel;
 
-    // LLM：使用 Agent 通用配置
+    // LLM：使用 Agent 通用配置；若未填写 Base URL，按 provider 补全默认值
+    const effectiveLlmUrl = agent.apiUrl || this.getDefaultLlmBaseUrl(this.options.provider);
     if (agent.apiKey) env.EVEROS_LLM__API_KEY = agent.apiKey;
-    if (agent.apiUrl) env.EVEROS_LLM__BASE_URL = agent.apiUrl;
+    if (effectiveLlmUrl) env.EVEROS_LLM__BASE_URL = effectiveLlmUrl;
     if (agent.model) env.EVEROS_LLM__MODEL = agent.model;
 
     // Multimodal：仅使用显式配置，未配置时不回退到 Agent LLM
@@ -489,6 +501,17 @@ export class Daemon {
     if (mmModel) env.EVEROS_MULTIMODAL__MODEL = mmModel;
 
     return env;
+  }
+
+  private getDefaultLlmBaseUrl(provider?: string): string | undefined {
+    switch (provider) {
+      case 'anthropic':
+        return 'https://api.anthropic.com/v1';
+      case 'openai':
+        return 'https://api.openai.com/v1';
+      default:
+        return undefined;
+    }
   }
 
   private llmRequestInterval(): number {
