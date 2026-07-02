@@ -51,12 +51,16 @@ export class ReviewerActor {
     options?: PostReviewOptions
   ): Promise<void> {
     if (!options?.diffs || !options.shaInfo || !options.stateKey || !options.state || !this.options.project) {
+      console.log('[ReviewerActor] 缺少创建 discussion threads 的必要上下文，跳过');
       return;
     }
 
     const { diffs, shaInfo, stateKey, state } = options;
     const posted = state.discussions[stateKey] ?? [];
     const severities = new Set<ReviewResult['findings'][number]['severity']>(['CRITICAL', 'HIGH']);
+    const candidates = result.findings.filter((f) => severities.has(f.severity));
+
+    console.log(`[ReviewerActor] MR !${mr.iid} 存在 ${candidates.length} 个 CRITICAL/HIGH finding，已发布 ${posted.length} 个`);
 
     for (const finding of result.findings) {
       if (!severities.has(finding.severity)) continue;
