@@ -307,15 +307,28 @@ export class EverOSMcpServer {
     const ctx = args.context;
     const summary = this.sanitizer.sanitize(String(args.summary ?? ''));
     const findings = Array.isArray(args.findings) ? args.findings : [];
-    const content = `Reviewer 评审 MR !${String(args.mrIid ?? 0)}: ${String(args.title ?? '')}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${JSON.stringify(findings, null, 2)}`;
+    const mrIid = String(args.mrIid ?? 0);
+    const title = String(args.title ?? '');
+    const reviewContent = `Reviewer 评审 MR !${mrIid}: ${title}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${JSON.stringify(findings, null, 2)}`;
+
+    // 同时写入 user 请求与 assistant 评审结果，确保 EverOS 用户侧流水线能立即提取出 episode
+    await everosMemoryAdd(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      sessionId: ctx.sessionId,
+      senderId: ctx.userId,
+      role: 'user',
+      content: `请求评审 MR !${mrIid}: ${title}`,
+    });
     await everosMemoryAdd(this.everosUrl, {
       appId: ctx.appId,
       projectId: ctx.projectId,
       sessionId: ctx.sessionId,
       senderId: ctx.agentId,
       role: 'assistant',
-      content,
+      content: reviewContent,
     });
+
     // 单次评审消息通常为 assistant-only，EverOS 边界检测会累积而不提取；
     // 主动 flush 使本次评审立即进入记忆流水线，确保后续可以召回。
     await everosMemoryFlush(this.everosUrl, {

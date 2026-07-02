@@ -604,7 +604,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       });
     }
 
-    const knownUsers = new Set<string>();
+    const knownUsers = new Set<string>(['codekeeper-system']);
     const knownAgents = new Set<string>(['reviewer', 'maintainer', 'archiver']);
     const getResults = new Map<string, EverOSMemoryGetResult>();
 
