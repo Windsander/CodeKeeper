@@ -12,7 +12,7 @@ import { logger } from '../../../core/logger.js';
 import { SecretSanitizer } from './secret-sanitizer.js';
 import type { MemoryContext, ProjectKnowledgeItem } from './types.js';
 import { sanitizeEverOSId } from './types.js';
-import { everosMemoryAdd, everosMemorySearch, type EverOSSearchItem } from './everos-api.js';
+import { everosMemoryAdd, everosMemorySearch, everosMemoryFlush, type EverOSSearchItem } from './everos-api.js';
 
 export interface EverOSMcpServerOptions {
   /** EverOS HTTP API URL */
@@ -315,6 +315,13 @@ export class EverOSMcpServer {
       senderId: ctx.agentId,
       role: 'assistant',
       content,
+    });
+    // 单次评审消息通常为 assistant-only，EverOS 边界检测会累积而不提取；
+    // 主动 flush 使本次评审立即进入记忆流水线，确保后续可以召回。
+    await everosMemoryFlush(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      sessionId: ctx.sessionId,
     });
   }
 

@@ -134,6 +134,29 @@ interface EverOSSearchResponse {
 }
 
 /**
+ * 强制刷新指定 session 的记忆边界，使已累积的 message 立即进入提取流水线
+ */
+export async function everosMemoryFlush(
+  everosUrl: string,
+  params: Pick<EverOSAddParams, 'appId' | 'projectId' | 'sessionId'>
+): Promise<void> {
+  const body = {
+    app_id: sanitizeEverOSId(params.appId),
+    project_id: sanitizeEverOSId(params.projectId),
+    session_id: sanitizeEverOSId(params.sessionId),
+  };
+
+  const res = await fetch(`${everosUrl}/api/v1/memory/flush`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`EverOS memory/flush 失败: ${res.status} ${await res.text()}`);
+  }
+}
+
+/**
  * 从 EverOS 召回记忆
  *
  * 按 agent_id 或 user_id 搜索，返回按 score 降序排列的文本摘要列表。
