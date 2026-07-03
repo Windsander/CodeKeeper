@@ -1,3 +1,4 @@
+import { logger } from '../../../core/logger.js';
 import { sanitizeEverOSId } from './types.js';
 
 /**
@@ -33,6 +34,23 @@ export async function everosMemoryAdd(everosUrl: string, params: EverOSAddParams
 
 const DEFAULT_FETCH_TIMEOUT_MS = 120000;
 
+interface FetchRetryOptions {
+  /** 最大重试次数，默认 3 */
+  retries?: number;
+  /** 首次重试等待毫秒数，默认 500 */
+  baseDelayMs?: number;
+  /** 最大重试等待毫秒数，默认 8000 */
+  maxDelayMs?: number;
+  /** 单次请求超时毫秒数 */
+  timeoutMs?: number;
+}
+
+const DEFAULT_RETRY_OPTIONS: Required<Omit<FetchRetryOptions, 'timeoutMs'>> = {
+  retries: 3,
+  baseDelayMs: 500,
+  maxDelayMs: 8000,
+};
+
 /**
  * 带超时的 fetch 封装，避免 EverOS 无响应时无限挂起
  */
@@ -49,6 +67,61 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 带指数退避重试的 fetch 封装。
+ *
+ * 对 429（限流）和 5xx（服务端错误）自动重试，降低上游瞬态故障导致记忆丢失的概率。
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  options: FetchRetryOptions = {}
+): Promise<Response> {
+  const { retries, baseDelayMs, maxDelayMs } = { ...DEFAULT_RETRY_OPTIONS, ...options };
+  const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  let lastError: Error | undefined;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetchWithTimeout(url, init, timeoutMs);
+      if (!res.ok && isRetryableStatus(res.status)) {
+        const text = await res.text().catch(() => '');
+        lastError = new Error(`EverOS 请求失败: ${res.status} ${text}`);
+        if (attempt < retries) {
+          const delay = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
+          logger.warn(
+            { status: res.status, attempt: attempt + 1, maxAttempts: retries, delayMs: delay, url },
+            'EverOS 请求失败，准备重试'
+          );
+          await sleep(delay);
+        }
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < retries) {
+        const delay = Math.min(baseDelayMs * 2 ** attempt, maxDelayMs);
+        logger.warn(
+          { attempt: attempt + 1, maxAttempts: retries, delayMs: delay, url, err: lastError },
+          'EverOS 请求异常，准备重试'
+        );
+        await sleep(delay);
+      }
+    }
+  }
+
+  throw lastError ?? new Error('EverOS 请求失败且已耗尽重试次数');
 }
 
 /**
@@ -71,7 +144,7 @@ export async function everosMemoryAddMessages(
     })),
   };
 
-  const res = await fetchWithTimeout(`${everosUrl}/api/v1/memory/add`, {
+  const res = await fetchWithRetry(`${everosUrl}/api/v1/memory/add`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -187,7 +260,7 @@ export async function everosMemoryFlush(
     session_id: sanitizeEverOSId(params.sessionId),
   };
 
-  const res = await fetchWithTimeout(`${everosUrl}/api/v1/memory/flush`, {
+  const res = await fetchWithRetry(`${everosUrl}/api/v1/memory/flush`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -222,11 +295,11 @@ export async function everosMemorySearch(
     body.agent_id = sanitizeEverOSId(params.owner.agentId);
   }
 
-  const res = await fetchWithTimeout(`${everosUrl}/api/v1/memory/search`, {
+  const res = await fetchWithRetry(`${everosUrl}/api/v1/memory/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }, 60000);
+  }, { timeoutMs: 60000 });
   if (!res.ok) {
     throw new Error(`EverOS memory/search 失败: ${res.status} ${await res.text()}`);
   }
@@ -255,11 +328,11 @@ export async function everosMemorySearchProject(
     enable_llm_rerank: true,
   };
 
-  const res = await fetchWithTimeout(`${everosUrl}/api/v1/memory/search`, {
+  const res = await fetchWithRetry(`${everosUrl}/api/v1/memory/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  }, 60000);
+  }, { timeoutMs: 60000 });
   if (!res.ok) {
     throw new Error(`EverOS memory/search(project) 失败: ${res.status} ${await res.text()}`);
   }
