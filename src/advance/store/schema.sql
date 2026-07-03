@@ -133,3 +133,25 @@ CREATE TABLE IF NOT EXISTS mr_review_states (
 
 CREATE INDEX IF NOT EXISTS idx_mr_state_project ON mr_review_states(project_id);
 CREATE INDEX IF NOT EXISTS idx_mr_state_state ON mr_review_states(state);
+
+-- 失败记忆写入重试队列
+CREATE TABLE IF NOT EXISTS pending_memory_writes (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  agent_display_name TEXT,
+  user_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('add_messages', 'flush')),
+  messages_json TEXT NOT NULL DEFAULT '[]',
+  content_hash TEXT NOT NULL,
+  failure_count INTEGER NOT NULL DEFAULT 1,
+  last_error TEXT,
+  next_retry_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(project_id, session_id, content_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pending_memory_project ON pending_memory_writes(project_id);
+CREATE INDEX IF NOT EXISTS idx_pending_memory_next_retry ON pending_memory_writes(next_retry_at);

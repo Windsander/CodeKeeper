@@ -17,6 +17,8 @@ import { ScanService } from './scan/scan-service.js';
 import { GitLabProvider } from './classic/provider/gitlab-provider.js';
 import { EverOSService } from './classic/memory/everos-service.js';
 import { EverOSMcpServer } from './classic/memory/everos-mcp-server.js';
+import { MemoryWriteQueue } from './classic/memory/memory-write-queue.js';
+import { MemoryWriteRetryService } from './classic/memory/memory-write-retry-service.js';
 import { LocalModelServiceManager } from './classic/memory/local-model-service.js';
 import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, getEmbeddingModelDimension, fetchEmbeddingModelDimension } from './classic/memory/local-model-catalog.js';
 import { RemoteModelChecker, cleanBaseUrl } from './classic/memory/remote-model-checker.js';
@@ -72,6 +74,8 @@ export class Daemon {
   private everosHttpUrl: string | null = null;
   private everosError: string | null = null;
   private localModelManager: LocalModelServiceManager;
+  private memoryWriteQueue: MemoryWriteQueue;
+  private memoryWriteRetryService: MemoryWriteRetryService;
   private embeddingDim: number | null = null;
   private remoteModelChecker = new RemoteModelChecker();
   private remoteModelStatus: RemoteModelStatus = {
@@ -109,6 +113,12 @@ export class Daemon {
     this.localModelManager = new LocalModelServiceManager({
       embeddingModel: this.options.embeddingModel,
       rerankModel: this.options.rerankModel,
+    });
+
+    this.memoryWriteQueue = new MemoryWriteQueue({ store: options.store });
+    this.memoryWriteRetryService = new MemoryWriteRetryService({
+      queue: this.memoryWriteQueue,
+      getEverosUrl: () => this.everosHttpUrl ?? undefined,
     });
 
     this.handlerContext = {
@@ -204,6 +214,7 @@ export class Daemon {
     // 初始检测一次远端模型连通性，并启动 30s 轮询
     this.checkRemoteModels().catch((err) => logger.warn({ err }, '初始远端模型检测失败'));
     this.startRemoteModelChecks();
+    this.memoryWriteRetryService.start();
 
     // IPC server 启动后，把文件监控等非关键初始化推迟到下一个事件循环，
     // 让 UI 在 App 刚打开时能立即响应 IPC 请求，避免按钮点击延迟。
@@ -246,6 +257,7 @@ export class Daemon {
       clearInterval(this.remoteModelCheckTimer);
       this.remoteModelCheckTimer = null;
     }
+    this.memoryWriteRetryService.stop();
     await this.everosMcpServer?.stop();
     this.everosService?.stop();
     this.everosMcpServer = null;
@@ -351,6 +363,7 @@ export class Daemon {
       this.everosHttpUrl = everosUrl;
       this.everosMcpServer = new EverOSMcpServer({
         everosUrl,
+        queue: this.memoryWriteQueue,
         onMemoryOwners: (projectId, owners) => {
           for (const { ownerId, ownerType, displayName } of owners) {
             this.options.store.recordMemoryOwner(projectId, ownerId, ownerType, displayName);

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
+import type { EverOSAddMessage } from '../classic/memory/everos-api.js';
 import type { Project, WatchedEvent, KnowledgeEntry, ArchiveAction, GitlabConfig, Role, RoleConfig, RoleFilter, ReviewerConfig } from '../types';
 
 /**
@@ -279,6 +280,7 @@ export class MetadataStore {
     this.db.prepare('DELETE FROM action_history WHERE project_id = ?').run(projectId);
     this.db.prepare('DELETE FROM archive_metadata WHERE project_id = ?').run(projectId);
     this.db.prepare('DELETE FROM mr_review_states WHERE project_id = ?').run(projectId);
+    this.db.prepare('DELETE FROM pending_memory_writes WHERE project_id = ?').run(projectId);
   }
 
   listProjects(): Project[] {
@@ -1175,12 +1177,148 @@ export class MetadataStore {
       displayName: r.display_name ?? undefined,
     }));
   }
+
+  // ---------- 失败记忆写入重试队列 ----------
+
+  insertPendingMemoryWrite(write: {
+    id: string;
+    projectId: string;
+    appId: string;
+    agentId: string;
+    agentDisplayName?: string;
+    userId: string;
+    sessionId: string;
+    kind: 'add_messages' | 'flush';
+    messages: EverOSAddMessage[];
+    contentHash: string;
+    failureCount: number;
+    lastError?: string;
+    nextRetryAt: number;
+    createdAt: number;
+  }): void {
+    const stmt = this.db.prepare(
+      `INSERT INTO pending_memory_writes (
+         id, project_id, app_id, agent_id, agent_display_name, user_id, session_id,
+         kind, messages_json, content_hash, failure_count, last_error, next_retry_at, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(project_id, session_id, content_hash) DO UPDATE SET
+         failure_count = pending_memory_writes.failure_count + 1,
+         last_error = excluded.last_error,
+         next_retry_at = excluded.next_retry_at,
+         kind = excluded.kind,
+         messages_json = excluded.messages_json`
+    );
+    stmt.run(
+      write.id,
+      write.projectId,
+      write.appId,
+      write.agentId,
+      write.agentDisplayName ?? null,
+      write.userId,
+      write.sessionId,
+      write.kind,
+      JSON.stringify(write.messages),
+      write.contentHash,
+      write.failureCount,
+      write.lastError ?? null,
+      write.nextRetryAt,
+      write.createdAt
+    );
+  }
+
+  listPendingMemoryWrites(options: { now?: number; limit?: number } = {}): Array<{
+    id: string;
+    projectId: string;
+    appId: string;
+    agentId: string;
+    agentDisplayName?: string;
+    userId: string;
+    sessionId: string;
+    kind: 'add_messages' | 'flush';
+    messages: EverOSAddMessage[];
+    contentHash: string;
+    failureCount: number;
+    lastError?: string;
+    nextRetryAt: number;
+    createdAt: number;
+  }> {
+    const now = options.now ?? Date.now();
+    const limit = options.limit ?? 100;
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM pending_memory_writes
+         WHERE next_retry_at <= ?
+         ORDER BY next_retry_at ASC, created_at ASC
+         LIMIT ?`
+      )
+      .all(now, limit) as Array<{
+        id: string;
+        project_id: string;
+        app_id: string;
+        agent_id: string;
+        agent_display_name: string | null;
+        user_id: string;
+        session_id: string;
+        kind: string;
+        messages_json: string;
+        content_hash: string;
+        failure_count: number;
+        last_error: string | null;
+        next_retry_at: number;
+        created_at: number;
+      }>;
+    return rows.map((r) => ({
+      id: r.id,
+      projectId: r.project_id,
+      appId: r.app_id,
+      agentId: r.agent_id,
+      agentDisplayName: r.agent_display_name ?? undefined,
+      userId: r.user_id,
+      sessionId: r.session_id,
+      kind: r.kind as 'add_messages' | 'flush',
+      messages: safeParseMessages(r.messages_json),
+      contentHash: r.content_hash,
+      failureCount: r.failure_count,
+      lastError: r.last_error ?? undefined,
+      nextRetryAt: r.next_retry_at,
+      createdAt: r.created_at,
+    }));
+  }
+
+  deletePendingMemoryWrite(id: string): void {
+    this.db.prepare('DELETE FROM pending_memory_writes WHERE id = ?').run(id);
+  }
+
+  incrementPendingMemoryFailure(
+    id: string,
+    nextRetryAt: number,
+    lastError: string
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE pending_memory_writes
+         SET failure_count = failure_count + 1,
+             next_retry_at = ?,
+             last_error = ?
+         WHERE id = ?`
+      )
+      .run(nextRetryAt, lastError, id);
+  }
 }
 
 function safeParseJsonArray(json: string): string[] {
   try {
     const parsed = JSON.parse(json);
     return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function safeParseMessages(json: string): EverOSAddMessage[] {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as EverOSAddMessage[]) : [];
   } catch {
     return [];
   }

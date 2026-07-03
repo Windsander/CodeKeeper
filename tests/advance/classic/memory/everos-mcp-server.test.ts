@@ -1,9 +1,21 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+// @vitest-environment node
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import {
   EverOSMcpServer,
   buildReviewMemoryMessages,
 } from '../../../../src/advance/classic/memory/everos-mcp-server.js';
 import type { MemoryContext, MemoryReviewComment } from '../../../../src/advance/classic/memory/types.js';
+import { everosMemoryAddMessages, everosMemoryFlush } from '../../../../src/advance/classic/memory/everos-api.js';
+import type { IMemoryWriteQueue } from '../../../../src/advance/classic/memory/memory-write-queue.js';
+
+vi.mock('../../../../src/advance/classic/memory/everos-api.js', () => ({
+  everosMemoryAddMessages: vi.fn(),
+  everosMemoryAdd: vi.fn(),
+  everosMemoryFlush: vi.fn(),
+  everosMemorySearch: vi.fn(),
+}));
 
 function makeCtx(overrides?: Partial<MemoryContext>): MemoryContext {
   return {
@@ -32,6 +44,89 @@ describe('EverOSMcpServer', () => {
 
   it('启动后返回本地 URL', () => {
     expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  });
+});
+
+describe('EverOSMcpServer 失败入队', () => {
+  async function connect(server: EverOSMcpServer): Promise<{ client: Client; transport: SSEClientTransport; url: string }> {
+    const url = await server.start();
+    const client = new Client({ name: 'test', version: '0.1.0' });
+    const transport = new SSEClientTransport(new URL('/sse', url));
+    await client.connect(transport);
+    return { client, transport, url };
+  }
+
+  it('record_review 写入失败时把消息加入重试队列', async () => {
+    vi.mocked(everosMemoryAddMessages).mockRejectedValue(new Error('429 boom'));
+    vi.mocked(everosMemoryFlush).mockResolvedValue(undefined);
+
+    const queue: IMemoryWriteQueue = {
+      enqueue: vi.fn(),
+      listReady: vi.fn().mockReturnValue([]),
+      remove: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999', queue });
+    const { client, transport } = await connect(server);
+
+    const ctx = makeCtx({ sessionId: 'sess-fail' });
+    await client.callTool({
+      name: 'record_review',
+      arguments: {
+        context: ctx,
+        mrIid: 1,
+        title: 'test',
+        findingsCount: 0,
+        summary: 'summary',
+        findings: [],
+        comments: [],
+      },
+    });
+
+    // 后台写入是异步的，等待一小段时间让 catch 入队
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
+    expect(queue.enqueue).toHaveBeenCalledWith(ctx, 'add_messages', expect.any(Array));
+
+    await transport.close();
+    await server.stop();
+  });
+
+  it('record_review add 成功但 flush 失败时入队 flush 任务', async () => {
+    vi.mocked(everosMemoryAddMessages).mockResolvedValue(undefined);
+    vi.mocked(everosMemoryFlush).mockRejectedValue(new Error('flush boom'));
+
+    const queue: IMemoryWriteQueue = {
+      enqueue: vi.fn(),
+      listReady: vi.fn().mockReturnValue([]),
+      remove: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999', queue });
+    const { client, transport } = await connect(server);
+
+    const ctx = makeCtx({ sessionId: 'sess-flush-fail' });
+    await client.callTool({
+      name: 'record_review',
+      arguments: {
+        context: ctx,
+        mrIid: 2,
+        title: 'test',
+        findingsCount: 0,
+        summary: 'summary',
+        findings: [],
+        comments: [],
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
+    expect(queue.enqueue).toHaveBeenCalledWith(ctx, 'flush');
+
+    await transport.close();
+    await server.stop();
   });
 });
 

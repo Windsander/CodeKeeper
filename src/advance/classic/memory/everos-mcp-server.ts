@@ -21,6 +21,7 @@ import {
   type EverOSSearchItem,
 } from './everos-api.js';
 import { isAgentAuthoredNote } from '../runners/shared/review-utils.js';
+import type { IMemoryWriteQueue } from './memory-write-queue.js';
 
 /** 单条评论写入记忆时的最大字符数，避免过大 payload 拖慢 EverOS 流水线 */
 const DEFAULT_MAX_COMMENT_CONTENT_LENGTH = 2000;
@@ -167,6 +168,8 @@ export interface EverOSMcpServerOptions {
   everosUrl: string;
   /** 监听端口；0 表示随机 */
   port?: number;
+  /** 失败记忆写入队列；提供后，写入失败会自动落库重试 */
+  queue?: IMemoryWriteQueue;
   /** 当 record_review 产生新的 user/agent owner 时回调，用于更新项目 owner 注册表 */
   onMemoryOwners?: (
     projectId: string,
@@ -182,6 +185,7 @@ export class EverOSMcpServer {
   private httpServer: HttpServer | null = null;
   private readonly everosUrl: string;
   private readonly port: number;
+  private readonly queue?: IMemoryWriteQueue;
   private readonly onMemoryOwners?: (
     projectId: string,
     owners: Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }>
@@ -191,6 +195,7 @@ export class EverOSMcpServer {
   constructor(options: EverOSMcpServerOptions) {
     this.everosUrl = options.everosUrl;
     this.port = options.port ?? 0;
+    this.queue = options.queue;
     this.onMemoryOwners = options.onMemoryOwners;
 
     this.server = new Server(
@@ -498,10 +503,11 @@ export class EverOSMcpServer {
 
     this.persistReview(ctx, messages).catch((err) => {
       logger.error({ err, sessionId: ctx.sessionId }, 'record_review 后台记忆写入失败');
+      this.queue?.enqueue(ctx, 'add_messages', messages);
     });
   }
 
-  private async persistReview(ctx: MemoryContext, messages: import('./everos-api.js').EverOSAddMessage[]): Promise<void> {
+  private async persistReview(ctx: MemoryContext, messages: EverOSAddMessage[]): Promise<void> {
     const start = Date.now();
     const senderSet = new Set(messages.map((m) => `${m.role}:${m.senderId}`));
     logger.info(
@@ -509,7 +515,12 @@ export class EverOSMcpServer {
       'record_review 批量写入 EverOS'
     );
     await everosMemoryAddMessages(this.everosUrl, ctx, messages);
-    await this.flushSession(ctx);
+    try {
+      await this.flushSession(ctx);
+    } catch (flushErr) {
+      logger.error({ err: flushErr, sessionId: ctx.sessionId }, 'record_review flush 失败，已入队重试');
+      this.queue?.enqueue(ctx, 'flush');
+    }
     logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, 'record_review 后台记忆写入完成');
   }
 
@@ -553,14 +564,33 @@ export class EverOSMcpServer {
     const outcome = String(args.outcome ?? '');
     const sessionId = `interaction-${discussionId}`;
     const interactionCtx: MemoryContext = { ...ctx, sessionId };
+    const messages: EverOSAddMessage[] = [
+      {
+        senderId: ctx.agentId,
+        role: 'assistant',
+        content: `与 ${userId} 的 discussion ${discussionId} 交互：决策=${decision}，结果=${outcome}`,
+      },
+      {
+        senderId: userId,
+        role: 'user',
+        content: `在 discussion ${discussionId} 中，Maintainer 决策=${decision}，结果=${outcome}`,
+      },
+    ];
 
     // 交互记录为 best-effort，后台执行避免阻塞 MCP
-    Promise.all([
-      this.persistSingleMessage(interactionCtx, ctx.agentId, 'assistant', `与 ${userId} 的 discussion ${discussionId} 交互：决策=${decision}，结果=${outcome}`),
-      this.persistSingleMessage(interactionCtx, userId, 'user', `在 discussion ${discussionId} 中，Maintainer 决策=${decision}，结果=${outcome}`),
-    ]).catch((err) => {
-      logger.error({ err, sessionId }, 'record_interaction 后台记忆写入失败');
+    this.persistMessages(interactionCtx, messages).catch((err) => {
+      logger.error({ err, sessionId }, 'record_interaction 后台记忆写入失败，已入队重试');
+      this.queue?.enqueue(interactionCtx, 'add_messages', messages);
     });
+  }
+
+  private async persistMessages(
+    ctx: MemoryContext,
+    messages: EverOSAddMessage[]
+  ): Promise<void> {
+    const start = Date.now();
+    await everosMemoryAddMessages(this.everosUrl, ctx, messages);
+    logger.info({ sessionId: ctx.sessionId, messageCount: messages.length, durationMs: Date.now() - start }, '多条记忆后台写入完成');
   }
 
   private async persistSingleMessage(
@@ -570,15 +600,26 @@ export class EverOSMcpServer {
     content: string
   ): Promise<void> {
     const start = Date.now();
-    await everosMemoryAdd(this.everosUrl, {
-      appId: ctx.appId,
-      projectId: ctx.projectId,
-      sessionId: ctx.sessionId,
+    const message: EverOSAddMessage = {
       senderId,
       role,
       content,
-    });
-    logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, '单条记忆后台写入完成');
+    };
+    try {
+      await everosMemoryAdd(this.everosUrl, {
+        appId: ctx.appId,
+        projectId: ctx.projectId,
+        sessionId: ctx.sessionId,
+        senderId,
+        role,
+        content,
+      });
+      logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, '单条记忆后台写入完成');
+    } catch (err) {
+      logger.error({ err, sessionId: ctx.sessionId }, '单条记忆后台写入失败，已入队重试');
+      this.queue?.enqueue(ctx, 'add_messages', [message]);
+      throw err;
+    }
   }
 
   private async handleRecallForReview(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
