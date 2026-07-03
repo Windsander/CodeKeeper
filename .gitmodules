@@ -1,3 +1,4 @@
 [submodule "vendor/everos"]
 	path = vendor/everos
-	url = https://github.com/EverMind-AI/EverOS.git
+	url = git@github.com:Windsander/EverOS.git
+	branch = feat/configurable-embedding-dim
