@@ -42,11 +42,13 @@ export class ReviewerActor {
 
   /**
    * 发表评审 summary 评论，并按配置创建严重 finding 的 discussion threads
+   * 返回 summary 评论的 note ID
    */
-  async postReview(mr: MergeRequest, result: ReviewResult, options?: PostReviewOptions): Promise<void> {
+  async postReview(mr: MergeRequest, result: ReviewResult, options?: PostReviewOptions): Promise<number> {
     const comment = formatReviewComment(mr, result, this.options.reviewerName);
+    let noteId: number;
     try {
-      await this.options.provider.postReviewComment(mr.iid, comment);
+      noteId = await this.options.provider.postReviewComment(mr.iid, comment);
       console.log(`[ReviewerActor] 已在 MR !${mr.iid} 发表 summary 评论`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -55,17 +57,22 @@ export class ReviewerActor {
     }
 
     await this.createFindingThreads(mr, result.findings, options);
+    return noteId;
   }
 
   /**
    * 追加补充评审评论（MR 有更新或发现新问题时）
+   * 返回补充评论的 note ID
    */
-  async appendSupplementaryReview(mr: MergeRequest, newFindings: ReviewFinding[]): Promise<void> {
-    if (newFindings.length === 0) return;
+  async appendSupplementaryReview(mr: MergeRequest, newFindings: ReviewFinding[]): Promise<number> {
+    if (newFindings.length === 0) {
+      throw new Error('无新增发现项时不应追加补充评审');
+    }
     const body = formatSupplementaryReviewComment(mr, newFindings, this.options.reviewerName);
     try {
-      await this.options.provider.postReviewComment(mr.iid, body);
+      const noteId = await this.options.provider.postReviewComment(mr.iid, body);
       console.log(`[ReviewerActor] 已在 MR !${mr.iid} 追加补充评审`);
+      return noteId;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[ReviewerActor] 在 MR !${mr.iid} 追加补充评审失败: ${message}`);

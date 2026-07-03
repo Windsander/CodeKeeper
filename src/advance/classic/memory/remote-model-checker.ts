@@ -33,7 +33,7 @@ function getHeaders(config: LlmConfig): Record<string, string> {
 
 const KNOWN_ENDPOINT_SUFFIXES = ['/models', '/chat/completions'];
 
-function cleanBaseUrl(url: string): string {
+export function cleanBaseUrl(url: string): string {
   let cleaned = url.trim();
   if (cleaned.endsWith('/')) {
     cleaned = cleaned.slice(0, -1);

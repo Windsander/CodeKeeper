@@ -12,10 +12,8 @@ import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MrFixAgent } from '../fix/mr-fix-agent.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';
 import { MaintainerActor } from '../fix/maintainer-actor.js';
-import { loadSoulContent } from '../soul/soul-loader.js';
-import { loadProjectContext } from '../context/project-context-loader.js';
 import { MemoryClient } from '../memory/memory-client.js';
-import { getArchiveRoot } from '../../types.js';
+import { RecallPlanner } from '../memory/recall-planner.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
@@ -60,8 +58,7 @@ export class MaintainerRunner extends BaseRoleRunner {
 
     const provider = new GitLabProvider(gitlabConfig);
 
-    const soul = loadSoulContent(project, 'maintainer');
-    const projectContext = loadProjectContext(getArchiveRoot(project));
+    const { soul, projectContext } = this.loadRoleContext(project);
 
     const mcpUrl = process.env.CK_EVEROS_MCP_URL ?? '';
     const baseMemoryContext = {
@@ -137,7 +134,10 @@ export class MaintainerRunner extends BaseRoleRunner {
           })
         : undefined;
       await memoryClient?.connect().catch(() => undefined);
-      const brain = new MaintainerBrain({ ...brainOptions, memoryClient });
+      const recallPlanner = memoryClient
+        ? new RecallPlanner({ llmClient: this.llmClient, memoryClient })
+        : undefined;
+      const brain = new MaintainerBrain({ ...brainOptions, memoryClient, recallPlanner });
 
       const stateKey = getDiscussionStateKey(mr);
       const reviewerDiscussionIds = new Set(

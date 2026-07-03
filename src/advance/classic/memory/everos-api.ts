@@ -232,7 +232,45 @@ export async function everosMemorySearch(
   }
 
   const json = (await res.json()) as { data?: EverOSSearchResponse };
-  const data = json.data ?? {};
+  const items = parseEverOSSearchItems(json.data ?? {});
+  items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  return { items };
+}
+
+/**
+ * 不指定 owner，直接在整个 project 下搜索记忆。
+ *
+ * 用于探测 EverOS 是否支持 project 级跨 owner 召回。
+ */
+export async function everosMemorySearchProject(
+  everosUrl: string,
+  params: Pick<EverOSSearchParams, 'appId' | 'projectId' | 'query' | 'topK'>
+): Promise<EverOSSearchResult> {
+  const body: Record<string, string | number | boolean> = {
+    app_id: sanitizeEverOSId(params.appId),
+    project_id: sanitizeEverOSId(params.projectId),
+    query: params.query,
+    top_k: params.topK ?? 5,
+    method: 'hybrid',
+    enable_llm_rerank: true,
+  };
+
+  const res = await fetchWithTimeout(`${everosUrl}/api/v1/memory/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 60000);
+  if (!res.ok) {
+    throw new Error(`EverOS memory/search(project) 失败: ${res.status} ${await res.text()}`);
+  }
+
+  const json = (await res.json()) as { data?: EverOSSearchResponse };
+  const items = parseEverOSSearchItems(json.data ?? {});
+  items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  return { items };
+}
+
+function parseEverOSSearchItems(data: EverOSSearchResponse): EverOSSearchItem[] {
   const items: EverOSSearchItem[] = [];
 
   for (const agentCase of data.agent_cases ?? []) {
@@ -291,8 +329,7 @@ export async function everosMemorySearch(
     });
   }
 
-  items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  return { items };
+  return items;
 }
 
 /**

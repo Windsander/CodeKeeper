@@ -131,12 +131,19 @@ export class MetadataStore {
         project_id TEXT NOT NULL,
         owner_id TEXT NOT NULL,
         owner_type TEXT NOT NULL CHECK(owner_type IN ('user', 'agent')),
+        display_name TEXT,
         first_seen_at INTEGER NOT NULL,
         last_seen_at INTEGER NOT NULL,
         PRIMARY KEY (project_id, owner_id)
       );
       CREATE INDEX IF NOT EXISTS idx_memory_owners_project ON memory_owners(project_id);
     `);
+    // 兼容旧表结构：补充 display_name 列
+    try {
+      this.db.exec(`ALTER TABLE memory_owners ADD COLUMN display_name TEXT;`);
+    } catch {
+      // 列已存在时忽略错误
+    }
 
     // 旧版 action_history 中 move/create/merge 类型迁移到新语义
     this.db.exec(`
@@ -1140,22 +1147,33 @@ export class MetadataStore {
 
   // ---------- 记忆 owner 注册表 ----------
 
-  recordMemoryOwner(projectId: string, ownerId: string, ownerType: 'user' | 'agent'): void {
+  recordMemoryOwner(
+    projectId: string,
+    ownerId: string,
+    ownerType: 'user' | 'agent',
+    displayName?: string
+  ): void {
     const now = Date.now();
     this.db
       .prepare(
-        `INSERT INTO memory_owners (project_id, owner_id, owner_type, first_seen_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(project_id, owner_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`
+        `INSERT INTO memory_owners (project_id, owner_id, owner_type, display_name, first_seen_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(project_id, owner_id) DO UPDATE SET
+           last_seen_at = excluded.last_seen_at,
+           display_name = COALESCE(excluded.display_name, memory_owners.display_name)`
       )
-      .run(projectId, ownerId, ownerType, now, now);
+      .run(projectId, ownerId, ownerType, displayName ?? null, now, now);
   }
 
-  listMemoryOwners(projectId: string): Array<{ ownerId: string; ownerType: 'user' | 'agent' }> {
+  listMemoryOwners(projectId: string): Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }> {
     const rows = this.db
-      .prepare('SELECT owner_id, owner_type FROM memory_owners WHERE project_id = ?')
-      .all(projectId) as Array<{ owner_id: string; owner_type: 'user' | 'agent' }>;
-    return rows.map((r) => ({ ownerId: r.owner_id, ownerType: r.owner_type }));
+      .prepare('SELECT owner_id, owner_type, display_name FROM memory_owners WHERE project_id = ?')
+      .all(projectId) as Array<{ owner_id: string; owner_type: 'user' | 'agent'; display_name: string | null }>;
+    return rows.map((r) => ({
+      ownerId: r.owner_id,
+      ownerType: r.owner_type,
+      displayName: r.display_name ?? undefined,
+    }));
   }
 }
 

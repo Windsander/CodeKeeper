@@ -23,7 +23,7 @@ import type { Role, RoleConfig, GitlabConfig } from '../types.js';
 import type { IRoleManager } from '../classic/roles/role-manager.js';
 
 import { readDirectoryTree } from '../utils/file-tree';
-import { everosMemorySearch, type EverOSSearchItem, everosMemoryGet, extractOwnersFromGetResult, type EverOSMemoryGetResult } from '../classic/memory/everos-api.js';
+import { everosMemorySearch, type EverOSSearchItem, everosMemoryGet, extractOwnersFromGetResult, type EverOSMemoryGetResult, type EverOSMemoryGetParams } from '../classic/memory/everos-api.js';
 import { buildMemoryGraph } from '../classic/memory/graph-builder.js';
 import type { MemoryEntry, MemorySearchParams, MemoryDeleteParams } from '../../electron/shared/types.js';
 import type { DaemonStatus, EverosStatus, LocalModelStatus, RemoteModelStatus } from '../../electron/shared/service-status.js';
@@ -606,13 +606,41 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
     const knownUsers = new Set<string>(['codekeeper-system']);
     const knownAgents = new Set<string>(['reviewer', 'maintainer', 'archiver']);
+    const ownerDisplayNames = new Map<string, string>();
     const getResults = new Map<string, EverOSMemoryGetResult>();
+
+    // RoleAgent 在 EverOS 中以 user sender 写入，但 agent_id 带有 role 前缀；
+    // 收集 owner 时需避免把这类 id 同时当作真实用户。
+    const isAgentLikeOwnerId = (ownerId: string): boolean =>
+      /^(reviewer|maintainer|archiver)-/.test(ownerId);
+
+    // 单个 owner 查询失败时不应导致整张图谱加载失败，返回空结果并记录警告
+    const safeEverosMemoryGet = async (
+      params: EverOSMemoryGetParams
+    ): Promise<EverOSMemoryGetResult> => {
+      try {
+        return await everosMemoryGet(params);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn(
+          { err, projectId: params.projectId, ownerKind: params.ownerKind, ownerId: params.ownerId, memoryType: params.memoryType },
+          `EverOS memory/get 查询失败，跳过: ${message}`
+        );
+        return { episodes: [], profiles: [], agent_cases: [], agent_skills: [], total_count: 0 };
+      }
+    };
 
     // 从 metadata store 读取本项目已注册的记忆 owner（真实用户 + Agent）
     for (const project of projects) {
-      for (const { ownerId, ownerType } of ctx.store.listMemoryOwners(project.id)) {
-        if (ownerType === 'user') knownUsers.add(ownerId);
-        else knownAgents.add(ownerId);
+      for (const { ownerId, ownerType, displayName } of ctx.store.listMemoryOwners(project.id)) {
+        if (ownerType === 'agent' || isAgentLikeOwnerId(ownerId)) {
+          knownAgents.add(ownerId);
+        } else {
+          knownUsers.add(ownerId);
+        }
+        if (displayName) {
+          ownerDisplayNames.set(ownerId, displayName);
+        }
       }
     }
 
@@ -623,7 +651,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       };
 
       for (const agentId of knownAgents) {
-        const caseRes = await everosMemoryGet({
+        const caseRes = await safeEverosMemoryGet({
           everosUrl: ctx.everosUrl,
           appId: 'codekeeper-advance',
           projectId: project.id,
@@ -631,7 +659,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
           ownerId: agentId,
           memoryType: 'agent_case',
         });
-        const skillRes = await everosMemoryGet({
+        const skillRes = await safeEverosMemoryGet({
           everosUrl: ctx.everosUrl,
           appId: 'codekeeper-advance',
           projectId: project.id,
@@ -639,25 +667,24 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
           ownerId: agentId,
           memoryType: 'agent_skill',
         });
-        logger.info(
-          { projectId: project.id, agentId, cases: caseRes.total_count, skills: skillRes.total_count },
-          'memory.graph 拉取 agent 侧数据'
-        );
         mergeResult(projectResult, caseRes);
         mergeResult(projectResult, skillRes);
 
         const caseOwners = extractOwnersFromGetResult(caseRes);
-        for (const uid of caseOwners.users) knownUsers.add(uid);
+        for (const uid of caseOwners.users) {
+          if (!isAgentLikeOwnerId(uid)) knownUsers.add(uid);
+        }
       }
 
       getResults.set(project.id, projectResult);
     }
 
+
     // 第二轮：用发现的 users 拉取 user 侧数据
     for (const project of projects) {
       const projectResult = getResults.get(project.id)!;
       for (const userId of knownUsers) {
-        const episodeRes = await everosMemoryGet({
+        const episodeRes = await safeEverosMemoryGet({
           everosUrl: ctx.everosUrl,
           appId: 'codekeeper-advance',
           projectId: project.id,
@@ -665,7 +692,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
           ownerId: userId,
           memoryType: 'episode',
         });
-        const profileRes = await everosMemoryGet({
+        const profileRes = await safeEverosMemoryGet({
           everosUrl: ctx.everosUrl,
           appId: 'codekeeper-advance',
           projectId: project.id,
@@ -673,27 +700,22 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
           ownerId: userId,
           memoryType: 'profile',
         });
-        logger.info(
-          { projectId: project.id, userId, episodes: episodeRes.total_count, profiles: profileRes.total_count },
-          'memory.graph 拉取 user 侧数据'
-        );
         mergeResult(projectResult, episodeRes);
         mergeResult(projectResult, profileRes);
 
         // 从 episodes 里也收集用户，避免 agent_case 为空时遗漏真实用户
         const episodeOwners = extractOwnersFromGetResult(episodeRes);
-        for (const uid of episodeOwners.users) knownUsers.add(uid);
+        for (const uid of episodeOwners.users) {
+          if (!isAgentLikeOwnerId(uid)) knownUsers.add(uid);
+        }
       }
     }
 
     const graph = buildMemoryGraph({
       projects: projects.map((p) => ({ id: p.id, name: p.name, rootPath: p.rootPath })),
       getResults,
+      ownerDisplayNames,
     });
-    logger.info(
-      { nodes: graph.nodes.length, edges: graph.edges.length, stats: graph.stats },
-      'memory.graph 构建完成'
-    );
     return graph;
   },
 

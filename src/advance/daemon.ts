@@ -352,8 +352,8 @@ export class Daemon {
       this.everosMcpServer = new EverOSMcpServer({
         everosUrl,
         onMemoryOwners: (projectId, owners) => {
-          for (const { ownerId, ownerType } of owners) {
-            this.options.store.recordMemoryOwner(projectId, ownerId, ownerType);
+          for (const { ownerId, ownerType, displayName } of owners) {
+            this.options.store.recordMemoryOwner(projectId, ownerId, ownerType, displayName);
           }
         },
       });

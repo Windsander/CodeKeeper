@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MaintainerBrain } from '../../../../src/advance/classic/fix/maintainer-brain.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
+import { RecallPlanner } from '../../../../src/advance/classic/memory/recall-planner.js';
 import type { ReviewFinding } from '../../../../src/advance/classic/provider/types.js';
 
 function makeFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
@@ -114,6 +115,44 @@ describe('MaintainerBrain', () => {
     expect(memoryClient.recallUserPreferences).toHaveBeenCalledWith('alice', expect.any(String));
     const prompt = complete.mock.calls[0][0] as string;
     expect(prompt).toContain('该用户偏好显式类型注解');
+  });
+
+  it('决策前通过 RecallPlanner 按需召回记忆并拼入 prompt', async () => {
+    const complete = vi
+      .fn()
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          needsRecall: true,
+          queries: [{ type: 'maintenance', query: '类似问题的修复历史' }],
+          reason: '需要参考历史修复',
+        })
+      )
+      .mockResolvedValueOnce('{"action":"fix","reason":"可以安全修复"}');
+    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const memoryClient = {
+      recallUserPreferences: vi.fn().mockResolvedValue([]),
+      recallProjectKnowledge: vi.fn().mockResolvedValue([]),
+      recallForMaintenance: vi.fn().mockResolvedValue(['历史修复方式：显式类型注解']),
+      recallForReview: vi.fn().mockResolvedValue([]),
+      recordFixAttempt: vi.fn(),
+    } as unknown as NonNullable<
+      import('../../../../src/advance/classic/fix/maintainer-brain.js').MaintainerBrainOptions['memoryClient']
+    >;
+    const recallPlanner = new RecallPlanner({ llmClient, memoryClient });
+
+    const brain = new MaintainerBrain({ llmClient, memoryClient, recallPlanner });
+    await brain.decide({
+      finding: makeFinding(),
+      fileContent: 'const x = 1;',
+      originalComment: '加个类型',
+      mrIid: 1,
+      userId: 'alice',
+    });
+
+    expect(memoryClient.recallForMaintenance).toHaveBeenCalled();
+    expect(memoryClient.recallUserPreferences).not.toHaveBeenCalled();
+    const prompt = complete.mock.calls[1][0] as string;
+    expect(prompt).toContain('历史修复方式：显式类型注解');
   });
 
   it('从 summary 中解析多条 finding', async () => {

@@ -10,9 +10,157 @@ import http, { type Server as HttpServer } from 'node:http';
 import { URL } from 'node:url';
 import { logger } from '../../../core/logger.js';
 import { SecretSanitizer } from './secret-sanitizer.js';
-import type { MemoryContext, ProjectKnowledgeItem } from './types.js';
+import type { MemoryContext, MemoryReviewComment, ProjectKnowledgeItem } from './types.js';
 import { sanitizeEverOSId } from './types.js';
-import { everosMemoryAdd, everosMemoryAddMessages, everosMemorySearch, everosMemoryFlush, type EverOSSearchItem } from './everos-api.js';
+import {
+  everosMemoryAdd,
+  everosMemoryAddMessages,
+  everosMemorySearch,
+  everosMemoryFlush,
+  type EverOSAddMessage,
+  type EverOSSearchItem,
+} from './everos-api.js';
+import { isAgentAuthoredNote } from '../runners/shared/review-utils.js';
+
+/** 单条评论写入记忆时的最大字符数，避免过大 payload 拖慢 EverOS 流水线 */
+const DEFAULT_MAX_COMMENT_CONTENT_LENGTH = 2000;
+/** 单次 record_review 最多写入多少条远端评论，降低 EverOS 提取负载 */
+const DEFAULT_MAX_COMMENT_COUNT = 50;
+
+export interface BuildReviewMemoryInput {
+  ctx: MemoryContext;
+  mrIid: string;
+  title: string;
+  findingsCount: number;
+  summary: string;
+  findings: unknown[];
+  comments: MemoryReviewComment[];
+  mrAuthor?: string;
+  maxCommentContentLength?: number;
+  maxCommentCount?: number;
+}
+
+export interface BuildReviewMemoryResult {
+  messages: EverOSAddMessage[];
+  owners: Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }>;
+}
+
+/**
+ * 将 findings 格式化为记忆文本
+ */
+export function formatFindingsForMemory(findings: unknown[]): string {
+  const items = findings
+    .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
+    .map((f) => {
+      const severity = String(f.severity ?? 'LOW');
+      const file = String(f.file ?? 'unknown');
+      const line = Number(f.line ?? 0);
+      const message = String(f.message ?? '');
+      return `- [${severity}] ${file}:${line} ${message}`;
+    });
+  return items.join('\n') || '无详细问题描述';
+}
+
+function parseTimestampMs(iso: string): number | undefined {
+  const ts = Date.parse(iso);
+  return Number.isNaN(ts) ? undefined : ts;
+}
+
+/**
+ * 构造 Reviewer 评审要写入 EverOS 的消息列表和 owner 注册表。
+ *
+ * 关键约定：
+ * - 没有真实评论时，使用 MR 作者作为 user 锚点 sender，而不是 codekeeper-system，
+ *   避免所有 review episode 都挂到 system 节点上。
+ * - Agent 自己发的评论以 assistant 身份写入，人类评论以 user 身份写入。
+ */
+export function buildReviewMemoryMessages(input: BuildReviewMemoryInput): BuildReviewMemoryResult {
+  const {
+    ctx,
+    mrIid,
+    title,
+    findingsCount,
+    summary,
+    findings,
+    comments,
+    mrAuthor,
+    maxCommentContentLength = DEFAULT_MAX_COMMENT_CONTENT_LENGTH,
+    maxCommentCount = DEFAULT_MAX_COMMENT_COUNT,
+  } = input;
+
+  const sanitizer = new SecretSanitizer();
+  const findingsText = formatFindingsForMemory(findings);
+  const reviewContent = `Reviewer 评审 MR !${mrIid}: ${title}。\n发现 ${findingsCount} 个问题。\n总结：${summary}\n\nFindings:\n${findingsText}`;
+
+  const messages: EverOSAddMessage[] = [];
+  const userOwners = new Map<string, string | undefined>();
+
+  // 按时间排序，避免消息顺序混乱影响 EverOS 提取
+  const sortedComments = [...comments]
+    .sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
+    })
+    .slice(0, maxCommentCount);
+
+  // 远端评论：Agent 借 token 发的评论以 assistant 身份写入（与总结一致），
+  // 人类/其他 bot 的评论以 user 身份写入。
+  for (const comment of sortedComments) {
+    const { author, body: rawBody, createdAt } = comment;
+    if (!author || !rawBody) continue;
+    const body =
+      rawBody.length > maxCommentContentLength
+        ? `${rawBody.slice(0, maxCommentContentLength)}…（已截断）`
+        : rawBody;
+    const sanitizedBody = sanitizer.sanitize(body);
+    const isAgentNote = isAgentAuthoredNote(body);
+    const senderId = isAgentNote ? ctx.agentId : sanitizeEverOSId(author);
+    messages.push({
+      senderId,
+      role: isAgentNote ? 'assistant' : 'user',
+      content: sanitizedBody,
+      timestamp: parseTimestampMs(createdAt),
+    });
+    if (!isAgentNote) {
+      userOwners.set(senderId, undefined);
+    }
+  }
+
+  // 没有评论时追加 user 锚点，确保 assistant 前面有 user 消息。
+  // 优先使用 MR 作者作为 sender，避免把 episode owner 变成 system。
+  if (messages.length === 0) {
+    const anchorSender = mrAuthor ? sanitizeEverOSId(mrAuthor) : ctx.userId;
+    const anchorContent = mrAuthor
+      ? `MR 作者 ${anchorSender} 提交/更新了 MR !${mrIid}: ${title}`
+      : `对 MR !${mrIid}: ${title} 发起自动评审`;
+    messages.push({
+      senderId: anchorSender,
+      role: 'user',
+      content: anchorContent,
+    });
+    // 只有真实 MR 作者才注册为 user owner；system 锚点不注册
+    if (mrAuthor) {
+      userOwners.set(anchorSender, mrAuthor);
+    }
+  }
+
+  // 最后写入 assistant 评审结果
+  messages.push({
+    senderId: ctx.agentId,
+    role: 'assistant',
+    content: reviewContent,
+  });
+
+  const owners: Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }> = [
+    { ownerId: ctx.agentId, ownerType: 'agent', displayName: ctx.agentDisplayName },
+  ];
+  for (const [ownerId, displayName] of userOwners) {
+    owners.push({ ownerId, ownerType: 'user', displayName });
+  }
+
+  return { messages, owners };
+}
 
 export interface EverOSMcpServerOptions {
   /** EverOS HTTP API URL */
@@ -20,7 +168,10 @@ export interface EverOSMcpServerOptions {
   /** 监听端口；0 表示随机 */
   port?: number;
   /** 当 record_review 产生新的 user/agent owner 时回调，用于更新项目 owner 注册表 */
-  onMemoryOwners?: (projectId: string, owners: Array<{ ownerId: string; ownerType: 'user' | 'agent' }>) => void;
+  onMemoryOwners?: (
+    projectId: string,
+    owners: Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }>
+  ) => void;
 }
 
 /**
@@ -31,13 +182,11 @@ export class EverOSMcpServer {
   private httpServer: HttpServer | null = null;
   private readonly everosUrl: string;
   private readonly port: number;
-  private readonly onMemoryOwners?: (projectId: string, owners: Array<{ ownerId: string; ownerType: 'user' | 'agent' }>) => void;
+  private readonly onMemoryOwners?: (
+    projectId: string,
+    owners: Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }>
+  ) => void;
   private readonly sanitizer = new SecretSanitizer();
-
-  /** 单条评论写入记忆时的最大字符数，避免过大 payload 拖慢 EverOS 流水线 */
-  private readonly maxCommentContentLength = 2000;
-  /** 单次 record_review 最多写入多少条远端评论，降低 EverOS 提取负载 */
-  private readonly maxCommentCount = 50;
 
   constructor(options: EverOSMcpServerOptions) {
     this.everosUrl = options.everosUrl;
@@ -329,60 +478,24 @@ export class EverOSMcpServer {
     const ctx = args.context;
     const summary = this.sanitizer.sanitize(String(args.summary ?? ''));
     const findings = Array.isArray(args.findings) ? args.findings : [];
-    const comments = Array.isArray(args.comments) ? args.comments : [];
+    const comments = (Array.isArray(args.comments) ? args.comments : []) as MemoryReviewComment[];
     const mrIid = String(args.mrIid ?? 0);
     const title = String(args.title ?? '');
-    const findingsText = this.formatFindingsForMemory(findings);
-    const reviewContent = `Reviewer 评审 MR !${mrIid}: ${title}。\n发现 ${String(args.findingsCount ?? 0)} 个问题。\n总结：${summary}\n\nFindings:\n${findingsText}`;
+    const mrAuthor = String(args.mrAuthor ?? '');
 
-    const messages: import('./everos-api.js').EverOSAddMessage[] = [];
-
-    // 远端真人评论：使用实际评论人作为 sender_id，写入该用户下的记忆
-    for (const raw of comments.slice(0, this.maxCommentCount)) {
-      const comment = raw as Record<string, unknown>;
-      const author = String(comment.author ?? '');
-      let body = String(comment.body ?? '');
-      const createdAt = String(comment.createdAt ?? '');
-      if (!author || !body) continue;
-      if (body.length > this.maxCommentContentLength) {
-        body = `${body.slice(0, this.maxCommentContentLength)}…（已截断）`;
-      }
-      messages.push({
-        senderId: author,
-        role: 'user',
-        content: this.sanitizer.sanitize(body),
-        timestamp: this.parseTimestampMs(createdAt),
-      });
-    }
-
-    // 追加一条系统请求作为 user 锚点，确保 reviewer 的 assistant 回复能形成 agent_case
-    messages.push({
-      senderId: ctx.userId,
-      role: 'user',
-      content: `请求评审 MR !${mrIid}: ${title}`,
+    const { messages, owners } = buildReviewMemoryMessages({
+      ctx,
+      mrIid,
+      title,
+      findingsCount: Number(args.findingsCount ?? 0),
+      summary,
+      findings,
+      comments,
+      mrAuthor,
     });
 
-    // 最后写入 assistant 评审结果
-    messages.push({
-      senderId: ctx.agentId,
-      role: 'assistant',
-      content: reviewContent,
-    });
-
-    // 记录本次涉及的所有 owner，便于 memory.graph 按需拉取
-    const owners: Array<{ ownerId: string; ownerType: 'user' | 'agent' }> = [
-      { ownerId: ctx.userId, ownerType: 'user' },
-      { ownerId: ctx.agentId, ownerType: 'agent' },
-    ];
-    for (const raw of comments.slice(0, this.maxCommentCount)) {
-      const comment = raw as Record<string, unknown>;
-      const author = String(comment.author ?? '');
-      if (author) owners.push({ ownerId: author, ownerType: 'user' });
-    }
     this.onMemoryOwners?.(ctx.projectId, owners);
 
-    // EverOS /add 端点会同步执行 LLM 提取流水线，耗时可能超过 MCP 默认 60s 超时；
-    // 整个写入+flush 流程放到后台执行，MCP 立即返回 ok，避免阻塞 Reviewer/Maintainer 主流程
     this.persistReview(ctx, messages).catch((err) => {
       logger.error({ err, sessionId: ctx.sessionId }, 'record_review 后台记忆写入失败');
     });
@@ -390,14 +503,14 @@ export class EverOSMcpServer {
 
   private async persistReview(ctx: MemoryContext, messages: import('./everos-api.js').EverOSAddMessage[]): Promise<void> {
     const start = Date.now();
+    const senderSet = new Set(messages.map((m) => `${m.role}:${m.senderId}`));
+    logger.info(
+      { sessionId: ctx.sessionId, messageCount: messages.length, senders: [...senderSet] },
+      'record_review 批量写入 EverOS'
+    );
     await everosMemoryAddMessages(this.everosUrl, ctx, messages);
     await this.flushSession(ctx);
     logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, 'record_review 后台记忆写入完成');
-  }
-
-  private parseTimestampMs(iso: string): number | undefined {
-    const ts = Date.parse(iso);
-    return Number.isNaN(ts) ? undefined : ts;
   }
 
   private async flushSession(ctx: MemoryContext): Promise<void> {
@@ -406,19 +519,6 @@ export class EverOSMcpServer {
       projectId: ctx.projectId,
       sessionId: ctx.sessionId,
     });
-  }
-
-  private formatFindingsForMemory(findings: unknown[]): string {
-    const items = findings
-      .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
-      .map((f) => {
-        const severity = String(f.severity ?? 'LOW');
-        const file = String(f.file ?? 'unknown');
-        const line = Number(f.line ?? 0);
-        const message = String(f.message ?? '');
-        return `- [${severity}] ${file}:${line} ${message}`;
-      });
-    return items.join('\n') || '无详细问题描述';
   }
 
   private async handleRecordProjectKnowledge(ctx: MemoryContext, items: ProjectKnowledgeItem[]): Promise<void> {
@@ -483,14 +583,15 @@ export class EverOSMcpServer {
 
   private async handleRecallForReview(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
     const ctx = args.context;
-    const result = await everosMemorySearch(this.everosUrl, {
+    const ownerResult = await everosMemorySearch(this.everosUrl, {
       appId: ctx.appId,
       projectId: ctx.projectId,
-      owner: { kind: 'agent', agentId: 'reviewer' },
+      owner: { kind: 'agent', agentId: ctx.agentId },
       query: args.query,
       topK: 5,
     });
-    return result.items;
+
+    return ownerResult.items;
   }
 
   private async handleRecallForMaintenance(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {

@@ -77,10 +77,14 @@ export class RoleServiceRegistry {
   }
 
   /**
-   * 设置 EverOS MCP Server URL，供后续懒创建的角色服务使用
+   * 设置 EverOS MCP Server URL，供后续懒创建的角色服务使用，
+   * 同时回传给已经创建过的服务实例，避免它们因缓存了旧 options 而重复启动 EverOS。
    */
   setMemoryMcpUrl(url: string): void {
     this.options = { ...this.options, mcpUrl: url };
+    for (const service of this.services.values()) {
+      service.setMcpUrl(url);
+    }
   }
 
   /**

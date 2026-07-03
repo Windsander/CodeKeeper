@@ -2,6 +2,9 @@ import { schedule, validate as validateCron } from 'node-cron';
 import { existsSync } from 'node:fs';
 import { LlmClient } from '../../llm/client.js';
 import type { Project, GitlabConfig, RoleConfig, Role } from '../../types.js';
+import { getArchiveRoot } from '../../types.js';
+import { loadSoulContent, type SoulContent } from '../soul/soul-loader.js';
+import { loadProjectContext } from '../context/project-context-loader.js';
 import {
   recordProjectError,
   clearProjectError,
@@ -142,6 +145,15 @@ export abstract class BaseRoleRunner implements IRoleRunner {
    */
   protected getRoleConfig(project: Project): RoleConfig | undefined {
     return project.roles?.[this.getRole()];
+  }
+
+  /**
+   * 统一加载当前角色的 soulContent 和 projectContext
+   */
+  protected loadRoleContext(project: Project): { soul: SoulContent; projectContext: string } {
+    const soul = loadSoulContent(project, this.getRole());
+    const projectContext = loadProjectContext(getArchiveRoot(project));
+    return { soul, projectContext };
   }
 
   /**

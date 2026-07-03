@@ -9,18 +9,17 @@ import { LlmClient } from '../../llm/client.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { ReviewerBrain } from '../review/reviewer-brain.js';
 import { ReviewerActor } from '../review/reviewer-actor.js';
-import { loadSoulContent } from '../soul/soul-loader.js';
-import { loadProjectContext } from '../context/project-context-loader.js';
 import { MemoryClient } from '../memory/memory-client.js';
-import { getArchiveRoot } from '../../types.js';
-import { loadState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
+import { RecallPlanner } from '../memory/recall-planner.js';
+import { buildEverOSAgentId } from '../memory/types.js';
+import { loadState, saveState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
 import {
   formatAgentFooter,
   isAgentAuthoredNote,
   REVIEWER_ROLE_LABEL,
 } from './shared/review-utils.js';
 import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
-import type { MergeRequest, MrDiff, ReviewFinding, Discussion } from '../provider/types.js';
+import type { MergeRequest, MrDiff, ReviewFinding, Discussion, ReviewerComment } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
@@ -58,14 +57,18 @@ export class ReviewerRunner extends BaseRoleRunner {
     const provider = new GitLabProvider(project.gitlab!);
     const state = loadState(project);
 
-    const soul = loadSoulContent(project, 'reviewer');
-    const projectContext = loadProjectContext(getArchiveRoot(project));
+    const { soul, projectContext } = this.loadRoleContext(project);
+
+    const reviewerConfig = config as ReviewerConfig;
+    const reviewerName = reviewerConfig.reviewerName ?? 'CodeKeeper Reviewer';
 
     const mcpUrl = process.env.CK_EVEROS_MCP_URL ?? '';
+    const reviewerAgentId = buildEverOSAgentId('reviewer', reviewerName);
     const baseMemoryContext = {
       appId: 'codekeeper-advance',
       projectId: project.id,
-      agentId: 'reviewer',
+      agentId: reviewerAgentId,
+      agentDisplayName: reviewerName,
       userId: 'codekeeper-system',
     };
 
@@ -76,8 +79,6 @@ export class ReviewerRunner extends BaseRoleRunner {
       soulContent: soul.content || undefined,
       projectContext,
     };
-    const reviewerConfig = config as ReviewerConfig;
-    const reviewerName = reviewerConfig.reviewerName ?? 'CodeKeeper Reviewer';
     const actor = new ReviewerActor({
       provider,
       project,
@@ -152,7 +153,10 @@ export class ReviewerRunner extends BaseRoleRunner {
           memoryClient = undefined;
         }
       }
-      const brain = new ReviewerBrain({ ...brainOptions, memoryClient });
+      const recallPlanner = memoryClient
+        ? new RecallPlanner({ llmClient: this.llmClient, memoryClient })
+        : undefined;
+      const brain = new ReviewerBrain({ ...brainOptions, memoryClient, recallPlanner });
 
       let result;
       try {
@@ -160,12 +164,6 @@ export class ReviewerRunner extends BaseRoleRunner {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] 评审 MR !${mr.iid} 失败: ${message}`);
-        await memoryClient?.disconnect().catch(() => undefined);
-        continue;
-      }
-
-      if (result.findings.length === 0) {
-        console.log(`[ReviewerRunner] MR !${mr.iid} 无发现问题`);
         await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
@@ -179,14 +177,32 @@ export class ReviewerRunner extends BaseRoleRunner {
       const headChanged = previousReview ? previousReview.headSha !== headSha : true;
       const findingsChanged = previousReview ? previousReview.findingsHash !== findingsHash : true;
 
+      // 提前拉取评论：既用于记录记忆，也用于判断之前的 summary 是否被删除
+      let comments: ReviewerComment[] = [];
+      try {
+        comments = await provider.getReviewerComments(mr.iid);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[ReviewerRunner] 获取 MR !${mr.iid} 评论失败: ${message}`);
+      }
+
+      const lastReviewedAt = previousReview?.reviewedAt ?? 0;
+      const recordedNoteIds = new Set(previousReview?.reviewNoteIds ?? []);
+      const newComments = comments.filter((c) => {
+        if (recordedNoteIds.has(c.id)) return false;
+        const ts = new Date(c.createdAt).getTime();
+        return !Number.isNaN(ts) && ts > lastReviewedAt;
+      });
+
       if (
         previousReview &&
         !headChanged &&
         !findingsChanged &&
         !Number.isNaN(mrUpdatedAt) &&
-        mrUpdatedAt <= previousReview.reviewedAt
+        mrUpdatedAt <= previousReview.reviewedAt &&
+        newComments.length === 0
       ) {
-        console.log(`[ReviewerRunner] MR !${mr.iid} 无新 commit、无新发现，跳过发布与记忆写入`);
+        console.log(`[ReviewerRunner] MR !${mr.iid} 无新 commit、无新发现、无新评论，跳过`);
         await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
@@ -195,16 +211,30 @@ export class ReviewerRunner extends BaseRoleRunner {
         ? result.findings.filter((f) => !previousReview.findingsKeys.includes(getFindingKey(f)))
         : result.findings;
 
+      // 如果之前保存的 summary note 已经被删除，则重新发 summary，而不是追加补充评审
+      const previousSummaryNoteId = previousReview?.summaryNoteId;
+      const summaryStillExists = previousSummaryNoteId
+        ? comments.some((c) => c.id === previousSummaryNoteId)
+        : false;
+      const shouldPostSummary = !previousReview || !summaryStillExists;
+
+      const reviewNoteIds: number[] = [];
+      let summaryNoteId: number | undefined = previousSummaryNoteId;
       try {
-        if (!previousReview) {
-          await actor.postReview(mr, result, {
+        if (result.findings.length > 0 && shouldPostSummary) {
+          const id = await actor.postReview(mr, result, {
             diffs,
             shaInfo,
             stateKey,
             state,
           });
-        } else if (newFindings.length > 0) {
-          await actor.appendSupplementaryReview(mr, newFindings);
+          reviewNoteIds.push(id);
+          summaryNoteId = id;
+        } else if (!shouldPostSummary && newFindings.length > 0) {
+          const id = await actor.appendSupplementaryReview(mr, newFindings);
+          reviewNoteIds.push(id);
+        } else if (result.findings.length === 0) {
+          console.log(`[ReviewerRunner] MR !${mr.iid} 无发现问题，跳过发布评论`);
         }
 
         // 为新增 CRITICAL/HIGH finding 开 threads（已有 findingKey 的不会重复创建）
@@ -225,25 +255,29 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       if (memoryClient) {
         try {
-          const comments = await provider.getReviewerComments(mr.iid);
-          const lastReviewedAt = previousReview?.reviewedAt ?? 0;
-          const newComments = comments.filter((c) => {
-            const ts = new Date(c.createdAt).getTime();
-            return !Number.isNaN(ts) && ts > lastReviewedAt;
-          });
-          await memoryClient.recordReview({
-            mrIid: mr.iid,
-            title: mr.title,
-            findingsCount: result.findings.length,
-            summary: result.summary,
-            findings: result.findings,
-            comments: newComments.map((c) => ({
-              author: c.author,
-              body: c.body,
-              createdAt: c.createdAt,
-            })),
-          });
-          console.log(`[ReviewerRunner] MR !${mr.iid} 记忆写入请求已提交（EverOS 后台异步处理）`);
+          // 只有在首次评审、HEAD 变化、发现变化或有新评论时才写入记忆，
+          // 避免 MR 仅被无关更新（如标题编辑）触发时重复生成 episode。
+          const shouldRecordMemory =
+            !previousReview || headChanged || findingsChanged || newComments.length > 0;
+
+          if (shouldRecordMemory) {
+            await memoryClient.recordReview({
+              mrIid: mr.iid,
+              title: mr.title,
+              findingsCount: result.findings.length,
+              summary: result.summary,
+              findings: result.findings,
+              comments: newComments.map((c) => ({
+                author: c.author,
+                body: c.body,
+                createdAt: c.createdAt,
+              })),
+              mrAuthor: mr.author,
+            });
+            console.log(`[ReviewerRunner] MR !${mr.iid} 记忆写入请求已提交（EverOS 后台异步处理）`);
+          } else {
+            console.log(`[ReviewerRunner] MR !${mr.iid} 无新 commit/新发现/新评论，跳过记忆写入`);
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[ReviewerRunner] MR !${mr.iid} 记忆写入失败: ${message}`);
@@ -252,12 +286,19 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       // 更新评审状态，避免周期性轮询导致重复 summary/记忆
       state.reviewState ??= {};
-      state.reviewState[stateKey] = { findingsHash, findingsKeys, reviewedAt: Date.now(), headSha };
+      state.reviewState[stateKey] = {
+        findingsHash,
+        findingsKeys,
+        reviewedAt: Date.now(),
+        headSha,
+        summaryNoteId,
+        reviewNoteIds: [...(previousReview?.reviewNoteIds ?? []), ...reviewNoteIds],
+      };
 
-      // 处理别人对 Reviewer 自己开的 discussion threads 的新回复
+      // 处理别人对 Reviewer 自己开的 discussion threads / summary 评论的新回复
       try {
         const discussions = await provider.getDiscussions(mr.iid);
-        await this.handleThreadReplies(mr, discussions, result.findings, state, stateKey, provider, brain, reviewerName);
+        await this.handleThreadReplies(mr, discussions, result.findings, state, provider, brain, reviewerName, previousReview);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] MR !${mr.iid} 处理 discussion 回复失败: ${message}`);
@@ -265,32 +306,50 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       await memoryClient?.disconnect().catch(() => undefined);
     }
+
+    // 持久化 MR 评审状态，否则下一轮轮询会丢失 reviewState/discussions 记录，
+    // 导致对同一 MR 重复发布 summary 和重复写入记忆。
+    try {
+      saveState(project, state);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[ReviewerRunner] 保存项目 ${project.name} 的 MR Agent 状态失败: ${message}`);
+    }
   }
 
   /**
-   * 处理 Reviewer 自己创建的 discussion threads 中的人类回复
+   * 处理 Reviewer 自己创建的 discussion threads / summary 评论中的人类回复
+   *
+   * 不再只依赖 state.discussions 中记录的 finding thread，而是直接扫描 GitLab 上
+   * 所有由 Reviewer Agent（通过签名 footer 识别）发布的 discussion，这样用户在
+   * summary 评论或 MEDIUM/LOW finding 相关评论下的追问也能被回复。
    */
   private async handleThreadReplies(
     mr: MergeRequest,
     discussions: Discussion[],
     originalFindings: ReviewFinding[],
     state: MrAgentState,
-    stateKey: string,
     provider: GitLabProvider,
     brain: ReviewerBrain,
-    reviewerName: string
+    reviewerName: string,
+    previousReview?: NonNullable<MrAgentState['reviewState']>[string]
   ): Promise<void> {
-    const reviewerDiscussionIds = new Set(
-      (state.discussions[stateKey] ?? []).map((p) => p.discussionId)
-    );
-    if (reviewerDiscussionIds.size === 0) return;
-
     const reviewerThreads = discussions.filter(
-      (d) => reviewerDiscussionIds.has(d.id) && !d.resolved && d.resolvable
+      (d) =>
+        d.notes.length > 0 &&
+        !d.resolved &&
+        isAgentAuthoredNote(d.notes[0].body) &&
+        d.notes[0].body.includes(REVIEWER_ROLE_LABEL)
     );
-    if (reviewerThreads.length === 0) return;
+    if (reviewerThreads.length === 0) {
+      console.log(`[ReviewerRunner] MR !${mr.iid} 未发现 Reviewer 拥有的可回复 discussion`);
+      return;
+    }
 
-    const previousReview = state.reviewState?.[stateKey];
+    console.log(
+      `[ReviewerRunner] MR !${mr.iid} 发现 ${reviewerThreads.length} 个 Reviewer discussion，检查新回复...`
+    );
+
     const baselineTime = previousReview?.reviewedAt ?? 0;
 
     for (const discussion of reviewerThreads) {
@@ -308,7 +367,14 @@ export class ReviewerRunner extends BaseRoleRunner {
         })
         .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-      if (targetNotes.length === 0) continue;
+      if (targetNotes.length === 0) {
+        console.log(`[ReviewerRunner] discussion ${discussion.id} 没有新的人类回复`);
+        continue;
+      }
+
+      console.log(
+        `[ReviewerRunner] discussion ${discussion.id} 有 ${targetNotes.length} 条新的人类回复待处理`
+      );
 
       const threadNotes = discussion.notes.map((n) => ({
         author: n.author,

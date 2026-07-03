@@ -65,6 +65,8 @@ export interface MrDiff {
  * 评审评论
  */
 export interface ReviewerComment {
+  /** 评论 ID，用于区分已记录的 Agent summary 评论 */
+  id: number;
   /** 评论者用户名 */
   author: string;
   /** 评论内容 */
@@ -191,8 +193,8 @@ export interface IGitProvider {
   /** 获取指定 MR 的 SHA 信息 */
   getMRShaInfo(iid: number): Promise<MrShaInfo>;
 
-  /** 在指定 MR 下发布评论 */
-  postReviewComment(iid: number, body: string): Promise<void>;
+  /** 在指定 MR 下发布评论，返回创建的 note ID */
+  postReviewComment(iid: number, body: string): Promise<number>;
 
   /** 在指定 MR 下创建 discussion thread（可选定位到代码行） */
   createDiscussion(iid: number, body: string, position?: GitLabDiffPosition): Promise<string>;

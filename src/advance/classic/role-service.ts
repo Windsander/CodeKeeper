@@ -94,6 +94,13 @@ export class RoleService {
   }
 
   /**
+   * 更新 EverOS MCP URL，供 Registry 在 Daemon 启动 EverOS 后回传给已缓存的服务实例。
+   */
+  setMcpUrl(url: string): void {
+    this.options.mcpUrl = url;
+  }
+
+  /**
    * 停止角色服务
    */
   async stop(): Promise<void> {

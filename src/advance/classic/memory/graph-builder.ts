@@ -10,10 +10,16 @@ import type { EverOSMemoryGetResult } from './everos-api.js';
 export interface BuildMemoryGraphInput {
   projects: Project[];
   getResults: Map<string, EverOSMemoryGetResult>;
+  /** owner ID -> 显示名称映射，用于在节点上展示中文等原始名称 */
+  ownerDisplayNames?: Map<string, string>;
 }
 
 const SYSTEM_USER_ID = 'codekeeper-system';
 const SYSTEM_NODE_ID = 'system';
+
+function getOwnerLabel(ownerId: string, displayNames?: Map<string, string>): string {
+  return displayNames?.get(ownerId) ?? ownerId;
+}
 
 export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
   const nodes = new Map<string, MemoryGraphNode>();
@@ -25,6 +31,8 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
   const projectUsers = new Map<string, Set<string>>();
   const caseProjects = new Map<string, string>();
   const projectNodeMap = new Map<string, string>();
+  const episodeNodeMap = new Map<string, string>();
+  const displayNames = input.ownerDisplayNames ?? new Map<string, string>();
 
   nodes.set(SYSTEM_NODE_ID, {
     id: SYSTEM_NODE_ID,
@@ -53,10 +61,10 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
     const projectNodeId = projectNodeMap.get(projectId);
     if (!projectNodeId) continue;
     for (const item of result.episodes ?? []) {
-      processEntry(item, 'episode', projectId, projectNodeId, nodes, edges, userTopics, projectUsers);
+      processEntry(item, 'episode', projectId, projectNodeId, nodes, edges, userTopics, projectUsers, displayNames, episodeNodeMap);
     }
     for (const item of result.agent_cases ?? []) {
-      processEntry(item, 'agent_case', projectId, projectNodeId, nodes, edges, userTopics, projectUsers);
+      processEntry(item, 'agent_case', projectId, projectNodeId, nodes, edges, userTopics, projectUsers, displayNames);
     }
   }
 
@@ -65,15 +73,19 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
     const projectNodeId = projectNodeMap.get(projectId);
     if (!projectNodeId) continue;
     for (const item of result.agent_skills ?? []) {
-      processSkill(item, projectId, projectNodeId, nodes, edges, caseProjects, skillCases, systemSkills);
+      processSkill(item, projectId, projectNodeId, nodes, edges, caseProjects, skillCases, systemSkills, displayNames);
     }
     for (const item of result.profiles ?? []) {
-      processProfile(item, projectId, projectNodeId, nodes, edges, profileProjects);
+      processProfile(item, projectId, projectNodeId, nodes, edges, profileProjects, displayNames);
     }
   }
 
   // profile 跨项目判定后，迁移到 system 下
   for (const [userId, projectSet] of profileProjects) {
+    // RoleAgent 的 profile 已经在 processProfile 中直接挂到 agent 节点，
+    // 不再按用户 profile 的跨项目逻辑处理，避免又创建出 user:reviewer-xxx 节点。
+    if (/^(reviewer|maintainer|archiver)-/.test(userId)) continue;
+
     const profileNodeId = `profile:${userId}`;
     const node = nodes.get(profileNodeId);
     if (!node) continue;
@@ -131,6 +143,19 @@ export function parseTopicId(sessionId: string): { topicId: string; label: strin
   return null;
 }
 
+/**
+ * 根据 episode owner/sender_id 判断其图谱分组。
+ *
+ * RoleAgent 在 EverOS 中以 user sender 写入，但 agent_id 带有 role 前缀；
+ * 图谱层据此将其渲染为 agent 节点，而非 user 节点。
+ */
+function inferEpisodeOwnerGroup(ownerId: string): 'user' | 'agent' {
+  if (/^(reviewer|maintainer|archiver)-/.test(ownerId)) {
+    return 'agent';
+  }
+  return 'user';
+}
+
 function processEntry(
   item: Record<string, unknown>,
   group: 'episode' | 'agent_case',
@@ -139,7 +164,9 @@ function processEntry(
   nodes: Map<string, MemoryGraphNode>,
   edges: Map<string, MemoryGraphEdge>,
   userTopics: Map<string, Set<string>>,
-  projectUsers: Map<string, Set<string>>
+  projectUsers: Map<string, Set<string>>,
+  displayNames: Map<string, string>,
+  episodeNodeMap?: Map<string, string>
 ): void {
   const rawId = typeof item.id === 'string' ? item.id : `${group}-${cryptoRandomId()}`;
   const sessionId = typeof item.session_id === 'string' ? item.session_id : '';
@@ -156,26 +183,55 @@ function processEntry(
   }
   addEdge(edges, projectNodeId, topicId, 'contains');
 
-  const nodeId = `${group}:${rawId}`;
-  const label =
-    group === 'episode'
-      ? truncate(String(item.summary ?? item.subject ?? rawId), 80)
-      : truncate(String(item.key_insight ?? item.task_intent ?? rawId), 80);
-  nodes.set(nodeId, {
-    id: nodeId,
-    label,
-    group,
-    title: typeof item.subject === 'string' ? item.subject : undefined,
-    details:
-      typeof item.episode === 'string'
-        ? item.episode
-        : typeof item.approach === 'string'
-          ? item.approach
-          : undefined,
-    timestamp: typeof item.timestamp === 'string' ? item.timestamp : undefined,
-    projectId,
-  });
-  addEdge(edges, topicId, nodeId, 'contains');
+  let nodeId: string;
+  if (group === 'episode' && sessionId && episodeNodeMap) {
+    // 同一 session 且相同 title 的 episode 才合并；不同 title 的 episode 分开显示
+    const episodeTitle = String(item.subject ?? item.summary ?? '').trim();
+    const mergeKey = episodeTitle ? `${sessionId}::${episodeTitle}` : sessionId;
+    nodeId = episodeTitle
+      ? `episode:${sessionId}:${stableHash(episodeTitle)}`
+      : `episode:${sessionId}:no-title`;
+    if (!episodeNodeMap.has(mergeKey)) {
+      episodeNodeMap.set(mergeKey, nodeId);
+      const label = truncate(String(item.summary ?? item.subject ?? rawId), 80);
+      nodes.set(nodeId, {
+        id: nodeId,
+        label,
+        group,
+        title: typeof item.subject === 'string' ? item.subject : undefined,
+        details:
+          typeof item.episode === 'string'
+            ? item.episode
+            : typeof item.approach === 'string'
+              ? item.approach
+              : undefined,
+        timestamp: typeof item.timestamp === 'string' ? item.timestamp : undefined,
+        projectId,
+      });
+      addEdge(edges, topicId, nodeId, 'contains');
+    }
+  } else {
+    nodeId = `${group}:${rawId}`;
+    const label =
+      group === 'episode'
+        ? truncate(String(item.summary ?? item.subject ?? rawId), 80)
+        : truncate(String(item.key_insight ?? item.task_intent ?? rawId), 80);
+    nodes.set(nodeId, {
+      id: nodeId,
+      label,
+      group,
+      title: typeof item.subject === 'string' ? item.subject : undefined,
+      details:
+        typeof item.episode === 'string'
+          ? item.episode
+          : typeof item.approach === 'string'
+            ? item.approach
+            : undefined,
+      timestamp: typeof item.timestamp === 'string' ? item.timestamp : undefined,
+      projectId,
+    });
+    addEdge(edges, topicId, nodeId, 'contains');
+  }
 
   const ownerList =
     group === 'episode'
@@ -191,12 +247,18 @@ function processEntry(
       continue;
     }
 
-    const ownerGroup = group === 'episode' ? 'user' : 'agent';
+    // RoleAgent 在 EverOS 里以 user sender 写入，但 agent_id 带有 role 前缀，
+    // 图谱层据此渲染为 agent 节点，而不是 user 节点。
+    const ownerGroup = group === 'episode' ? inferEpisodeOwnerGroup(ownerId) : 'agent';
     const ownerNodeId = `${ownerGroup}:${ownerId}`;
     if (!nodes.has(ownerNodeId)) {
-      nodes.set(ownerNodeId, { id: ownerNodeId, label: ownerId, group: ownerGroup });
+      nodes.set(ownerNodeId, { id: ownerNodeId, label: getOwnerLabel(ownerId, displayNames), group: ownerGroup });
     }
     addEdge(edges, ownerNodeId, nodeId, 'authored');
+    if (ownerGroup === 'agent') {
+      // Agent 直接关联到所属项目，补全 project -> agent 的关系
+      addEdge(edges, projectNodeId, ownerNodeId, 'has_agent');
+    }
     if (ownerGroup === 'user') {
       const projectUserSet = projectUsers.get(projectId);
       if (projectUserSet) projectUserSet.add(ownerId);
@@ -214,7 +276,8 @@ function processSkill(
   edges: Map<string, MemoryGraphEdge>,
   caseProjects: Map<string, string>,
   skillCases: Map<string, Set<string>>,
-  systemSkills: Set<string>
+  systemSkills: Set<string>,
+  displayNames: Map<string, string>
 ): void {
   const rawId = typeof item.id === 'string' ? item.id : `skill-${cryptoRandomId()}`;
   const skillNodeId = `agent_skill:${rawId}`;
@@ -241,7 +304,7 @@ function processSkill(
   if (agentId) {
     const agentNodeId = `agent:${agentId}`;
     if (!nodes.has(agentNodeId)) {
-      nodes.set(agentNodeId, { id: agentNodeId, label: agentId, group: 'agent' });
+      nodes.set(agentNodeId, { id: agentNodeId, label: getOwnerLabel(agentId, displayNames), group: 'agent' });
     }
     addEdge(edges, agentNodeId, skillNodeId, 'authored');
   }
@@ -253,15 +316,22 @@ function processProfile(
   projectNodeId: string,
   nodes: Map<string, MemoryGraphNode>,
   edges: Map<string, MemoryGraphEdge>,
-  profileProjects: Map<string, Set<string>>
+  profileProjects: Map<string, Set<string>>,
+  displayNames: Map<string, string>
 ): void {
   const userId = String(item.user_id ?? '');
-  if (!userId) return;
+  if (!userId || userId === SYSTEM_USER_ID) return;
+
+  // RoleAgent 的 profile 也按 agent 分组，避免同一 id 同时出现 user/agent 两个节点
+  const isAgent = /^(reviewer|maintainer|archiver)-/.test(userId);
+  const ownerGroup = isAgent ? 'agent' : 'user';
+  const ownerNodeId = `${ownerGroup}:${userId}`;
+
   const profileNodeId = `profile:${userId}`;
   if (!nodes.has(profileNodeId)) {
     nodes.set(profileNodeId, {
       id: profileNodeId,
-      label: userId,
+      label: getOwnerLabel(userId, displayNames),
       group: 'profile',
       projectId,
     });
@@ -270,10 +340,10 @@ function processProfile(
   if (!profileProjects.has(userId)) profileProjects.set(userId, new Set());
   profileProjects.get(userId)!.add(projectId);
 
-  const userNodeId = `user:${userId}`;
-  if (!nodes.has(userNodeId)) {
-    nodes.set(userNodeId, { id: userNodeId, label: userId, group: 'user' });
+  if (!nodes.has(ownerNodeId)) {
+    nodes.set(ownerNodeId, { id: ownerNodeId, label: getOwnerLabel(userId, displayNames), group: ownerGroup });
   }
+  addEdge(edges, ownerNodeId, profileNodeId, 'has_profile');
 }
 
 function addCrossTopicEdges(
@@ -336,9 +406,26 @@ function buildStats(
   for (const node of nodes) {
     if (memoryGroups.includes(node.group as any)) totalMemories++;
   }
+
+  // 按图表层的实际节点粒度统计每日增长，避免同一条记忆被多个 owner 查询重复计数
   const dailyMap = new Map<string, number>();
+  const seenEpisodeSessions = new Set<string>();
+  const seenAgentCaseIds = new Set<string>();
   for (const result of getResults.values()) {
-    for (const item of [...result.episodes, ...result.agent_cases]) {
+    for (const item of result.episodes) {
+      const sessionKey = typeof item.session_id === 'string' && item.session_id
+        ? item.session_id
+        : (typeof item.id === 'string' ? item.id : '');
+      if (!sessionKey || seenEpisodeSessions.has(sessionKey)) continue;
+      seenEpisodeSessions.add(sessionKey);
+      const ts = typeof item.timestamp === 'string' ? item.timestamp : '';
+      const date = ts.slice(0, 10);
+      if (date) dailyMap.set(date, (dailyMap.get(date) ?? 0) + 1);
+    }
+    for (const item of result.agent_cases) {
+      const id = typeof item.id === 'string' ? item.id : '';
+      if (!id || seenAgentCaseIds.has(id)) continue;
+      seenAgentCaseIds.add(id);
       const ts = typeof item.timestamp === 'string' ? item.timestamp : '';
       const date = ts.slice(0, 10);
       if (date) dailyMap.set(date, (dailyMap.get(date) ?? 0) + 1);
@@ -369,4 +456,19 @@ function cryptoRandomId(): string {
     return crypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/**
+ * 为 episode title 生成稳定的短哈希，用于合并键。
+ * 相同 title 在不同调用间得到相同哈希，保证重复 episode 能合并。
+ */
+function stableHash(str: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  return ((h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0')).slice(0, 16);
 }

@@ -1,6 +1,13 @@
 import { LlmClient } from '../../llm/client.js';
 import type { MergeRequest, MrDiff, ReviewFinding, ReviewResult } from '../provider/types.js';
 import type { IMemoryClient } from '../memory/types.js';
+import type { RecallPlanner } from '../memory/recall-planner.js';
+import {
+  summarizeThreadNotes,
+  formatThreadContext,
+  type ThreadContext,
+} from '../utils/context-window.js';
+import { logger } from '../../../core/logger.js';
 
 export interface ReviewerBrainOptions {
   /** LLM 客户端实例 */
@@ -15,6 +22,8 @@ export interface ReviewerBrainOptions {
   projectContext?: string;
   /** 可选的记忆客户端，用于记录评审历史 */
   memoryClient?: IMemoryClient;
+  /** 可选的记忆查询规划器，让 Agent 按需决定查什么记忆 */
+  recallPlanner?: RecallPlanner;
 }
 
 /**
@@ -54,7 +63,13 @@ export class ReviewerBrain {
    * 对 LGTM、emoji、纯感谢等无需回复的内容返回 shouldReply=false。
    */
   async replyToComment(input: ReviewerReplyInput): Promise<ReviewerReplyResult> {
-    const prompt = this.buildReplyPrompt(input);
+    const threadContext = await summarizeThreadNotes(
+      this.options.llmClient,
+      input.threadNotes,
+      { maxRawTokens: 8000, maxRecentItems: 5 }
+    );
+    const recalledContext = await this.recallContextForReply(input, threadContext);
+    const prompt = this.buildReplyPrompt(input, threadContext, recalledContext);
     const response = await this.options.llmClient.complete(
       prompt,
       '你是严格的代码评审助手。请只输出 JSON。'
@@ -62,11 +77,39 @@ export class ReviewerBrain {
     return this.parseReplyResponse(response);
   }
 
+  private async recallContextForReply(
+    input: ReviewerReplyInput,
+    threadContext: ThreadContext
+  ): Promise<string> {
+    if (!this.options.recallPlanner) return '';
+    const findingsText = input.originalFindings
+      .map(
+        (f) =>
+          `- [${f.severity}] \`${f.file}:${f.line}\` ${f.message}\n  建议：${f.suggestion}`
+      )
+      .join('\n');
+    const plan = await this.options.recallPlanner.plan({
+      role: 'reviewer',
+      taskType: 'reply',
+      taskSummary: `${formatThreadContext(threadContext)}\n\n待回复评论：${input.targetNote.body}`.slice(0, 3000),
+      availableFindings: findingsText,
+    });
+    if (!plan.needsRecall || plan.queries.length === 0) return '';
+    const memories = await this.options.recallPlanner.execute(plan);
+    if (memories.length === 0) return '';
+    return `\n\n相关历史记忆：\n${memories.map((m) => `- ${m}`).join('\n')}`;
+  }
+
   private async recallContext(mr: MergeRequest, diffs: MrDiff[]): Promise<string> {
-    if (!this.options.memoryClient) return '';
+    if (!this.options.recallPlanner) return '';
     const diffSummary = diffs.map((d) => `${d.newPath}\n${d.diff}`).join('\n');
-    const query = `${mr.title}\n${mr.description ?? ''}\n${diffSummary}`.slice(0, 2000);
-    const memories = await this.options.memoryClient.recallForReview(query);
+    const plan = await this.options.recallPlanner.plan({
+      role: 'reviewer',
+      taskType: 'review',
+      taskSummary: `${mr.title}\n${mr.description ?? ''}\n${diffSummary}`.slice(0, 3000),
+    });
+    if (!plan.needsRecall || plan.queries.length === 0) return '';
+    const memories = await this.options.recallPlanner.execute(plan);
     if (memories.length === 0) return '';
     return `\n\n相关历史记忆：\n${memories.map((m) => `- ${m}`).join('\n')}`;
   }
@@ -140,17 +183,16 @@ ${diffText}
         autoFixable,
         rawResponse,
       };
-    } catch {
-      return {
-        findings: [],
-        summary: '评审响应解析失败，请检查 LLM 输出格式',
-        autoFixable: [],
-        rawResponse,
-      };
+    } catch (err) {
+      logger.warn(
+        { rawResponse: rawResponse.slice(0, 2000), err: err instanceof Error ? err.message : String(err) },
+        'ReviewerBrain 评审响应解析失败'
+      );
+      throw new Error('评审响应解析失败，请检查 LLM 输出格式');
     }
   }
 
-  private buildReplyPrompt(input: ReviewerReplyInput): string {
+  private buildReplyPrompt(input: ReviewerReplyInput, threadContext: ThreadContext, recalledContext: string): string {
     const findingsText = input.originalFindings
       .map(
         (f) =>
@@ -158,9 +200,7 @@ ${diffText}
       )
       .join('\n');
 
-    const notesText = input.threadNotes
-      .map((n, idx) => `【${idx + 1}】${n.author} (${n.createdAt}):\n${n.body}`)
-      .join('\n\n');
+    const notesText = formatThreadContext(threadContext);
 
     const soulSection = this.options.soulContent
       ? `\n\nReviewer 个性与策略（SOUL.md）：\n${this.options.soulContent}`
@@ -179,8 +219,8 @@ MR 描述: ${input.mr.description}
 你最初的评审发现：
 ${findingsText || '（无结构化 findings）'}
 
-该 discussion 的全部历史评论：
-${notesText}
+该 discussion 的历史评论：
+${notesText}${recalledContext}
 
 需要你判断是否回复的最新评论：
 【待回复】${input.targetNote.author} (${input.targetNote.createdAt}):
@@ -217,7 +257,11 @@ ${this.options.rules}${soulSection}${contextSection}
         replyBody: parsed.replyBody ?? '',
         reason: parsed.reason ?? '未提供理由',
       };
-    } catch {
+    } catch (err) {
+      logger.warn(
+        { rawResponse: rawResponse.slice(0, 500), err: err instanceof Error ? err.message : String(err) },
+        'ReviewerBrain 回复决策解析失败，保守不回复'
+      );
       return { shouldReply: false, replyBody: '', reason: 'LLM 回复解析失败，保守不回复' };
     }
   }

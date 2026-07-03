@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { logger } from '../../../core/logger.js';
-import type { IMemoryClient, MemoryContext, MemoryFinding, ProjectKnowledgeItem } from './types.js';
+import type { IMemoryClient, MemoryContext, MemoryFinding, MemoryReviewComment, ProjectKnowledgeItem } from './types.js';
 import { sanitizeEverOSId } from './types.js';
 
 export interface MemoryClientOptions {
@@ -26,6 +26,7 @@ export class MemoryClient implements IMemoryClient {
       appId: sanitizeEverOSId(options.context.appId),
       projectId: sanitizeEverOSId(options.context.projectId),
       agentId: sanitizeEverOSId(options.context.agentId),
+      agentDisplayName: options.context.agentDisplayName,
       userId: sanitizeEverOSId(options.context.userId),
       sessionId: sanitizeEverOSId(options.context.sessionId),
     };
@@ -48,7 +49,8 @@ export class MemoryClient implements IMemoryClient {
     findingsCount: number;
     summary: string;
     findings?: Array<MemoryFinding>;
-    comments?: Array<{ author: string; body: string; createdAt: string }>;
+    comments?: MemoryReviewComment[];
+    mrAuthor?: string;
   }): Promise<void> {
     await this.callTool('record_review', { ...input, context: this.context });
   }

@@ -289,6 +289,7 @@ export class GitLabProvider implements IGitProvider {
         resolvable: d.resolvable ?? true,
         resolved: d.resolved ?? false,
         notes: d.notes.map((note) => ({
+          id: note.id,
           author: note.author.username,
           body: note.body,
           createdAt: note.created_at,
@@ -322,8 +323,9 @@ export class GitLabProvider implements IGitProvider {
   /**
    * 在指定 MR 下发布评论
    */
-  async postReviewComment(iid: number, body: string): Promise<void> {
-    await this.client.createNote(iid, body);
+  async postReviewComment(iid: number, body: string): Promise<number> {
+    const note = await this.client.createNote(iid, body);
+    return note.id;
   }
 
   /**
@@ -339,6 +341,7 @@ export class GitLabProvider implements IGitProvider {
     return notes
       .filter((note) => !note.system && !isBot(note.author.username))
       .map((note) => ({
+        id: note.id,
         author: note.author.username,
         body: note.body,
         createdAt: note.created_at,

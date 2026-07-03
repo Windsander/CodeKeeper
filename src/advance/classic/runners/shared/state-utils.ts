@@ -55,6 +55,10 @@ export interface MrAgentState {
       findingsKeys: string[];
       reviewedAt: number;
       headSha?: string;
+      /** 主 summary 评论的 note ID，用于检测 summary 是否被删除 */
+      summaryNoteId?: number;
+      /** 已记录到记忆的 Agent 评论 note ID，避免 summary/补充评论被重复记录 */
+      reviewNoteIds?: number[];
     }
   >;
   /** Reviewer 对自己开的 discussion thread 的回复追踪，避免重复回复 */

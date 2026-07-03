@@ -1,6 +1,12 @@
 import type { ReviewFinding } from '../provider/types.js';
 import { LlmClient } from '../../llm/client.js';
 import type { IMemoryClient } from '../memory/types.js';
+import type { RecallPlanner } from '../memory/recall-planner.js';
+import {
+  summarizeThreadNotes,
+  formatThreadContext,
+  type ThreadContext,
+} from '../utils/context-window.js';
 
 /**
  * Maintainer 对单条 finding/discussion 可执行的最终动作
@@ -32,6 +38,8 @@ export interface MaintainerBrainOptions {
   projectContext?: string;
   /** 可选的记忆客户端，用于记录修复尝试 */
   memoryClient?: IMemoryClient;
+  /** 可选的记忆查询规划器，让 Agent 按需决定查什么记忆 */
+  recallPlanner?: RecallPlanner;
 }
 
 export interface ParseFindingsInput {
@@ -112,6 +120,21 @@ export class MaintainerBrain {
     finding: ReviewFinding,
     originalComment?: string
   ): Promise<string> {
+    // 优先使用 RecallPlanner 让 Agent 自己决定查什么记忆
+    if (this.options.recallPlanner) {
+      const query = `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(0, 2000);
+      const plan = await this.options.recallPlanner.plan({
+        role: 'maintainer',
+        taskType: 'fix',
+        taskSummary: query,
+      });
+      if (!plan.needsRecall || plan.queries.length === 0) return '';
+      const memories = await this.options.recallPlanner.execute(plan);
+      if (memories.length === 0) return '';
+      return `\n\n## 相关记忆\n\n${memories.map((m) => `- ${m}`).join('\n')}`;
+    }
+
+    // fallback：未提供 planner 时维持原有三路查询
     if (!this.options.memoryClient) return '';
     const query = `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(
       0,
@@ -146,10 +169,15 @@ export class MaintainerBrain {
     threadNotes: Array<{ author: string; body: string; createdAt: string }>;
     maintainerName: string;
   }): Promise<MaintainerDecision> {
+    const threadContext = await summarizeThreadNotes(
+      this.options.llmClient,
+      params.threadNotes,
+      { maxRawTokens: 8000, maxRecentItems: 5 }
+    );
     const prompt = this.buildReplyPrompt(
       params.filePath,
       params.fileContent,
-      params.threadNotes,
+      threadContext,
       params.maintainerName
     );
     const raw = await this.options.llmClient.complete(prompt, this.systemPrompt());
@@ -292,12 +320,10 @@ ${positionHint}
   private buildReplyPrompt(
     filePath: string,
     fileContent: string,
-    threadNotes: Array<{ author: string; body: string; createdAt: string }>,
+    threadContext: ThreadContext,
     maintainerName: string
   ): string {
-    const threadText = threadNotes
-      .map((note) => `[${note.author}]\n${note.body}`)
-      .join('\n\n---\n\n');
+    const threadText = formatThreadContext(threadContext);
 
     return [
       '## 文件路径',
@@ -308,9 +334,7 @@ ${positionHint}
       this.truncate(fileContent),
       '```',
       '',
-      '## 本 discussion 的完整对话',
-      '以下包含 Reviewer 和 Maintainer 的所有评论。',
-      '',
+      '## 本 discussion 的对话',
       threadText,
       '',
       `## 你的身份\n你是 ${maintainerName}。`,
