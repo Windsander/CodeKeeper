@@ -19,6 +19,7 @@ import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
 import { loadState, saveState, type MrAgentState, getDiscussionStateKey } from './shared/state-utils.js';
 import { formatAgentFooter, isAgentAuthoredNote, MAINTAINER_ROLE_LABEL } from './shared/review-utils.js';
+import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
@@ -300,8 +301,9 @@ export class MaintainerRunner extends BaseRoleRunner {
     // 单条 finding：直接交给 Actor 执行决策后的动作
     if (findings.length === 1) {
       const finding = findings[0];
-      const fileContent = await this.readDiscussionFileContent(
+      const fileContent = await readDiscussionFileContent(
         worktreeManager,
+        project.rootPath,
         finding.file,
         mr.sourceBranch
       );
@@ -334,8 +336,9 @@ export class MaintainerRunner extends BaseRoleRunner {
     const ignoredItems: Array<{ fileLine: string; reason: string }> = [];
 
     for (const finding of findings) {
-      const fileContent = await this.readDiscussionFileContent(
+      const fileContent = await readDiscussionFileContent(
         worktreeManager,
+        project.rootPath,
         finding.file,
         mr.sourceBranch
       );
@@ -411,7 +414,12 @@ export class MaintainerRunner extends BaseRoleRunner {
       return;
     }
 
-    const fileContent = await this.readDiscussionFileContent(worktreeManager, filePath, mr.sourceBranch);
+    const fileContent = await readDiscussionFileContent(
+      worktreeManager,
+      project.rootPath,
+      filePath,
+      mr.sourceBranch
+    );
     if (fileContent === null) {
       console.warn(`[MaintainerRunner] 读取文件 ${filePath} 失败，跳过交互回复处理`);
       return;
@@ -442,25 +450,5 @@ export class MaintainerRunner extends BaseRoleRunner {
     };
 
     await actor.applyDecision(mr, discussion, syntheticFinding, decision, state);
-  }
-
-  /**
-   * 读取 discussion 关联文件的内容
-   * 优先从 worktree 读取（确保能拿到 MR 分支最新文件），失败则回退原项目目录
-   */
-  private async readDiscussionFileContent(
-    worktreeManager: WorktreeManager,
-    filePath: string,
-    sourceBranch: string
-  ): Promise<string | null> {
-    try {
-      await worktreeManager.ensureWorktree();
-      await worktreeManager.checkoutBranch(sourceBranch);
-      return worktreeManager.readFile(filePath);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(`[MaintainerRunner] 从 worktree 读取 ${filePath} 失败: ${message}`);
-    }
-    return null;
   }
 }
