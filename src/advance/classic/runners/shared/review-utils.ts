@@ -62,6 +62,13 @@ export function isAgentAuthoredNote(body: string): boolean {
 }
 
 /**
+ * 判断一条 note body 是否由 Maintainer Agent 发出
+ */
+export function isMaintainerAuthoredNote(body: string): boolean {
+  return body.includes(`CodeKeeper Advance ${MAINTAINER_ROLE_LABEL}`);
+}
+
+/**
  * 生成 Agent 身份签名 footer
  *
  * 统一格式：

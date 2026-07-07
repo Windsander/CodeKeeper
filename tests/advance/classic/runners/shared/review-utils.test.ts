@@ -11,6 +11,8 @@ import {
   groupFindingsBySeverity,
   formatSummary,
   SEVERITY_META,
+  isAgentAuthoredNote,
+  isMaintainerAuthoredNote,
 } from '../../../../../src/advance/classic/runners/shared/review-utils.js';
 import type { MergeRequest, ReviewResult, ReviewFinding } from '../../../../../src/advance/classic/provider/types.js';
 
@@ -156,11 +158,22 @@ describe('formatSummary', () => {
   });
 });
 
-describe('SEVERITY_META', () => {
-  it('包含所有 severity 级别的元数据', () => {
-    expect(SEVERITY_META.CRITICAL).toEqual({ icon: '🚨', label: '严重', color: '#dc2626' });
-    expect(SEVERITY_META.HIGH).toEqual({ icon: '🔴', label: '高', color: '#ea580c' });
-    expect(SEVERITY_META.MEDIUM).toEqual({ icon: '🟠', label: '中', color: '#d97706' });
-    expect(SEVERITY_META.LOW).toEqual({ icon: '🟡', label: '低', color: '#ca8a04' });
+describe('isAgentAuthoredNote', () => {
+  it('识别包含 CodeKeeper Advance 的 note', () => {
+    expect(isAgentAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent*')).toBe(true);
+  });
+
+  it('普通评论返回 false', () => {
+    expect(isAgentAuthoredNote('这里应该改一下')).toBe(false);
+  });
+});
+
+describe('isMaintainerAuthoredNote', () => {
+  it('识别 Maintainer 签名', () => {
+    expect(isMaintainerAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 维护 Agent*')).toBe(true);
+  });
+
+  it('Reviewer 签名返回 false', () => {
+    expect(isMaintainerAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent*')).toBe(false);
   });
 });

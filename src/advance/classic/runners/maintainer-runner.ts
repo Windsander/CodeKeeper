@@ -17,8 +17,8 @@ import { RecallPlanner } from '../memory/recall-planner.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
-import { loadState, saveState, type MrAgentState, getDiscussionStateKey } from './shared/state-utils.js';
-import { formatAgentFooter, isAgentAuthoredNote, MAINTAINER_ROLE_LABEL } from './shared/review-utils.js';
+import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
+import { formatAgentFooter, isMaintainerAuthoredNote, MAINTAINER_ROLE_LABEL } from './shared/review-utils.js';
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
@@ -140,11 +140,6 @@ export class MaintainerRunner extends BaseRoleRunner {
         : undefined;
       const brain = new MaintainerBrain({ ...brainOptions, memoryClient, recallPlanner });
 
-      const stateKey = getDiscussionStateKey(mr);
-      const reviewerDiscussionIds = new Set(
-        (state.discussions[stateKey] ?? []).map((p) => p.discussionId)
-      );
-
       console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
       discussions.forEach((d, idx) => {
         console.log(
@@ -154,9 +149,8 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       const pendingDiscussions = discussions.filter((d) => {
         if (d.resolved || !d.resolvable) return false;
-        // Reviewer 自己开的 thread 由 Reviewer 自己回复，Maintainer 不抢答
-        if (reviewerDiscussionIds.has(d.id)) return false;
-        const hasMaintainerNote = d.notes.some((note) => isAgentAuthoredNote(note.body));
+
+        const hasMaintainerNote = d.notes.some((note) => isMaintainerAuthoredNote(note.body));
         const isInteractive = state.interactiveThreads[d.id]?.status === 'awaiting-reply';
         // 如果已处理过且没有新 note，且非交互式，跳过
         const processed = state.processedDiscussions?.[d.id];
@@ -227,7 +221,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     if (existingThread?.status === 'awaiting-reply') {
       const askedAt = existingThread.askedAt;
       const newReviewerNotes = discussion.notes.filter((note) => {
-        if (isAgentAuthoredNote(note.body)) return false;
+        if (isMaintainerAuthoredNote(note.body)) return false;
         const noteTime = new Date(note.createdAt).getTime();
         return !Number.isNaN(noteTime) && noteTime > askedAt;
       });
