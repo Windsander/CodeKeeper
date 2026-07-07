@@ -8,6 +8,11 @@ import type { LlmClient } from '../llm/client';
 import type { Project } from '../types';
 import { getArchiveRoot } from '../types';
 import { loadProjectConfig } from '../config/project-config';
+import { loadDaemonConfig, saveDaemonConfig } from '../config/daemon-config.js';
+import {
+  DEFAULT_EMBEDDING_MODEL,
+  DEFAULT_RERANK_MODEL,
+} from '../../electron/shared/local-model-catalog.js';
 import { UndoExecutor } from '../archive/undo-executor';
 import { detectGitInfo } from '../utils/git-info';
 import { loadSoulContent, saveSoulContent } from '../classic/soul/soul-loader.js';
@@ -247,15 +252,24 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'daemon.config': async (ctx) => {
-    return ctx.getDaemonConfig?.() ?? {
-      apiKey: '',
-      apiUrl: '',
-      provider: 'anthropic',
-      model: '',
-      headers: '',
-      scanCron: '*/5 * * * *',
-      llmRequestsPerMinute: 10,
-      everos: '',
+    const fromDaemon = ctx.getDaemonConfig?.();
+    if (fromDaemon) {
+      return fromDaemon;
+    }
+
+    // Daemon 尚未启动时，直接从持久化配置读取，避免页面显示空默认值
+    const persisted = loadDaemonConfig();
+    return {
+      apiKey: persisted.apiKey ?? '',
+      apiUrl: persisted.apiUrl ?? '',
+      provider: persisted.provider ?? 'anthropic',
+      model: persisted.model ?? '',
+      headers: persisted.headers ? JSON.stringify(persisted.headers) : '',
+      scanCron: persisted.scanCron ?? '*/5 * * * *',
+      llmRequestsPerMinute: persisted.llmRequestsPerMinute ?? 10,
+      embeddingModel: persisted.embeddingModel ?? DEFAULT_EMBEDDING_MODEL,
+      rerankModel: persisted.rerankModel ?? DEFAULT_RERANK_MODEL,
+      everos: persisted.everos ? JSON.stringify(persisted.everos) : '',
     };
   },
 
@@ -329,6 +343,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     }
 
     ctx.updateDaemonConfig?.(config);
+    // Daemon 未启动时直接落盘，保证重启后能读取到最新配置
+    if (!ctx.updateDaemonConfig) {
+      saveDaemonConfig(config);
+    }
     return { success: true };
   },
 
