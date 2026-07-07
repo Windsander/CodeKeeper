@@ -186,7 +186,8 @@ export class MaintainerRunner extends BaseRoleRunner {
           fixAgent,
           worktreeManager,
           maintainerName,
-          state
+          state,
+          project.rootPath
         );
       }
       await memoryClient?.disconnect().catch(() => undefined);
@@ -207,7 +208,8 @@ export class MaintainerRunner extends BaseRoleRunner {
     fixAgent: MrFixAgent,
     worktreeManager: WorktreeManager,
     maintainerName: string,
-    state: MrAgentState
+    state: MrAgentState,
+    projectRootPath: string
   ): Promise<void> {
     const recordProcessed = () => {
       state.processedDiscussions ??= {};
@@ -243,7 +245,8 @@ export class MaintainerRunner extends BaseRoleRunner {
         actor,
         worktreeManager,
         maintainerName,
-        state
+        state,
+        projectRootPath
       );
       recordProcessed();
       return;
@@ -303,7 +306,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       const finding = findings[0];
       const fileContent = await readDiscussionFileContent(
         worktreeManager,
-        project.rootPath,
+        projectRootPath,
         finding.file,
         mr.sourceBranch
       );
@@ -338,7 +341,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     for (const finding of findings) {
       const fileContent = await readDiscussionFileContent(
         worktreeManager,
-        project.rootPath,
+        projectRootPath,
         finding.file,
         mr.sourceBranch
       );
@@ -404,7 +407,8 @@ export class MaintainerRunner extends BaseRoleRunner {
     actor: MaintainerActor,
     worktreeManager: WorktreeManager,
     maintainerName: string,
-    state: MrAgentState
+    state: MrAgentState,
+    projectRootPath: string
   ): Promise<void> {
     const thread = state.interactiveThreads[discussion.id];
     const filePath = thread?.filePath;
@@ -416,7 +420,7 @@ export class MaintainerRunner extends BaseRoleRunner {
 
     const fileContent = await readDiscussionFileContent(
       worktreeManager,
-      project.rootPath,
+      projectRootPath,
       filePath,
       mr.sourceBranch
     );
