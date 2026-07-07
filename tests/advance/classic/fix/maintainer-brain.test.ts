@@ -203,3 +203,56 @@ describe('MaintainerBrain', () => {
     expect(findings).toHaveLength(0);
   });
 });
+
+describe('MaintainerBrain.parseFindings Markdown fallback', () => {
+  function makeNoCallLlmClient(): LlmClient {
+    return {
+      complete: vi.fn().mockRejectedValue(new Error('LLM 不应被调用')),
+    } as unknown as LlmClient;
+  }
+
+  it('Markdown 列表直接解析多条 finding', async () => {
+    const brain = new MaintainerBrain({ llmClient: makeNoCallLlmClient() });
+    const body = `## 发现项
+
+- \`src/a.ts:10\` · 规则 \`no-any\` 类型不安全
+  **修改建议**：使用具体类型
+- \`src/b.ts:25\` · 规则 \`unused\` 变量未使用
+  **修改建议**：删除变量
+
+---
+*生成于 2026/07/07 ...*`;
+
+    const findings = await brain.parseFindings({ body, isSummary: true });
+    expect(findings).toHaveLength(2);
+    expect(findings[0]).toMatchObject({
+      file: 'src/a.ts',
+      line: 10,
+      ruleId: 'no-any',
+      message: '类型不安全',
+      suggestion: '使用具体类型',
+    });
+    expect(findings[1]).toMatchObject({
+      file: 'src/b.ts',
+      line: 25,
+      ruleId: 'unused',
+      message: '变量未使用',
+      suggestion: '删除变量',
+    });
+  });
+
+  it('Agent 签名 footer 不污染解析结果', async () => {
+    const brain = new MaintainerBrain({ llmClient: makeNoCallLlmClient() });
+    const body = `- \`src/c.ts:5\` 问题\n\n---\n*生成于 ... CodeKeeper Advance*`;
+    const findings = await brain.parseFindings({ body });
+    expect(findings).toHaveLength(1);
+    expect(findings[0].file).toBe('src/c.ts');
+  });
+
+  it('无 Markdown finding 时回退 LLM', async () => {
+    const llmClient = createMockLlmClient(JSON.stringify([]));
+    const brain = new MaintainerBrain({ llmClient });
+    const findings = await brain.parseFindings({ body: '这是一个无关评论' });
+    expect(findings).toHaveLength(0);
+  });
+});

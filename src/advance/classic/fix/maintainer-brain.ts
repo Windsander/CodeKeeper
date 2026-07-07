@@ -110,6 +110,11 @@ export class MaintainerBrain {
    * 从评论内容中解析可修复的 finding 列表
    */
   async parseFindings(input: ParseFindingsInput): Promise<ReviewFinding[]> {
+    const markdownFindings = this.parseFindingsFromMarkdown(input.body, input.position);
+    if (markdownFindings.length > 0) {
+      return markdownFindings;
+    }
+
     const prompt = this.buildParseFindingsPrompt(input);
     const response = await this.options.llmClient.complete(prompt, '你是代码评审解析助手。请只输出 JSON。');
     return this.extractFindingsFromResponse(response, input.position);
@@ -188,12 +193,19 @@ export class MaintainerBrain {
     const positionHint = input.position?.newPath
       ? `该评论所在文件：${input.position.newPath}，行号：${input.position.newLine ?? '未知'}`
       : '评论中没有文件定位信息。';
+
     return `请从以下代码评审评论中提取所有可修复的代码问题，输出 JSON 数组。
 
 评论内容：
 ${input.body}
 
 ${positionHint}
+
+Reviewer 评论常见格式示例：
+- \`src/a.ts:10\` · 规则 \`no-any\` 类型不安全
+  **修改建议**：使用具体类型
+- \`src/b.ts:25\` · 规则 \`unused\` 变量未使用
+  **修改建议**：删除
 
 输出格式：
 [
@@ -247,6 +259,84 @@ ${positionHint}
           autoFixable: item.autoFixable === true,
         };
       });
+  }
+
+  private parseFindingsFromMarkdown(
+    body: string,
+    position?: ParseFindingsInput['position']
+  ): ReviewFinding[] {
+    // 去掉 Agent 签名 footer 之后的内容
+    const bodyWithoutFooter = body.split('\n---\n')[0] ?? body;
+    const lines = bodyWithoutFooter.split('\n');
+    const findings: ReviewFinding[] = [];
+    let current: Partial<ReviewFinding> | null = null;
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+
+      // 匹配 `- `file:line`` 或 `* `file:line`` 开头
+      const bulletMatch = line.match(/^[-*]\s+`([^`]+?):(\d+)`/);
+      if (bulletMatch) {
+        if (current) {
+          findings.push(this.finalizeFinding(current, position));
+        }
+        current = {
+          file: bulletMatch[1],
+          line: parseInt(bulletMatch[2], 10),
+          severity: 'MEDIUM',
+        };
+        const ruleMatch = line.match(/规则\s+`([^`]+)`/);
+        if (ruleMatch) current.ruleId = ruleMatch[1];
+        const message = line
+          .replace(/^[-*]\s+`[^`]+?`/, '')
+          .replace(/·\s*规则\s+`[^`]+`/, '')
+          .trim();
+        if (message) current.message = message;
+        continue;
+      }
+
+      if (current && line.startsWith('**问题描述**：')) {
+        current.message = line.replace('**问题描述**：', '').trim();
+        continue;
+      }
+
+      if (current && line.startsWith('**修改建议**：')) {
+        current.suggestion = line.replace('**修改建议**：', '').trim();
+        continue;
+      }
+
+      if (current && line.startsWith('**建议**：')) {
+        current.suggestion = line.replace('**建议**：', '').trim();
+      }
+    }
+
+    if (current) {
+      findings.push(this.finalizeFinding(current, position));
+    }
+
+    return findings.filter((f) => f.file && f.line > 0);
+  }
+
+  private finalizeFinding(
+    partial: Partial<ReviewFinding>,
+    position?: ParseFindingsInput['position']
+  ): ReviewFinding {
+    let file = partial.file ?? '';
+    let line = partial.line ?? 0;
+    if ((!file || line <= 0) && position) {
+      file = file || (position.newPath ?? position.oldPath ?? '');
+      line = line > 0 ? line : (position.newLine ?? position.oldLine ?? 1);
+    }
+    return {
+      severity: this.normalizeSeverity(partial.severity ?? 'MEDIUM'),
+      file: file || '',
+      line: line > 0 ? line : 1,
+      ruleId: partial.ruleId,
+      message: partial.message ?? '未描述的问题',
+      suggestion: partial.suggestion ?? '请查看 discussion 详情',
+      autoFixable: partial.autoFixable ?? false,
+    };
   }
 
   private normalizeSeverity(severity: string): ReviewFinding['severity'] {
