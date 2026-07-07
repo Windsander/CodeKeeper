@@ -11,7 +11,7 @@ import { ReviewerBrain } from '../review/reviewer-brain.js';
 import { ReviewerActor } from '../review/reviewer-actor.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { RecallPlanner } from '../memory/recall-planner.js';
-import { buildEverOSAgentId } from '../memory/types.js';
+import { buildEverOSAgentId, sanitizeEverOSId } from '../memory/types.js';
 import { loadState, saveState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
 import {
   formatAgentFooter,
@@ -21,6 +21,16 @@ import {
 import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
 import type { MergeRequest, MrDiff, ReviewFinding, Discussion, ReviewerComment } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
+
+/**
+ * 构建 finding case 的全局唯一 key，用于 EverOS 去重与召回。
+ */
+function buildFindingCaseKey(projectId: string, mrIid: number, finding: ReviewFinding): string {
+  const safeProject = sanitizeEverOSId(projectId);
+  const safeFile = sanitizeEverOSId(finding.file);
+  const safeRule = sanitizeEverOSId(finding.ruleId ?? 'generic');
+  return `case:${safeProject}:mr-${mrIid}:${safeFile}:${finding.line}:${safeRule}`;
+}
 
 /**
  * 构建 Reviewer 会话 ID（按 MR 粒度）
@@ -207,9 +217,29 @@ export class ReviewerRunner extends BaseRoleRunner {
         continue;
       }
 
+      const postedFindingKeys = new Set((state.discussions[stateKey] ?? []).map((d) => d.findingKey));
       const newFindings = previousReview
-        ? result.findings.filter((f) => !previousReview.findingsKeys.includes(getFindingKey(f)))
+        ? result.findings.filter(
+            (f) =>
+              !previousReview.findingsKeys.includes(getFindingKey(f)) &&
+              !postedFindingKeys.has(getFindingKey(f))
+          )
         : result.findings;
+
+      // 通过 EverOS finding case 做跨实例/状态丢失兜底去重
+      let newFindingsToPost = newFindings;
+      if (memoryClient) {
+        try {
+          newFindingsToPost = await this.filterDuplicateCases(memoryClient, project.id, mr.iid, newFindings);
+          const skipped = newFindings.length - newFindingsToPost.length;
+          if (skipped > 0) {
+            console.log(`[ReviewerRunner] MR !${mr.iid} 从新增发现项中过滤 ${skipped} 个 EverOS 已存在的 case`);
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[ReviewerRunner] MR !${mr.iid} 召回 finding case 失败: ${message}`);
+        }
+      }
 
       // 如果之前保存的 summary note 已经被删除，则重新发 summary，而不是追加补充评审
       const previousSummaryNoteId = previousReview?.summaryNoteId;
@@ -218,8 +248,19 @@ export class ReviewerRunner extends BaseRoleRunner {
         : false;
       const shouldPostSummary = !previousReview || !summaryStillExists;
 
+      const newFindingsHash = computeFindingsHash(newFindingsToPost);
+      const lastAppendStillExists =
+        previousReview?.lastAppendNoteId !== undefined &&
+        comments.some((c) => c.id === previousReview.lastAppendNoteId);
+      const shouldAppend =
+        !shouldPostSummary &&
+        newFindingsToPost.length > 0 &&
+        !(previousReview?.lastAppendFindingsHash === newFindingsHash && lastAppendStillExists);
+
       const reviewNoteIds: number[] = [];
       let summaryNoteId: number | undefined = previousSummaryNoteId;
+      let lastAppendNoteId: number | undefined = previousReview?.lastAppendNoteId;
+      let lastAppendFindingsHash: string | undefined = previousReview?.lastAppendFindingsHash;
       try {
         if (result.findings.length > 0 && shouldPostSummary) {
           const id = await actor.postReview(mr, result, {
@@ -230,21 +271,54 @@ export class ReviewerRunner extends BaseRoleRunner {
           });
           reviewNoteIds.push(id);
           summaryNoteId = id;
-        } else if (!shouldPostSummary && newFindings.length > 0) {
-          const id = await actor.appendSupplementaryReview(mr, newFindings);
+          lastAppendNoteId = undefined;
+          lastAppendFindingsHash = undefined;
+        } else if (shouldAppend) {
+          const id = await actor.appendSupplementaryReview(mr, newFindingsToPost);
           reviewNoteIds.push(id);
+          lastAppendNoteId = id;
+          lastAppendFindingsHash = newFindingsHash;
+        } else if (!shouldPostSummary && newFindingsToPost.length > 0 && !shouldAppend) {
+          console.log(`[ReviewerRunner] MR !${mr.iid} 新增发现项与上一次追加评审重复，跳过追加`);
         } else if (result.findings.length === 0) {
           console.log(`[ReviewerRunner] MR !${mr.iid} 无发现问题，跳过发布评论`);
         }
 
         // 为新增 CRITICAL/HIGH finding 开 threads（已有 findingKey 的不会重复创建）
-        if (newFindings.length > 0) {
-          await actor.createFindingThreads(mr, newFindings, {
+        if (newFindingsToPost.length > 0) {
+          await actor.createFindingThreads(mr, newFindingsToPost, {
             diffs,
             shaInfo,
             stateKey,
             state,
           });
+        }
+
+        // 把新增 finding 记录为 EverOS case，供后续去重和跨 RoleAgent 检索
+        if (memoryClient && newFindingsToPost.length > 0) {
+          try {
+            const cases = newFindingsToPost.map((f) => {
+              const key = buildFindingCaseKey(project.id, mr.iid, f);
+              const posted = state.discussions[stateKey]?.find((d) => d.findingKey === getFindingKey(f));
+              return {
+                key,
+                mrIid: mr.iid,
+                file: f.file,
+                line: f.line,
+                severity: f.severity,
+                ruleId: f.ruleId,
+                message: f.message,
+                suggestion: f.suggestion,
+                status: 'open' as const,
+                discussionId: posted?.discussionId,
+              };
+            });
+            await memoryClient.recordFindingCases(cases);
+            console.log(`[ReviewerRunner] MR !${mr.iid} 已记录 ${cases.length} 个 finding case 到 EverOS`);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`[ReviewerRunner] MR !${mr.iid} 记录 finding case 失败: ${message}`);
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -293,6 +367,8 @@ export class ReviewerRunner extends BaseRoleRunner {
         headSha,
         summaryNoteId,
         reviewNoteIds: [...(previousReview?.reviewNoteIds ?? []), ...reviewNoteIds],
+        lastAppendNoteId,
+        lastAppendFindingsHash,
       };
 
       // 处理别人对 Reviewer 自己开的 discussion threads / summary 评论的新回复
@@ -309,12 +385,7 @@ export class ReviewerRunner extends BaseRoleRunner {
 
     // 持久化 MR 评审状态，否则下一轮轮询会丢失 reviewState/discussions 记录，
     // 导致对同一 MR 重复发布 summary 和重复写入记忆。
-    try {
-      saveState(project, state);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[ReviewerRunner] 保存项目 ${project.name} 的 MR Agent 状态失败: ${message}`);
-    }
+    saveState(project, state);
   }
 
   /**
@@ -418,6 +489,33 @@ export class ReviewerRunner extends BaseRoleRunner {
         state.reviewerThreadState[discussion.id] = { lastRepliedAt: latestRepliedAt };
       }
     }
+  }
+
+  /**
+   * 按 case key 召回 EverOS 中是否已有对应 finding case，返回需要去重过滤后的 findings。
+   */
+  private async filterDuplicateCases(
+    memoryClient: MemoryClient,
+    projectId: string,
+    mrIid: number,
+    findings: ReviewFinding[]
+  ): Promise<ReviewFinding[]> {
+    if (findings.length === 0) return findings;
+
+    const checks = await Promise.all(
+      findings.map(async (f) => {
+        const key = buildFindingCaseKey(projectId, mrIid, f);
+        try {
+          const items = await memoryClient.recallFindingCase(key);
+          const exists = items.some((item) => item.includes(`[CASE:${key}]`));
+          return { finding: f, exists };
+        } catch {
+          return { finding: f, exists: false };
+        }
+      })
+    );
+
+    return checks.filter((c) => !c.exists).map((c) => c.finding);
   }
 }
 

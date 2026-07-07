@@ -10,7 +10,7 @@ import http, { type Server as HttpServer } from 'node:http';
 import { URL } from 'node:url';
 import { logger } from '../../../core/logger.js';
 import { SecretSanitizer } from './secret-sanitizer.js';
-import type { MemoryContext, MemoryReviewComment, ProjectKnowledgeItem } from './types.js';
+import type { MemoryContext, MemoryFindingCase, MemoryReviewComment, ProjectKnowledgeItem } from './types.js';
 import { sanitizeEverOSId } from './types.js';
 import {
   everosMemoryAdd,
@@ -60,6 +60,25 @@ export function formatFindingsForMemory(findings: unknown[]): string {
       return `- [${severity}] ${file}:${line} ${message}`;
     });
   return items.join('\n') || '无详细问题描述';
+}
+
+/**
+ * 把单条 finding case 格式化为带结构化标记的文本，便于按 key 召回。
+ */
+export function formatFindingCaseContent(c: MemoryFindingCase): string {
+  const lines = [
+    `[CASE:${c.key}]`,
+    `MR: !${c.mrIid}`,
+    `文件: ${c.file}`,
+    `行号: ${c.line}`,
+    `级别: ${c.severity}`,
+  ];
+  if (c.ruleId) lines.push(`规则: ${c.ruleId}`);
+  lines.push(`问题: ${c.message}`);
+  if (c.suggestion) lines.push(`建议: ${c.suggestion}`);
+  lines.push(`状态: ${c.status}`);
+  if (c.discussionId) lines.push(`讨论ID: ${c.discussionId}`);
+  return lines.join('\n');
 }
 
 function parseTimestampMs(iso: string): number | undefined {
@@ -296,6 +315,37 @@ export class EverOSMcpServer {
           },
         },
         {
+          name: 'record_finding_cases',
+          description: 'Reviewer 把每条 finding 记录为可检索的 case',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              cases: {
+                type: 'array',
+                description: '要记录的 finding case 列表',
+                items: {
+                  type: 'object',
+                  properties: {
+                    key: { type: 'string' },
+                    mrIid: { type: 'number' },
+                    file: { type: 'string' },
+                    line: { type: 'number' },
+                    severity: { type: 'string' },
+                    ruleId: { type: 'string' },
+                    message: { type: 'string' },
+                    suggestion: { type: 'string' },
+                    status: { type: 'string', enum: ['open', 'resolved', 'reopen'] },
+                    discussionId: { type: 'string' },
+                  },
+                  required: ['key', 'mrIid', 'file', 'line', 'severity', 'message', 'status'],
+                },
+              },
+            },
+            required: ['context', 'cases'],
+          },
+        },
+        {
           name: 'record_project_knowledge',
           description: 'Archiver 写入项目知识',
           inputSchema: {
@@ -348,6 +398,18 @@ export class EverOSMcpServer {
               query: { type: 'string' },
             },
             required: ['context', 'query'],
+          },
+        },
+        {
+          name: 'recall_finding_case',
+          description: '按 case key 召回历史 finding case 详情',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              key: { type: 'string', description: 'case key，例如 case:proj:mr-1:file:line:ruleId' },
+            },
+            required: ['context', 'key'],
           },
         },
         {
@@ -411,6 +473,10 @@ export class EverOSMcpServer {
           await this.handleRecordReview(args as { context: MemoryContext } & Record<string, unknown>);
           return this.okResult();
         }
+        if (name === 'record_finding_cases') {
+          await this.handleRecordFindingCases(args as { context: MemoryContext } & Record<string, unknown>);
+          return this.okResult();
+        }
         if (name === 'record_project_knowledge') {
           await this.handleRecordProjectKnowledge(
             (args as { context: MemoryContext }).context,
@@ -429,6 +495,11 @@ export class EverOSMcpServer {
         if (name === 'recall_for_review') {
           return this.recallResult(
             await this.handleRecallForReview(args as { context: MemoryContext; query: string })
+          );
+        }
+        if (name === 'recall_finding_case') {
+          return this.recallResult(
+            await this.handleRecallFindingCase(args as { context: MemoryContext; key: string })
           );
         }
         if (name === 'recall_for_maintenance') {
@@ -507,6 +578,29 @@ export class EverOSMcpServer {
     });
   }
 
+  private async handleRecordFindingCases(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+    const ctx = args.context;
+    const cases = (Array.isArray(args.cases) ? args.cases : []) as MemoryFindingCase[];
+    if (cases.length === 0) return;
+
+    const caseCtx: MemoryContext = {
+      ...ctx,
+      agentId: 'reviewer-case',
+      agentDisplayName: 'Reviewer Finding Case',
+      sessionId: `finding-cases-${ctx.projectId}`,
+    };
+    const messages: EverOSAddMessage[] = cases.map((c) => ({
+      senderId: 'reviewer-case',
+      role: 'assistant',
+      content: formatFindingCaseContent(c),
+    }));
+
+    this.persistAndFlush(caseCtx, messages).catch((err) => {
+      logger.error({ err, sessionId: caseCtx.sessionId }, 'record_finding_cases 后台记忆写入失败，已入队重试');
+      this.queue?.enqueue(caseCtx, 'add_messages', messages);
+    });
+  }
+
   private async persistReview(ctx: MemoryContext, messages: EverOSAddMessage[]): Promise<void> {
     const start = Date.now();
     const senderSet = new Set(messages.map((m) => `${m.role}:${m.senderId}`));
@@ -522,6 +616,16 @@ export class EverOSMcpServer {
       this.queue?.enqueue(ctx, 'flush');
     }
     logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, 'record_review 后台记忆写入完成');
+  }
+
+  /**
+   * 批量写入并立即 flush，用于 finding case 这类需要被立即召回的记忆。
+   */
+  private async persistAndFlush(ctx: MemoryContext, messages: EverOSAddMessage[]): Promise<void> {
+    const start = Date.now();
+    await everosMemoryAddMessages(this.everosUrl, ctx, messages);
+    await this.flushSession(ctx);
+    logger.info({ sessionId: ctx.sessionId, messageCount: messages.length, durationMs: Date.now() - start }, 'finding case 批量写入并 flush 完成');
   }
 
   private async flushSession(ctx: MemoryContext): Promise<void> {
@@ -633,6 +737,19 @@ export class EverOSMcpServer {
     });
 
     return ownerResult.items;
+  }
+
+  private async handleRecallFindingCase(args: { context: MemoryContext; key: string }): Promise<EverOSSearchItem[]> {
+    const ctx = args.context;
+    const result = await everosMemorySearch(this.everosUrl, {
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      owner: { kind: 'agent', agentId: 'reviewer-case' },
+      query: args.key,
+      topK: 5,
+    });
+
+    return result.items;
   }
 
   private async handleRecallForMaintenance(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {

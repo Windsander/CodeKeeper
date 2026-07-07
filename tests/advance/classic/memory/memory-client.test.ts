@@ -41,6 +41,46 @@ describe('MemoryClient 记录方法', () => {
     callToolSpy.mockRestore();
   });
 
+  it('recordFindingCases 调用 record_finding_cases tool', async () => {
+    const cases = [
+      {
+        key: 'case:p1:mr-1:src_a_ts:10:rule-any',
+        mrIid: 1,
+        file: 'src/a.ts',
+        line: 10,
+        severity: 'HIGH',
+        ruleId: 'rule-any',
+        message: '问题',
+        suggestion: '建议',
+        status: 'open' as const,
+      },
+    ];
+    await client.recordFindingCases(cases);
+    expect(callToolSpy).toHaveBeenCalledWith({
+      name: 'record_finding_cases',
+      arguments: {
+        context: mockContext,
+        cases,
+      },
+    });
+  });
+
+  it('recordFindingCases 空数组时不调用 tool', async () => {
+    await client.recordFindingCases([]);
+    expect(callToolSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'record_finding_cases' })
+    );
+  });
+
+  it('recallFindingCase 调用 recall_finding_case tool 并解析结果', async () => {
+    vi.spyOn(Client.prototype, 'callTool').mockResolvedValue({
+      content: [{ type: 'text', text: JSON.stringify({ results: ['[CASE:foo]'] }) }],
+    });
+    const testClient = new MemoryClient({ mcpUrl: 'http://127.0.0.1:9999', context: mockContext });
+    const results = await testClient.recallFindingCase('case:p1:mr-1:src_a_ts:10:rule-any');
+    expect(results).toEqual(['[CASE:foo]']);
+  });
+
   it('recordFixAttempt 调用 record_fix_attempt tool', async () => {
     await client.recordFixAttempt({ mrIid: 42, file: 'src/index.ts', line: 10, success: true, reason: '已修复' });
     expect(callToolSpy).toHaveBeenCalledWith({

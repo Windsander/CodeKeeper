@@ -5,6 +5,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import {
   EverOSMcpServer,
   buildReviewMemoryMessages,
+  formatFindingCaseContent,
 } from '../../../../src/advance/classic/memory/everos-mcp-server.js';
 import type { MemoryContext, MemoryReviewComment } from '../../../../src/advance/classic/memory/types.js';
 import { everosMemoryAddMessages, everosMemoryFlush } from '../../../../src/advance/classic/memory/everos-api.js';
@@ -229,5 +230,131 @@ describe('buildReviewMemoryMessages', () => {
 
     const userOwners = result.owners.filter((o) => o.ownerType === 'user');
     expect(userOwners).toHaveLength(0);
+  });
+});
+
+describe('formatFindingCaseContent', () => {
+  it('生成带 [CASE:key] 标记的结构化文本', () => {
+    const content = formatFindingCaseContent({
+      key: 'case:p1:mr-1:src_a_ts:10:rule-any',
+      mrIid: 1,
+      file: 'src/a.ts',
+      line: 10,
+      severity: 'HIGH',
+      ruleId: 'rule-any',
+      message: '问题',
+      suggestion: '建议',
+      status: 'open',
+      discussionId: 'd-1',
+    });
+    expect(content).toContain('[CASE:case:p1:mr-1:src_a_ts:10:rule-any]');
+    expect(content).toContain('文件: src/a.ts');
+    expect(content).toContain('状态: open');
+    expect(content).toContain('讨论ID: d-1');
+  });
+});
+
+describe('EverOSMcpServer finding case tools', () => {
+  async function connect(server: EverOSMcpServer): Promise<{ client: Client; transport: SSEClientTransport; url: string }> {
+    const url = await server.start();
+    const client = new Client({ name: 'test', version: '0.1.0' });
+    const transport = new SSEClientTransport(new URL('/sse', url));
+    await client.connect(transport);
+    return { client, transport, url };
+  }
+
+  beforeEach(() => {
+    vi.mocked(everosMemoryAddMessages).mockReset();
+    vi.mocked(everosMemoryFlush).mockReset();
+  });
+
+  it('record_finding_cases 使用专用 session 与 sender 写入并 flush', async () => {
+    vi.mocked(everosMemoryAddMessages).mockResolvedValue(undefined);
+    vi.mocked(everosMemoryFlush).mockResolvedValue(undefined);
+
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999' });
+    const { client, transport } = await connect(server);
+
+    const ctx = makeCtx();
+    await client.callTool({
+      name: 'record_finding_cases',
+      arguments: {
+        context: ctx,
+        cases: [
+          {
+            key: 'case:proj-1:mr-1:src_a_ts:10:rule-any',
+            mrIid: 1,
+            file: 'src/a.ts',
+            line: 10,
+            severity: 'HIGH',
+            ruleId: 'rule-any',
+            message: '问题',
+            suggestion: '建议',
+            status: 'open',
+          },
+        ],
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(everosMemoryAddMessages).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(everosMemoryAddMessages).mock.calls[0];
+    expect(call[1]).toMatchObject({
+      appId: ctx.appId,
+      projectId: ctx.projectId,
+      sessionId: 'finding-cases-proj-1',
+    });
+    expect(call[2]).toEqual([
+      {
+        senderId: 'reviewer-case',
+        role: 'assistant',
+        content: expect.stringContaining('[CASE:case:proj-1:mr-1:src_a_ts:10:rule-any]'),
+      },
+    ]);
+    expect(everosMemoryFlush).toHaveBeenCalledTimes(1);
+
+    await transport.close();
+    await server.stop();
+  });
+
+  it('recall_finding_case 按 reviewer-case owner 搜索', async () => {
+    const { everosMemorySearch } = await import('../../../../src/advance/classic/memory/everos-api.js');
+    vi.mocked(everosMemorySearch).mockResolvedValue({
+      items: [
+        {
+          id: 'c1',
+          type: 'episode',
+          content: '[CASE:case:proj-1:mr-1:src_a_ts:10:rule-any]\n状态: open',
+          score: 0.9,
+        },
+      ],
+    });
+
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999' });
+    const { client, transport } = await connect(server);
+
+    const ctx = makeCtx();
+    const result = await client.callTool({
+      name: 'recall_finding_case',
+      arguments: {
+        context: ctx,
+        key: 'case:proj-1:mr-1:src_a_ts:10:rule-any',
+      },
+    });
+
+    expect(everosMemorySearch).toHaveBeenCalledWith(
+      'http://127.0.0.1:9999',
+      expect.objectContaining({
+        appId: ctx.appId,
+        projectId: ctx.projectId,
+        owner: { kind: 'agent', agentId: 'reviewer-case' },
+        query: 'case:proj-1:mr-1:src_a_ts:10:rule-any',
+      })
+    );
+    expect(result).toEqual({ content: [{ type: 'text', text: expect.stringContaining('状态: open') }] });
+
+    await transport.close();
+    await server.stop();
   });
 });

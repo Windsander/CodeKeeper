@@ -41,6 +41,33 @@ export interface MemoryReviewComment {
 }
 
 /**
+ * Reviewer 发现的单条 finding 在 EverOS 中的 case 记录。
+ * 用于跨轮次/跨 RoleAgent 去重与检索问题详情。
+ */
+export interface MemoryFindingCase {
+  /** 全局唯一 case key，例如 case:<projectId>:mr-<iid>:<file>:<line>:<ruleId> */
+  key: string;
+  /** 所属 MR 内部编号 */
+  mrIid: number;
+  /** 文件路径 */
+  file: string;
+  /** 行号 */
+  line: number;
+  /** 严重级别 */
+  severity: string;
+  /** 规则 ID（可选） */
+  ruleId?: string;
+  /** 问题描述 */
+  message: string;
+  /** 修改建议（可选） */
+  suggestion?: string;
+  /** 当前状态：open / resolved / reopen */
+  status: 'open' | 'resolved' | 'reopen';
+  /** 关联的 discussion/thread ID（可选） */
+  discussionId?: string;
+}
+
+/**
  * 将任意 ID 清洗为 EverOS 路径安全字符集
  * 允许：字母、数字、_.@+-；替换其他字符为下划线，并排除 ".."
  */
@@ -134,6 +161,12 @@ export interface IMemoryClient {
   }): Promise<void>;
 
   recordProjectKnowledge(items: ProjectKnowledgeItem[]): Promise<void>;
+
+  /** 批量记录 finding case，用于跨轮次去重与跨 RoleAgent 检索 */
+  recordFindingCases(cases: MemoryFindingCase[]): Promise<void>;
+
+  /** 按 case key 召回历史 finding case */
+  recallFindingCase(key: string): Promise<string[]>;
 
   recallForReview(query: string): Promise<string[]>;
   recallForMaintenance(query: string): Promise<string[]>;

@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { logger } from '../../../core/logger.js';
-import type { IMemoryClient, MemoryContext, MemoryFinding, MemoryReviewComment, ProjectKnowledgeItem } from './types.js';
+import type { IMemoryClient, MemoryContext, MemoryFinding, MemoryFindingCase, MemoryReviewComment, ProjectKnowledgeItem } from './types.js';
 import { sanitizeEverOSId } from './types.js';
 
 export interface MemoryClientOptions {
@@ -53,6 +53,17 @@ export class MemoryClient implements IMemoryClient {
     mrAuthor?: string;
   }): Promise<void> {
     await this.callTool('record_review', { ...input, context: this.context });
+  }
+
+  async recordFindingCases(cases: MemoryFindingCase[]): Promise<void> {
+    if (cases.length === 0) return;
+    await this.callTool('record_finding_cases', { context: this.context, cases });
+  }
+
+  async recallFindingCase(key: string): Promise<string[]> {
+    return this.parseRecallResult(
+      await this.callTool('recall_finding_case', { context: this.context, key })
+    );
   }
 
   async recordFixAttempt(input: {
