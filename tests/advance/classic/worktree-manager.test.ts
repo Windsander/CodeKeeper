@@ -2,27 +2,37 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { WorktreeManager } from '../../../src/advance/classic/worktree/worktree-manager';
+import { WorktreeManager, WorktreeError } from '../../../src/advance/classic/worktree/worktree-manager';
 
 const mockClone = vi.fn();
 const mockFetch = vi.fn();
 const mockCheckoutBranch = vi.fn();
+const mockCheckout = vi.fn();
 const mockAdd = vi.fn();
 const mockCommit = vi.fn();
 const mockPush = vi.fn();
 const mockStatus = vi.fn();
 const mockDeleteLocalBranch = vi.fn();
+const mockReset = vi.fn();
+const mockClean = vi.fn();
+const mockGetConfig = vi.fn();
+const mockAddConfig = vi.fn();
 
 vi.mock('simple-git', () => ({
   default: vi.fn(() => ({
     clone: mockClone,
     fetch: mockFetch,
     checkoutBranch: mockCheckoutBranch,
+    checkout: mockCheckout,
     add: mockAdd,
     commit: mockCommit,
     push: mockPush,
     status: mockStatus,
     deleteLocalBranch: mockDeleteLocalBranch,
+    reset: mockReset,
+    clean: mockClean,
+    getConfig: mockGetConfig,
+    addConfig: mockAddConfig,
   })),
 }));
 
@@ -36,6 +46,7 @@ describe('WorktreeManager', () => {
     rootPath = join(tmp, 'project');
     remoteUrl = 'https://git.example.com/group/project.git';
     vi.clearAllMocks();
+    mockGetConfig.mockResolvedValue({ value: '' });
   });
 
   afterEach(() => {
@@ -187,21 +198,63 @@ describe('WorktreeManager', () => {
     expect(runScript).toHaveBeenCalledWith('typecheck', worktreePath);
   });
 
-  it('validate 失败时应返回对应 false', async () => {
-    const worktreePath = join(tmp, '.codekeeper-worktree', 'p1');
-    const runScript = vi.fn(async (script: string) => {
-      return { success: script !== 'lint' };
-    });
-
+  it('checkoutBranch 应先重置并清理本地变更', async () => {
     const manager = new WorktreeManager({
       projectId: 'p1',
       rootPath,
       remoteUrl,
-      runScript,
     });
-    const result = await manager.validate();
+    await manager.checkoutBranch('feature/foo');
 
-    expect(result.lint).toBe(false);
-    expect(result.typecheck).toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith('origin', 'feature/foo');
+    expect(mockReset).toHaveBeenCalledWith(['--hard']);
+    expect(mockClean).toHaveBeenCalledWith(['-fd']);
+    expect(mockCheckout).toHaveBeenCalledWith(['-B', 'feature/foo', 'origin/feature/foo']);
+  });
+
+  it('ensureWorktree 首次 clone 后应配置 git 用户', async () => {
+    const manager = new WorktreeManager({
+      projectId: 'p1',
+      rootPath,
+      remoteUrl,
+      gitUserName: 'Agent',
+      gitUserEmail: 'agent@example.com',
+    });
+    await manager.ensureWorktree();
+
+    expect(mockClone).toHaveBeenCalledOnce();
+    expect(mockAddConfig).toHaveBeenCalledWith('user.name', 'Agent', false, 'local');
+    expect(mockAddConfig).toHaveBeenCalledWith('user.email', 'agent@example.com', false, 'local');
+  });
+
+  it('prepareEnvironment 应在 node_modules 缺失时安装依赖', async () => {
+    mkdirSync(join(tmp, '.codekeeper-worktree', 'p1'), { recursive: true });
+    writeFileSync(join(tmp, '.codekeeper-worktree', 'p1', 'package.json'), '{}');
+    const install = vi.fn().mockResolvedValue({ success: true });
+    const manager = new WorktreeManager({
+      projectId: 'p1',
+      rootPath,
+      remoteUrl,
+      install,
+    });
+
+    await manager.prepareEnvironment();
+
+    expect(install).toHaveBeenCalledOnce();
+    expect(install).toHaveBeenCalledWith(manager.getWorktreePath());
+  });
+
+  it('prepareEnvironment 安装失败时应抛出 WorktreeError', async () => {
+    mkdirSync(join(tmp, '.codekeeper-worktree', 'p1'), { recursive: true });
+    writeFileSync(join(tmp, '.codekeeper-worktree', 'p1', 'package.json'), '{}');
+    const install = vi.fn().mockResolvedValue({ success: false, reason: 'network error' });
+    const manager = new WorktreeManager({
+      projectId: 'p1',
+      rootPath,
+      remoteUrl,
+      install,
+    });
+
+    await expect(manager.prepareEnvironment()).rejects.toThrow(WorktreeError);
   });
 });

@@ -34,6 +34,9 @@ export class MrFixAgent {
       console.log(`[MrFixAgent] 阶段=checkout 切换到 source branch: ${mr.sourceBranch}`);
       await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
 
+      console.log(`[MrFixAgent] 阶段=prepare 准备运行环境`);
+      await this.options.worktreeManager.prepareEnvironment();
+
       console.log(`[MrFixAgent] 阶段=read 读取文件: ${finding.file}`);
       const originalContent = this.options.worktreeManager.readFile(finding.file);
 

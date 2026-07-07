@@ -13,8 +13,11 @@ export async function readDiscussionFileContent(
   sourceBranch: string
 ): Promise<string | null> {
   try {
+    console.log(`[readDiscussionFileContent] 阶段=ensure 准备 worktree`);
     await worktreeManager.ensureWorktree();
+    console.log(`[readDiscussionFileContent] 阶段=checkout 切换到 ${sourceBranch}`);
     await worktreeManager.checkoutBranch(sourceBranch);
+    console.log(`[readDiscussionFileContent] 阶段=read 读取 ${filePath}`);
     return worktreeManager.readFile(filePath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
