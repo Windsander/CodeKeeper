@@ -7,6 +7,21 @@ import { logger } from '../../../core/logger.js';
 
 const execFileAsync = promisify(execFile);
 
+export class WorktreeError extends Error {
+  constructor(
+    public readonly stage: string,
+    cause?: unknown
+  ) {
+    const message = cause instanceof Error ? cause.message : String(cause ?? '');
+    super(`Worktree ${stage} 失败: ${message}`);
+  }
+}
+
+export interface RunScriptResult {
+  success: boolean;
+  reason?: string;
+}
+
 export interface WorktreeManagerOptions {
   /** 项目唯一标识 */
   projectId: string;
@@ -17,10 +32,10 @@ export interface WorktreeManagerOptions {
   /** 用于测试注入的 SimpleGit 实例 */
   git?: SimpleGit;
   /** 用于测试注入的脚本运行器 */
-  runScript?: (script: string, cwd: string) => Promise<{ success: boolean }>;
+  runScript?: (script: string, cwd: string) => Promise<RunScriptResult>;
 }
 
-async function defaultRunScript(script: string, cwd: string): Promise<{ success: boolean }> {
+async function defaultRunScript(script: string, cwd: string): Promise<RunScriptResult> {
   try {
     // Windows 上 npm 是 .cmd 脚本，execFile 直接执行需要 shell 支持
     await execFileAsync('npm', ['run', script], {
@@ -30,7 +45,8 @@ async function defaultRunScript(script: string, cwd: string): Promise<{ success:
     return { success: true };
   } catch (err) {
     logger.warn({ err, script }, `运行 ${script} 失败`);
-    return { success: false };
+    const reason = err instanceof Error ? err.message : String(err);
+    return { success: false, reason };
   }
 }
 
@@ -79,10 +95,14 @@ export class WorktreeManager {
         { projectId: this.options.projectId, worktreePath: this.worktreePath },
         '创建 worktree'
       );
-      await simpleGit().clone(this.options.remoteUrl, this.worktreePath, [
-        '--origin',
-        'origin',
-      ]);
+      try {
+        await simpleGit().clone(this.options.remoteUrl, this.worktreePath, [
+          '--origin',
+          'origin',
+        ]);
+      } catch (err) {
+        throw new WorktreeError('clone', err);
+      }
       return;
     }
 
@@ -93,7 +113,11 @@ export class WorktreeManager {
     } catch (err) {
       logger.warn({ err, projectId: this.options.projectId }, '更新 worktree remote URL 失败');
     }
-    await this.getGit().fetch('origin');
+    try {
+      await this.getGit().fetch('origin');
+    } catch (err) {
+      throw new WorktreeError('fetch', err);
+    }
   }
 
   /**
@@ -127,8 +151,12 @@ export class WorktreeManager {
    * 先从 origin 拉取最新状态，再 checkout。
    */
   async checkoutBranch(branchName: string): Promise<void> {
-    await this.getGit().fetch('origin', branchName);
-    await this.getGit().checkout(['-B', branchName, `origin/${branchName}`]);
+    try {
+      await this.getGit().fetch('origin', branchName);
+      await this.getGit().checkout(['-B', branchName, `origin/${branchName}`]);
+    } catch (err) {
+      throw new WorktreeError('checkout', err);
+    }
   }
 
   /**
@@ -147,11 +175,19 @@ export class WorktreeManager {
       logger.info({ branchName }, 'worktree 无变更，跳过提交');
       return;
     }
-    await this.getGit().commit(message);
-    if (options?.setUpstream ?? true) {
-      await this.getGit().push('origin', branchName, ['--set-upstream']);
-    } else {
-      await this.getGit().push('origin', branchName);
+    try {
+      await this.getGit().commit(message);
+    } catch (err) {
+      throw new WorktreeError('commit', err);
+    }
+    try {
+      if (options?.setUpstream ?? true) {
+        await this.getGit().push('origin', branchName, ['--set-upstream']);
+      } else {
+        await this.getGit().push('origin', branchName);
+      }
+    } catch (err) {
+      throw new WorktreeError('push', err);
     }
   }
 
@@ -169,13 +205,19 @@ export class WorktreeManager {
    *
    * 返回两项校验是否分别通过。
    */
-  async validate(): Promise<{ lint: boolean; typecheck: boolean }> {
+  async validate(): Promise<{ lint: boolean; typecheck: boolean; lintReason?: string; typecheckReason?: string }> {
     const runner = this.options.runScript ?? defaultRunScript;
 
     const [lint, typecheck] = await Promise.all([
       runner('lint', this.worktreePath),
       runner('typecheck', this.worktreePath),
     ]);
-    return { lint: lint.success, typecheck: typecheck.success };
+
+    return {
+      lint: lint.success,
+      typecheck: typecheck.success,
+      lintReason: lint.reason,
+      typecheckReason: typecheck.reason,
+    };
   }
 }
