@@ -127,6 +127,7 @@ function AppContent() {
       return () => clearTimeout(id);
     }
     prevReadyRef.current = isReady;
+    return undefined;
   }, [isReady]);
 
   return (
