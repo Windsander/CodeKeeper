@@ -1,6 +1,7 @@
 import type { ReviewFinding } from '../provider/types.js';
 import { LlmClient } from '../../llm/client.js';
 import type { IMemoryClient } from '../memory/types.js';
+import { buildFindingCaseKey } from '../memory/finding-case-key.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
 import {
   summarizeThreadNotes,
@@ -336,6 +337,63 @@ Reviewer 评论常见格式示例：
       message: partial.message ?? '未描述的问题',
       suggestion: partial.suggestion ?? '请查看 discussion 详情',
       autoFixable: partial.autoFixable ?? false,
+    };
+  }
+
+  /**
+   * 用 EverOS 中的 reviewer case 丰富 finding 的 message/suggestion/ruleId
+   */
+  async enrichFindingsWithCases(findings: ReviewFinding[], mrIid: number): Promise<ReviewFinding[]> {
+    if (!this.options.memoryClient) return findings;
+    const projectId = this.options.memoryClient.context.projectId;
+
+    const enriched = await Promise.all(
+      findings.map(async (finding) => {
+        const key = buildFindingCaseKey({
+          projectId,
+          mrIid,
+          file: finding.file,
+          line: finding.line,
+          ruleId: finding.ruleId,
+        });
+        try {
+          const items = await this.options.memoryClient!.recallFindingCase(key);
+          const c = this.parseCaseContent(items, key);
+          if (!c) return finding;
+          return {
+            ...finding,
+            message: c.message || finding.message,
+            suggestion: c.suggestion || finding.suggestion,
+            ruleId: c.ruleId || finding.ruleId,
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`[MaintainerBrain] 召回 case ${key} 失败: ${message}`);
+          return finding;
+        }
+      })
+    );
+
+    return enriched;
+  }
+
+  private parseCaseContent(
+    items: string[],
+    key: string
+  ): { message?: string; suggestion?: string; ruleId?: string; status?: string } | null {
+    const text = items.find((item) => item.includes(`[CASE:${key}]`));
+    if (!text) return null;
+
+    const ruleMatch = text.match(/规则:\s*(.+)/);
+    const messageMatch = text.match(/问题:\s*(.+)/);
+    const suggestionMatch = text.match(/建议:\s*(.+)/);
+    const statusMatch = text.match(/状态:\s*(.+)/);
+
+    return {
+      ruleId: ruleMatch?.[1].trim(),
+      message: messageMatch?.[1].trim(),
+      suggestion: suggestionMatch?.[1].trim(),
+      status: statusMatch?.[1].trim(),
     };
   }
 

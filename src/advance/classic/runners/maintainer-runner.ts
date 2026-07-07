@@ -289,6 +289,10 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
     }
 
+    if (findings.length > 0) {
+      findings = await brain.enrichFindingsWithCases(findings, mr.iid);
+    }
+
     console.log(
       `[MaintainerRunner] 从 discussion ${discussion.id} 解析到 ${findings.length} 个 finding`
     );

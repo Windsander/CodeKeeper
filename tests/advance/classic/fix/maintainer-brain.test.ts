@@ -256,3 +256,74 @@ describe('MaintainerBrain.parseFindings Markdown fallback', () => {
     expect(findings).toHaveLength(0);
   });
 });
+
+describe('MaintainerBrain.enrichFindingsWithCases', () => {
+  function makeMemoryClient(recallResult: string[] = []) {
+    return {
+      context: { projectId: 'proj-1' },
+      recallFindingCase: vi.fn().mockResolvedValue(recallResult),
+    } as unknown as NonNullable<
+      import('../../../../src/advance/classic/fix/maintainer-brain.js').MaintainerBrainOptions['memoryClient']
+    >;
+  }
+
+  it('命中 case 时合并字段', async () => {
+    const memoryClient = makeMemoryClient([
+      '[CASE:case:proj-1:mr-1:src_a.ts:10:no-any]\n规则: no-any\n问题: 类型不安全\n建议: 使用具体类型\n状态: open',
+    ]);
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient('{"action":"fix"}'),
+      memoryClient,
+    });
+
+    const findings = [
+      {
+        severity: 'MEDIUM' as const,
+        file: 'src/a.ts',
+        line: 10,
+        ruleId: 'no-any',
+        message: '原始描述',
+        suggestion: '原始建议',
+      },
+    ];
+    const enriched = await brain.enrichFindingsWithCases(findings, 1);
+    expect(enriched[0].message).toBe('类型不安全');
+    expect(enriched[0].suggestion).toBe('使用具体类型');
+    expect(enriched[0].ruleId).toBe('no-any');
+  });
+
+  it('未命中 case 时保持原样', async () => {
+    const memoryClient = makeMemoryClient([]);
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient('{"action":"fix"}'),
+      memoryClient,
+    });
+
+    const findings = [
+      {
+        severity: 'MEDIUM' as const,
+        file: 'src/a.ts',
+        line: 10,
+        message: '原始描述',
+        suggestion: '原始建议',
+      },
+    ];
+    const enriched = await brain.enrichFindingsWithCases(findings, 1);
+    expect(enriched[0].message).toBe('原始描述');
+  });
+
+  it('memoryClient 未配置时不抛错', async () => {
+    const brain = new MaintainerBrain({ llmClient: createMockLlmClient('{"action":"fix"}') });
+    const findings = [
+      {
+        severity: 'MEDIUM' as const,
+        file: 'src/a.ts',
+        line: 10,
+        message: '原始描述',
+        suggestion: '原始建议',
+      },
+    ];
+    const enriched = await brain.enrichFindingsWithCases(findings, 1);
+    expect(enriched).toEqual(findings);
+  });
+});
