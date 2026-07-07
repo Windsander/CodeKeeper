@@ -9,6 +9,7 @@ function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): Wo
   return {
     ensureWorktree: vi.fn().mockResolvedValue(undefined),
     checkoutBranch: vi.fn().mockResolvedValue(undefined),
+    prepareEnvironment: vi.fn().mockResolvedValue(undefined),
     readFile: vi.fn().mockReturnValue('original'),
     writeFile: vi.fn().mockReturnValue(undefined),
     commitAndPush: vi.fn().mockResolvedValue(undefined),
@@ -60,6 +61,7 @@ describe('MrFixAgent', () => {
 
     expect(result.success).toBe(true);
     expect(worktree.checkoutBranch).toHaveBeenCalledWith('feature/test');
+    expect(worktree.prepareEnvironment).toHaveBeenCalled();
     expect(worktree.writeFile).toHaveBeenCalledWith('src/index.ts', 'fixed content');
     expect(worktree.commitAndPush).toHaveBeenCalledWith(
       'feature/test',

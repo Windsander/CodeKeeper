@@ -255,6 +255,49 @@ describe('MaintainerBrain.parseFindings Markdown fallback', () => {
     const findings = await brain.parseFindings({ body: '这是一个无关评论' });
     expect(findings).toHaveLength(0);
   });
+
+  it('普通文本段落可解析出多个 finding', async () => {
+    const llmClient = createMockLlmClient(
+      JSON.stringify([
+        { severity: 'HIGH', file: 'src/a.ts', line: 10, message: '类型不安全', suggestion: '使用具体类型', autoFixable: true },
+        { severity: 'MEDIUM', file: 'src/b.ts', line: 25, message: '变量未使用', suggestion: '删除变量', autoFixable: true },
+      ])
+    );
+    const brain = new MaintainerBrain({ llmClient });
+    const findings = await brain.parseFindings({
+      body: 'src/a.ts 第 10 行的 any 建议改成具体类型；另外 src/b.ts 第 25 行的变量未使用，建议删除。',
+    });
+    expect(findings).toHaveLength(2);
+    expect(findings[0]).toMatchObject({ file: 'src/a.ts', line: 10, message: '类型不安全' });
+    expect(findings[1]).toMatchObject({ file: 'src/b.ts', line: 25, message: '变量未使用' });
+  });
+
+  it('LLM 返回 { findings: [...] } 对象也能解析', async () => {
+    const llmClient = createMockLlmClient(
+      JSON.stringify({
+        findings: [{ severity: 'LOW', file: 'src/c.ts', line: 5, message: '小问题', suggestion: '改一下' }],
+      })
+    );
+    const brain = new MaintainerBrain({ llmClient });
+    const findings = await brain.parseFindings({ body: '这里有个小问题' });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ file: 'src/c.ts', line: 5 });
+  });
+
+  it('无反引号的 Markdown 列表也能直接解析多条 finding', async () => {
+    const brain = new MaintainerBrain({ llmClient: makeNoCallLlmClient() });
+    const body = `## 发现项
+
+- src/a.ts:10 类型不安全
+  **修改建议**：使用具体类型
+- src/b.ts:25 变量未使用
+  **修改建议**：删除变量
+`;
+    const findings = await brain.parseFindings({ body, isSummary: true });
+    expect(findings).toHaveLength(2);
+    expect(findings[0]).toMatchObject({ file: 'src/a.ts', line: 10, message: '类型不安全' });
+    expect(findings[1]).toMatchObject({ file: 'src/b.ts', line: 25, message: '变量未使用' });
+  });
 });
 
 describe('MaintainerBrain.enrichFindingsWithCases', () => {

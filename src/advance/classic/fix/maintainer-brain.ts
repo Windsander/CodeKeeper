@@ -202,11 +202,15 @@ ${input.body}
 
 ${positionHint}
 
-Reviewer 评论常见格式示例：
-- \`src/a.ts:10\` · 规则 \`no-any\` 类型不安全
-  **修改建议**：使用具体类型
-- \`src/b.ts:25\` · 规则 \`unused\` 变量未使用
-  **修改建议**：删除
+评论可能是以下格式之一：
+1. Markdown 列表：
+   - \`src/a.ts:10\` · 规则 \`no-any\` 类型不安全
+     **修改建议**：使用具体类型
+   - \`src/b.ts:25\` · 规则 \`unused\` 变量未使用
+     **修改建议**：删除变量
+2. 普通文本段落：
+   "src/a.ts 第 10 行的 any 建议改成具体类型；另外 src/b.ts 第 25 行的变量未使用，建议删除。"
+3. 对文件的描述性说明（可能包含多个具体问题）。
 
 输出格式：
 [
@@ -222,6 +226,7 @@ Reviewer 评论常见格式示例：
 ]
 
 注意：
+- 一条评论中可能包含多个问题，请全部提取。
 - 如果评论里没有需要修复的代码问题，返回空数组 []。
 - 如果评论是机器人签名、系统提示或 Maintainer 自己的回复，返回空数组 []。
 - 当评论中没有明确文件路径时，使用上面提供的文件和行号作为兜底。
@@ -235,8 +240,14 @@ Reviewer 评论常见格式示例：
     const cleaned = this.extractJsonFromMarkdown(raw);
     let parsed: unknown[] = [];
     try {
-      parsed = JSON.parse(cleaned) as unknown[];
-      if (!Array.isArray(parsed)) return [];
+      const maybe = JSON.parse(cleaned) as unknown;
+      if (Array.isArray(maybe)) {
+        parsed = maybe;
+      } else if (maybe && typeof maybe === 'object' && 'findings' in maybe && Array.isArray((maybe as Record<string, unknown>).findings)) {
+        parsed = (maybe as Record<string, unknown>).findings as unknown[];
+      } else {
+        return [];
+      }
     } catch {
       return [];
     }
@@ -272,30 +283,21 @@ Reviewer 评论常见格式示例：
     const findings: ReviewFinding[] = [];
     let current: Partial<ReviewFinding> | null = null;
 
+    // 匹配常见文件路径 + 行号，例如 src/a.ts:10、./src/a.ts:10
+    const fileLinePattern = /\b([\w\-./]+\.[a-zA-Z0-9]+):(\d+)\b/;
+    // 匹配常见列表标记：- * + 或 1. 2.
+    const listMarkerPattern = /^([-*+]\s+|\d+\.\s+)/;
+
+    const finalizeCurrent = () => {
+      if (current) {
+        findings.push(this.finalizeFinding(current, position));
+        current = null;
+      }
+    };
+
     for (const rawLine of lines) {
       const line = rawLine.trim();
       if (!line) continue;
-
-      // 匹配 `- `file:line`` 或 `* `file:line`` 开头
-      const bulletMatch = line.match(/^[-*]\s+`([^`]+?):(\d+)`/);
-      if (bulletMatch) {
-        if (current) {
-          findings.push(this.finalizeFinding(current, position));
-        }
-        current = {
-          file: bulletMatch[1],
-          line: parseInt(bulletMatch[2], 10),
-          severity: 'MEDIUM',
-        };
-        const ruleMatch = line.match(/规则\s+`([^`]+)`/);
-        if (ruleMatch) current.ruleId = ruleMatch[1];
-        const message = line
-          .replace(/^[-*]\s+`[^`]+?`/, '')
-          .replace(/·\s*规则\s+`[^`]+`/, '')
-          .trim();
-        if (message) current.message = message;
-        continue;
-      }
 
       if (current && line.startsWith('**问题描述**：')) {
         current.message = line.replace('**问题描述**：', '').trim();
@@ -309,13 +311,43 @@ Reviewer 评论常见格式示例：
 
       if (current && line.startsWith('**建议**：')) {
         current.suggestion = line.replace('**建议**：', '').trim();
+        continue;
+      }
+
+      const fileLineMatch = line.match(fileLinePattern);
+      const hasListMarker = listMarkerPattern.test(line);
+
+      // 把包含文件定位的新行视为一个新 finding 的开始
+      if (fileLineMatch || hasListMarker) {
+        finalizeCurrent();
+        current = { severity: 'MEDIUM' };
+
+        if (fileLineMatch) {
+          current.file = fileLineMatch[1];
+          current.line = parseInt(fileLineMatch[2], 10);
+        }
+
+        const ruleMatch = line.match(/规则\s+`([^`]+)`/);
+        if (ruleMatch) current.ruleId = ruleMatch[1];
+
+        let message = line
+          .replace(listMarkerPattern, '')
+          .replace(fileLinePattern, '')
+          .replace(/·\s*规则\s+`[^`]+`/, '')
+          .replace(/`/g, '')
+          .trim();
+        // 去掉常见的 severity emoji/前缀
+        message = message.replace(/^[🔴🟠🟡🟢⚪]+\s*/, '').trim();
+        if (message) current.message = message;
+        continue;
+      }
+
+      if (current) {
+        current.message = current.message ? `${current.message}\n${line}` : line;
       }
     }
 
-    if (current) {
-      findings.push(this.finalizeFinding(current, position));
-    }
-
+    finalizeCurrent();
     return findings.filter((f) => f.file && f.line > 0);
   }
 
