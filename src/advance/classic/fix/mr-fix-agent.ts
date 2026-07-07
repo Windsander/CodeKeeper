@@ -29,15 +29,15 @@ export class MrFixAgent {
     console.log(`[MrFixAgent] 开始执行修复 ${finding.file}:${finding.line} (${finding.severity})`);
 
     try {
-      console.log(`[MrFixAgent] 准备/更新 worktree`);
+      console.log(`[MrFixAgent] 阶段=worktree 准备/更新 worktree`);
       await this.options.worktreeManager.ensureWorktree();
-      console.log(`[MrFixAgent] 切换到 source branch: ${mr.sourceBranch}`);
+      console.log(`[MrFixAgent] 阶段=checkout 切换到 source branch: ${mr.sourceBranch}`);
       await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
 
-      console.log(`[MrFixAgent] 读取文件: ${finding.file}`);
+      console.log(`[MrFixAgent] 阶段=read 读取文件: ${finding.file}`);
       const originalContent = this.options.worktreeManager.readFile(finding.file);
 
-      console.log(`[MrFixAgent] 请求 LLM 生成修复: ${finding.file}`);
+      console.log(`[MrFixAgent] 阶段=generate 请求 LLM 生成修复: ${finding.file}`);
       const fixedContent = await this.generateFix(finding.file, originalContent, finding);
       if (!fixedContent) {
         return {
@@ -46,21 +46,28 @@ export class MrFixAgent {
         };
       }
 
-      console.log(`[MrFixAgent] 写入修复后的文件: ${finding.file}`);
+      console.log(`[MrFixAgent] 阶段=write 写入修复后的文件: ${finding.file}`);
       this.options.worktreeManager.writeFile(finding.file, fixedContent);
 
-      console.log(`[MrFixAgent] 运行 lint / typecheck 校验`);
+      console.log(`[MrFixAgent] 阶段=validate 运行 lint / typecheck 校验`);
       const validation = await this.options.worktreeManager.validate();
       console.log(`[MrFixAgent] 校验结果: lint=${validation.lint}, typecheck=${validation.typecheck}`);
       if (!validation.lint || !validation.typecheck) {
+        const reasons: string[] = [];
+        if (!validation.lint) {
+          reasons.push(`lint=${validation.lint}${validation.lintReason ? ` (${validation.lintReason})` : ''}`);
+        }
+        if (!validation.typecheck) {
+          reasons.push(`typecheck=${validation.typecheck}${validation.typecheckReason ? ` (${validation.typecheckReason})` : ''}`);
+        }
         return {
           success: false,
-          reason: `校验未通过：lint=${validation.lint}, typecheck=${validation.typecheck}`,
+          reason: `校验未通过：${reasons.join(', ')}`,
         };
       }
 
       const message = `[CodeKeeper] fix: ${finding.message}\n\n规则: ${finding.ruleId ?? 'N/A'}\n文件: ${finding.file}:${finding.line}`;
-      console.log(`[MrFixAgent] 提交并推送修复到分支: ${mr.sourceBranch}`);
+      console.log(`[MrFixAgent] 阶段=commit-push 提交并推送修复到分支: ${mr.sourceBranch}`);
       await this.options.worktreeManager.commitAndPush(mr.sourceBranch, message, {
         setUpstream: false,
       });

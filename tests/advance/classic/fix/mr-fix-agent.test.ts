@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MrFixAgent } from '../../../../src/advance/classic/fix/mr-fix-agent.js';
+import { WorktreeError } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type { MergeRequest, ReviewFinding } from '../../../../src/advance/classic/provider/types.js';
@@ -110,5 +111,41 @@ describe('MrFixAgent', () => {
 
     expect(result.success).toBe(false);
     expect(result.reason).toContain('worktree 异常');
+  });
+
+  it('校验失败返回具体原因', async () => {
+    const worktree = createMockWorktreeManager({
+      validate: vi.fn().mockResolvedValue({
+        lint: false,
+        typecheck: true,
+        lintReason: 'eslint error',
+      }),
+    });
+    const agent = new MrFixAgent({
+      worktreeManager: worktree,
+      llmClient: createMockLlmClient('fixed content'),
+    });
+
+    const result = await agent.executeFix(mockFinding, mockMR);
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('校验未通过');
+    expect(result.reason).toContain('eslint error');
+  });
+
+  it('worktree clone 失败返回阶段信息', async () => {
+    const worktree = createMockWorktreeManager({
+      ensureWorktree: vi.fn().mockRejectedValue(new WorktreeError('clone', new Error('auth failed'))),
+    });
+    const agent = new MrFixAgent({
+      worktreeManager: worktree,
+      llmClient: createMockLlmClient('fixed content'),
+    });
+
+    const result = await agent.executeFix(mockFinding, mockMR);
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('clone');
+    expect(result.reason).toContain('auth failed');
   });
 });
