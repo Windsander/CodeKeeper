@@ -11,7 +11,8 @@ import { ReviewerBrain } from '../review/reviewer-brain.js';
 import { ReviewerActor } from '../review/reviewer-actor.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { RecallPlanner } from '../memory/recall-planner.js';
-import { buildEverOSAgentId, sanitizeEverOSId } from '../memory/types.js';
+import { buildEverOSAgentId } from '../memory/types.js';
+import { buildFindingCaseKey } from '../memory/finding-case-key.js';
 import { loadState, saveState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
 import {
   formatAgentFooter,
@@ -21,16 +22,6 @@ import {
 import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
 import type { MergeRequest, MrDiff, ReviewFinding, Discussion, ReviewerComment } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
-
-/**
- * 构建 finding case 的全局唯一 key，用于 EverOS 去重与召回。
- */
-function buildFindingCaseKey(projectId: string, mrIid: number, finding: ReviewFinding): string {
-  const safeProject = sanitizeEverOSId(projectId);
-  const safeFile = sanitizeEverOSId(finding.file);
-  const safeRule = sanitizeEverOSId(finding.ruleId ?? 'generic');
-  return `case:${safeProject}:mr-${mrIid}:${safeFile}:${finding.line}:${safeRule}`;
-}
 
 /**
  * 构建 Reviewer 会话 ID（按 MR 粒度）
@@ -298,7 +289,13 @@ export class ReviewerRunner extends BaseRoleRunner {
         if (memoryClient && newFindingsToPost.length > 0) {
           try {
             const cases = newFindingsToPost.map((f) => {
-              const key = buildFindingCaseKey(project.id, mr.iid, f);
+              const key = buildFindingCaseKey({
+                projectId: project.id,
+                mrIid: mr.iid,
+                file: f.file,
+                line: f.line,
+                ruleId: f.ruleId,
+              });
               const posted = state.discussions[stateKey]?.find((d) => d.findingKey === getFindingKey(f));
               return {
                 key,
@@ -504,7 +501,13 @@ export class ReviewerRunner extends BaseRoleRunner {
 
     const checks = await Promise.all(
       findings.map(async (f) => {
-        const key = buildFindingCaseKey(projectId, mrIid, f);
+        const key = buildFindingCaseKey({
+          projectId,
+          mrIid,
+          file: f.file,
+          line: f.line,
+          ruleId: f.ruleId,
+        });
         try {
           const items = await memoryClient.recallFindingCase(key);
           const exists = items.some((item) => item.includes(`[CASE:${key}]`));
