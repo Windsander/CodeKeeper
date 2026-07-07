@@ -8,9 +8,9 @@ function makeFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
     severity: 'MEDIUM',
     file: 'src/index.ts',
-    line: 1,
-    message: '问题',
-    suggestion: '建议',
+    line: 5,
+    message: '函数逻辑需要调整',
+    suggestion: '重构该函数的实现',
     ...overrides,
   };
 }
@@ -201,6 +201,81 @@ describe('MaintainerBrain', () => {
     });
     const findings = await brain.parseFindings({ body: 'ok' });
     expect(findings).toHaveLength(0);
+  });
+});
+
+describe('MaintainerBrain 聚焦上下文与范围分类', () => {
+  function createMockLlmClient(response: string): LlmClient {
+    return new LlmClient({
+      apiKey: 'test',
+      mock: { response },
+    });
+  }
+
+  it('决策中包含范围分类 scope', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient('{"action":"fix","reason":"可以安全修复"}'),
+    });
+    const decision = await brain.decide({
+      finding: makeFinding(),
+      fileContent: 'const x = 1;',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
+    expect(decision.scope).toBeDefined();
+    expect(['trivial', 'local', 'cross-file', 'needs-clarification']).toContain(decision.scope);
+  });
+
+  it('缺少行号时判定为 needs-clarification 并询问', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient('{"action":"fix","reason":"可以安全修复"}'),
+    });
+    const decision = await brain.decide({
+      finding: makeFinding({ line: 0 }),
+      fileContent: 'const x = 1;',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
+    expect(decision.action).toBe('ask');
+    expect(decision.scope).toBe('needs-clarification');
+  });
+
+  it('prompt 中使用聚焦代码片段和 imports', async () => {
+    const complete = vi.fn().mockResolvedValue('{"action":"fix","reason":"可以安全修复"}');
+    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const brain = new MaintainerBrain({ llmClient });
+
+    const fileContent = `import { foo } from './foo';\n\nfunction target() {\n  const x = 1;\n  return x;\n}\n`;
+    await brain.decide({
+      finding: makeFinding({ line: 4 }),
+      fileContent,
+      mrIid: 1,
+      userId: 'reviewer',
+    });
+
+    const prompt = complete.mock.calls[0][0] as string;
+    expect(prompt).toContain('相关代码片段');
+    expect(prompt).toContain("import { foo } from './foo';");
+    expect(prompt).toContain('function target');
+    expect(prompt).not.toContain('文件内容（节选）');
+  });
+
+  it('类型变更问题被分类为 cross-file', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient('{"action":"fix","reason":"需要改多个调用点"}'),
+    });
+    const decision = await brain.decide({
+      finding: makeFinding({
+        line: 10,
+        message: 'MemoryLlmCallParams 接口定义缺少 error 字段',
+        suggestion: '在接口中添加可选 error 字段，多个调用点传入了 error',
+        ruleId: 'TYPE-SAFETY',
+      }),
+      fileContent: 'interface MemoryLlmCallParams {}',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
+    expect(decision.scope).toBe('cross-file');
   });
 });
 

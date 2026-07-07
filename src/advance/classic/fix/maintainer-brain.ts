@@ -1,6 +1,8 @@
 import type { ReviewFinding } from '../provider/types.js';
 import { LlmClient } from '../../llm/client.js';
 import type { IMemoryClient } from '../memory/types.js';
+import { IssueScopeClassifier, type IssueScope } from './issue-scope.js';
+import { buildFocusedContext, type FocusedContext } from './focused-context-builder.js';
 import { buildFindingCaseKey } from '../memory/finding-case-key.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
 import {
@@ -26,6 +28,8 @@ export interface MaintainerDecision {
   question?: string;
   /** 当 action 为 fix 时，可选的修复描述（用于交互式回复场景） */
   fixDescription?: string;
+  /** 问题范围分类，用于决定修复策略 */
+  scope?: IssueScope;
 }
 
 export interface MaintainerBrainOptions {
@@ -90,7 +94,27 @@ export class MaintainerBrain {
     }
 
     const recalledMemories = await this.recallMemories(userId, finding, originalComment);
-    const prompt = this.buildInitialPrompt(finding, fileContent, originalComment, recalledMemories);
+    const focusedContext = buildFocusedContext(fileContent, finding);
+    const classification = await new IssueScopeClassifier({
+      llmClient: this.options.llmClient,
+    }).classify(finding, focusedContext);
+
+    if (classification.scope === 'needs-clarification') {
+      return {
+        action: 'ask',
+        reason: classification.reason,
+        question: '请补充问题所在的文件路径、行号或更具体的修改建议。',
+        scope: classification.scope,
+      };
+    }
+
+    const prompt = this.buildInitialPrompt(
+      finding,
+      focusedContext,
+      originalComment,
+      recalledMemories,
+      classification.scope
+    );
     const raw = await this.options.llmClient.complete(prompt, this.systemPrompt());
     const decision = this.parseDecision(raw);
 
@@ -104,7 +128,10 @@ export class MaintainerBrain {
       });
     }
 
-    return decision;
+    return {
+      ...decision,
+      scope: classification.scope,
+    };
   }
 
   /**
@@ -337,7 +364,10 @@ ${positionHint}
           .replace(/`/g, '')
           .trim();
         // 去掉常见的 severity emoji/前缀
-        message = message.replace(/^[🔴🟠🟡🟢⚪]+\s*/, '').trim();
+        message = message.replace(
+          /^[\u{1F534}\u{1F7E0}\u{1F7E1}\u{1F7E2}\u{26AA}]+\s*/u,
+          ''
+        ).trim();
         if (message) current.message = message;
         continue;
       }
@@ -376,8 +406,9 @@ ${positionHint}
    * 用 EverOS 中的 reviewer case 丰富 finding 的 message/suggestion/ruleId
    */
   async enrichFindingsWithCases(findings: ReviewFinding[], mrIid: number): Promise<ReviewFinding[]> {
-    if (!this.options.memoryClient) return findings;
-    const projectId = this.options.memoryClient.context.projectId;
+    const memoryClient = this.options.memoryClient;
+    if (!memoryClient) return findings;
+    const projectId = memoryClient.context.projectId;
 
     const enriched = await Promise.all(
       findings.map(async (finding) => {
@@ -389,7 +420,7 @@ ${positionHint}
           ruleId: finding.ruleId,
         });
         try {
-          const items = await this.options.memoryClient!.recallFindingCase(key);
+          const items = await memoryClient.recallFindingCase(key);
           const c = this.parseCaseContent(items, key);
           if (!c) return finding;
           return {
@@ -463,17 +494,26 @@ ${positionHint}
 
   private buildInitialPrompt(
     finding: ReviewFinding,
-    fileContent: string,
+    focusedContext: FocusedContext,
     originalComment?: string,
-    recalledMemories?: string
+    recalledMemories?: string,
+    scope?: IssueScope
   ): string {
     return [
       '## 文件路径',
       finding.file,
       '',
-      '## 文件内容（节选）',
+      '## 修改范围',
+      scope ?? 'local',
+      '',
+      '## 相关导入',
       '```',
-      this.truncate(fileContent),
+      focusedContext.imports || '（无）',
+      '```',
+      '',
+      `## 相关代码片段（行 ${focusedContext.snippetStartLine}-${focusedContext.snippetEndLine}）`,
+      '```',
+      focusedContext.snippet,
       '```',
       '',
       '## Reviewer 评论',

@@ -40,7 +40,9 @@ export class MaintainerActor {
     switch (decision.action) {
       case 'fix': {
         const fixDescription = decision.fixDescription ?? '根据 Reviewer 意见修改代码';
-        const success = await this.executeFix(mr, discussion, finding, fixDescription);
+        const success = await this.executeFix(mr, discussion, finding, fixDescription, {
+          scope: decision.scope,
+        });
         if (!success) {
           const question = `我尝试自动修复 ${finding.file}:${finding.line}，但未成功。请 Reviewer 补充期望的修改方式或范围。`;
           await this.ask(mr, discussion, question, finding.file, state);
@@ -125,17 +127,18 @@ export class MaintainerActor {
     mr: MergeRequest,
     discussion: Discussion,
     finding: ReviewFinding,
-    fixDescription: string
+    fixDescription: string,
+    options?: { scope?: import('./maintainer-brain.js').MaintainerDecision['scope'] }
   ): Promise<boolean> {
     const syntheticFinding: ReviewFinding = {
       ...finding,
-      message: fixDescription,
-      suggestion: fixDescription,
+      message: fixDescription || finding.message,
+      suggestion: fixDescription || finding.suggestion,
       autoFixable: true,
     };
 
     console.log(`[MaintainerActor] 执行修复: ${finding.file}:${finding.line}`);
-    const fixResult = await this.options.fixAgent.executeFix(syntheticFinding, mr);
+    const fixResult = await this.options.fixAgent.executeFix(syntheticFinding, mr, options);
     console.log(`[MaintainerActor] 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`);
 
     const { maintainerName, provider } = this.options;

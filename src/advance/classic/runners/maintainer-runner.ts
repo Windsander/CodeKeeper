@@ -368,7 +368,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         continue;
       }
 
-      const fixResult = await fixAgent.executeFix(finding, mr);
+      const fixResult = await fixAgent.executeFix(finding, mr, { scope: decision.scope });
       console.log(
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`
       );
