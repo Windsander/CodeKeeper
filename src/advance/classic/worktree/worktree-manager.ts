@@ -1,4 +1,4 @@
-import simpleGit, { type SimpleGit } from 'simple-git';
+import simpleGit, { type SimpleGit, CleanOptions } from 'simple-git';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -233,7 +233,7 @@ export class WorktreeManager {
       await this.getGit().fetch('origin', branchName);
       // 丢弃之前未完成的修复变更，确保分支干净
       await this.getGit().reset(['--hard']);
-      await this.getGit().clean(['-fd']);
+      await this.getGit().clean([CleanOptions.FORCE, CleanOptions.RECURSIVE]);
       await this.getGit().checkout(['-B', branchName, `origin/${branchName}`]);
     } catch (err) {
       throw new WorktreeError('checkout', err);

@@ -34,6 +34,10 @@ vi.mock('simple-git', () => ({
     getConfig: mockGetConfig,
     addConfig: mockAddConfig,
   })),
+  CleanOptions: {
+    FORCE: 'f',
+    RECURSIVE: 'd',
+  },
 }));
 
 describe('WorktreeManager', () => {
@@ -208,7 +212,7 @@ describe('WorktreeManager', () => {
 
     expect(mockFetch).toHaveBeenCalledWith('origin', 'feature/foo');
     expect(mockReset).toHaveBeenCalledWith(['--hard']);
-    expect(mockClean).toHaveBeenCalledWith(['-fd']);
+    expect(mockClean).toHaveBeenCalledWith(['f', 'd']);
     expect(mockCheckout).toHaveBeenCalledWith(['-B', 'feature/foo', 'origin/feature/foo']);
   });
 
