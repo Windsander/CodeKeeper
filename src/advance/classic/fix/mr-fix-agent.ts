@@ -2,7 +2,7 @@ import type { WorktreeManager } from '../worktree/worktree-manager.js';
 import type { MergeRequest, ReviewFinding } from '../provider/types.js';
 import { LlmClient } from '../../llm/client.js';
 import { parsePatch, applyPatch } from './patch-applier.js';
-import { buildFocusedContext, type FocusedContext } from './focused-context-builder.js';
+import { buildFocusedContext } from './focused-context-builder.js';
 import { CrossFilePlanner } from './cross-file-planner.js';
 import type { IssueScope } from './issue-scope.js';
 
@@ -73,8 +73,7 @@ export class MrFixAgent {
     const originalContent = this.options.worktreeManager.readFile(finding.file);
 
     console.log(`[MrFixAgent] 阶段=generate 请求 LLM 生成修复 patch: ${finding.file}`);
-    const focused = buildFocusedContext(originalContent, finding);
-    const patchText = await this.generatePatch(finding, focused);
+    const patchText = await this.generatePatch(finding, originalContent);
     if (!patchText) {
       return {
         success: false,
@@ -193,7 +192,7 @@ export class MrFixAgent {
    */
   private async generatePatch(
     finding: ReviewFinding,
-    focused: FocusedContext
+    fileContent: string
   ): Promise<string | null> {
     const prompt = `请为以下代码问题生成标准 unified diff 格式的修复补丁。
 
@@ -203,13 +202,14 @@ export class MrFixAgent {
 严重程度: ${finding.severity}
 建议: ${finding.suggestion}
 
-相关代码片段（行 ${focused.snippetStartLine}-${focused.snippetEndLine}）：
+文件完整内容：
 \`\`\`
-${focused.snippet}
+${fileContent}
 \`\`\`
 
 请只输出统一 diff 补丁（包含 diff --git、---、+++、@@ 行），不要输出任何解释或完整文件内容。
-补丁应尽可能小，只修改与问题相关的行。`;
+补丁应尽可能小，只修改与问题相关的行。
+注意：hunk 中的行号必须对应上面给出的完整文件内容。`;
 
     const response = await this.options.llmClient.complete(prompt, undefined);
     return this.cleanPatchOutput(response);
