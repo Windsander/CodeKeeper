@@ -17,8 +17,19 @@ export async function readDiscussionFileContent(
     await worktreeManager.ensureWorktree();
     console.log(`[readDiscussionFileContent] 阶段=checkout 切换到 ${sourceBranch}`);
     await worktreeManager.checkoutBranch(sourceBranch);
-    console.log(`[readDiscussionFileContent] 阶段=read 读取 ${filePath}`);
-    return worktreeManager.readFile(filePath);
+
+    console.log(`[readDiscussionFileContent] 阶段=resolve 解析 ${filePath}`);
+    const resolvedPath = await worktreeManager.resolveFilePath(filePath);
+    if (!resolvedPath) {
+      console.warn(`[MaintainerRunner] 无法在 worktree 中定位 ${filePath}`);
+      return null;
+    }
+    if (resolvedPath !== filePath) {
+      console.log(`[readDiscussionFileContent] 解析结果: ${filePath} -> ${resolvedPath}`);
+    }
+
+    console.log(`[readDiscussionFileContent] 阶段=read 读取 ${resolvedPath}`);
+    return worktreeManager.readFile(resolvedPath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[MaintainerRunner] 从 worktree 读取 ${filePath} 失败: ${message}`);

@@ -42,6 +42,7 @@ export class MaintainerActor {
         const fixDescription = decision.fixDescription ?? '根据 Reviewer 意见修改代码';
         const success = await this.executeFix(mr, discussion, finding, fixDescription, {
           scope: decision.scope,
+          deleteFile: decision.deleteFile,
         });
         if (!success) {
           const question = `我尝试自动修复 ${finding.file}:${finding.line}，但未成功。请 Reviewer 补充期望的修改方式或范围。`;
@@ -128,7 +129,7 @@ export class MaintainerActor {
     discussion: Discussion,
     finding: ReviewFinding,
     fixDescription: string,
-    options?: { scope?: import('./maintainer-brain.js').MaintainerDecision['scope'] }
+    options?: { scope?: MaintainerDecision['scope']; deleteFile?: boolean }
   ): Promise<boolean> {
     const syntheticFinding: ReviewFinding = {
       ...finding,

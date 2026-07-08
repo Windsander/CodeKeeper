@@ -30,6 +30,8 @@ export interface MaintainerDecision {
   fixDescription?: string;
   /** 问题范围分类，用于决定修复策略 */
   scope?: IssueScope;
+  /** 当 action 为 fix 且 Reviewer 要求从 MR 中移除某个文件时标记为 true */
+  deleteFile?: boolean;
 }
 
 export interface MaintainerBrainOptions {
@@ -532,7 +534,8 @@ ${positionHint}
       '  "action": "fix" | "ask" | "ignore",',
       '  "reason": "简要说明理由",',
       '  "question": "如果 action=ask，填写向 Reviewer 提出的澄清问题",',
-      '  "fixDescription": "如果 action=fix，可选的修复描述"',
+      '  "fixDescription": "如果 action=fix，可选的修复描述",',
+      '  "deleteFile": "如果 action=fix 且需要从 MR 中移除某个文件，填 true"',
       '}',
     ].join('\n');
   }
@@ -564,7 +567,8 @@ ${positionHint}
       '  "action": "fix" | "ask" | "ignore",',
       '  "reason": "简要说明理由",',
       '  "question": "如果 action=ask，填写向 Reviewer 提出的澄清问题",',
-      '  "fixDescription": "如果 action=fix，可选的修复描述"',
+      '  "fixDescription": "如果 action=fix，可选的修复描述",',
+      '  "deleteFile": "如果 action=fix 且需要从 MR 中移除某个文件，填 true"',
       '}',
     ].join('\n');
   }
@@ -586,6 +590,7 @@ ${positionHint}
         reason?: string;
         question?: string;
         fixDescription?: string;
+        deleteFile?: boolean;
       };
 
       switch (parsed.action) {
@@ -594,6 +599,7 @@ ${positionHint}
             action: 'fix',
             reason: parsed.reason ?? '可以安全修复',
             fixDescription: parsed.fixDescription,
+            deleteFile: parsed.deleteFile === true,
           };
         case 'ask':
           return {

@@ -221,30 +221,45 @@ export class MaintainerRunner extends BaseRoleRunner {
     const existingThread = state.interactiveThreads?.[discussion.id];
     if (existingThread?.status === 'awaiting-reply') {
       const askedAt = existingThread.askedAt;
-      const newReviewerNotes = discussion.notes.filter((note) => {
-        if (isMaintainerAuthoredNote(note.body)) return false;
+      const maintainerQuestionNotes = discussion.notes.filter((note) => {
+        if (!isMaintainerAuthoredNote(note.body)) return false;
+        if (!/[?？]/.test(note.body)) return false;
         const noteTime = new Date(note.createdAt).getTime();
-        return !Number.isNaN(noteTime) && noteTime > askedAt;
+        return !Number.isNaN(noteTime) && noteTime >= askedAt - 1000;
       });
 
-      if (newReviewerNotes.length === 0) {
-        console.log(`[MaintainerRunner] discussion ${discussion.id} 等待 Reviewer 回复中`);
+      // 如果 discussion 里已经找不到对应的 Maintainer 提问 note，说明状态已脏，清除后继续处理
+      if (maintainerQuestionNotes.length === 0) {
+        console.warn(
+          `[MaintainerRunner] discussion ${discussion.id} 的交互状态已过期，清除后重新处理`
+        );
+        delete state.interactiveThreads[discussion.id];
+      } else {
+        const newReviewerNotes = discussion.notes.filter((note) => {
+          if (isMaintainerAuthoredNote(note.body)) return false;
+          const noteTime = new Date(note.createdAt).getTime();
+          return !Number.isNaN(noteTime) && noteTime > askedAt;
+        });
+
+        if (newReviewerNotes.length === 0) {
+          console.log(`[MaintainerRunner] discussion ${discussion.id} 等待 Reviewer 回复中`);
+          recordProcessed();
+          return;
+        }
+
+        await this.handleInteractiveReply(
+          mr,
+          discussion,
+          brain,
+          actor,
+          worktreeManager,
+          maintainerName,
+          state,
+          projectRootPath
+        );
         recordProcessed();
         return;
       }
-
-      await this.handleInteractiveReply(
-        mr,
-        discussion,
-        brain,
-        actor,
-        worktreeManager,
-        maintainerName,
-        state,
-        projectRootPath
-      );
-      recordProcessed();
-      return;
     }
 
     // 解析 finding
@@ -287,12 +302,9 @@ export class MaintainerRunner extends BaseRoleRunner {
         console.warn(
           `[MaintainerRunner] discussion ${discussion.id} 解析结果: ${JSON.stringify(findings)}`
         );
+        const question = `👋 ${maintainerName} 没能定位到需要修改的具体文件和行号，请补充一下文件路径或期望的修改方式，我会继续处理。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`;
         try {
-          await provider.addDiscussionNote(
-            mr.iid,
-            discussion.id,
-            `👋 ${maintainerName} 无法自动解析该 discussion，需要人工处理。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
-          );
+          await provider.addDiscussionNote(mr.iid, discussion.id, question);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           console.error(`[MaintainerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);

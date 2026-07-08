@@ -12,6 +12,7 @@ function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): Wo
     prepareEnvironment: vi.fn().mockResolvedValue(undefined),
     readFile: vi.fn().mockReturnValue('line1\nline2\nline3\n'),
     writeFile: vi.fn().mockReturnValue(undefined),
+    removeFile: vi.fn().mockResolvedValue(undefined),
     commitAndPush: vi.fn().mockResolvedValue(undefined),
     validate: vi.fn().mockResolvedValue({ lint: true, typecheck: true }),
     ...overrides,
@@ -236,5 +237,24 @@ describe('MrFixAgent', () => {
     expect(result.success).toBe(true);
     expect(worktree.writeFile).toHaveBeenCalledWith('src/types.ts', 'export interface Foo { error?: number }\n');
     expect(worktree.writeFile).toHaveBeenCalledWith('src/use.ts', '// use error\n');
+  });
+
+  it('deleteFile 为 true 时执行 git rm 并推送', async () => {
+    const worktree = createMockWorktreeManager();
+    const agent = new MrFixAgent({
+      worktreeManager: worktree,
+      llmClient: createMockLlmClient(''),
+    });
+
+    const result = await agent.executeFix(mockFinding, mockMR, { deleteFile: true });
+
+    expect(result.success).toBe(true);
+    expect(worktree.removeFile).toHaveBeenCalledWith('src/index.ts');
+    expect(worktree.readFile).not.toHaveBeenCalled();
+    expect(worktree.commitAndPush).toHaveBeenCalledWith(
+      'feature/test',
+      expect.stringContaining('[CodeKeeper] remove'),
+      { setUpstream: false }
+    );
   });
 });

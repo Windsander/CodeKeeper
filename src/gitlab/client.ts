@@ -349,6 +349,16 @@ export interface GitLabNote {
   created_at: string;
   resolved: boolean;
   system: boolean;
+  position?: {
+    base_sha: string;
+    head_sha: string;
+    start_sha: string;
+    position_type: string;
+    old_path?: string;
+    new_path: string;
+    new_line?: number;
+    old_line?: number;
+  };
 }
 
 export interface GitLabDiscussion {

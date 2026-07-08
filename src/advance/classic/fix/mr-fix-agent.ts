@@ -19,6 +19,8 @@ export interface FixAttemptResult {
 
 export interface ExecuteFixOptions {
   scope?: IssueScope;
+  /** 当决策要求从 MR 中移除某个文件时标记为 true */
+  deleteFile?: boolean;
 }
 
 /**
@@ -49,6 +51,11 @@ export class MrFixAgent {
       console.log(`[MrFixAgent] 阶段=prepare 准备运行环境`);
       await this.options.worktreeManager.prepareEnvironment();
 
+      // 如果 LLM 决策要求删除文件，直接执行 git rm
+      if (options?.deleteFile) {
+        return await this.executeFileDeletion(finding, mr);
+      }
+
       const scope = options?.scope ?? 'local';
       if (scope === 'cross-file') {
         return await this.executeCrossFileFix(finding, mr);
@@ -63,6 +70,42 @@ export class MrFixAgent {
         reason,
       };
     }
+  }
+
+  private async executeFileDeletion(
+    finding: ReviewFinding,
+    mr: MergeRequest
+  ): Promise<FixAttemptResult> {
+    console.log(`[MrFixAgent] 阶段=delete 删除文件: ${finding.file}`);
+    await this.options.worktreeManager.removeFile(finding.file);
+
+    console.log(`[MrFixAgent] 阶段=validate 运行 lint / typecheck 校验`);
+    const validation = await this.options.worktreeManager.validate();
+    console.log(`[MrFixAgent] 校验结果: lint=${validation.lint}, typecheck=${validation.typecheck}`);
+    if (!validation.lint || !validation.typecheck) {
+      const reasons: string[] = [];
+      if (!validation.lint) {
+        reasons.push(`lint=${validation.lint}${validation.lintReason ? ` (${validation.lintReason})` : ''}`);
+      }
+      if (!validation.typecheck) {
+        reasons.push(`typecheck=${validation.typecheck}${validation.typecheckReason ? ` (${validation.typecheckReason})` : ''}`);
+      }
+      return {
+        success: false,
+        reason: `校验未通过：${reasons.join(', ')}`,
+      };
+    }
+
+    const message = `[CodeKeeper] remove: ${finding.message}\n\n文件: ${finding.file}`;
+    console.log(`[MrFixAgent] 阶段=commit-push 提交并推送删除到分支: ${mr.sourceBranch}`);
+    await this.options.worktreeManager.commitAndPush(mr.sourceBranch, message, {
+      setUpstream: false,
+    });
+
+    return {
+      success: true,
+      reason: '文件已从 source branch 删除并推送',
+    };
   }
 
   private async executeSingleFileFix(

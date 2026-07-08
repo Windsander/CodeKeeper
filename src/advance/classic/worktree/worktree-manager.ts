@@ -223,6 +223,63 @@ export class WorktreeManager {
   }
 
   /**
+   * 从工作区中删除相对路径文件，并执行 `git rm` 以便提交。
+   */
+  async removeFile(relPath: string): Promise<void> {
+    const targetPath = join(this.worktreePath, relPath);
+    if (!existsSync(targetPath)) {
+      console.warn(`[WorktreeManager] 删除文件不存在，跳过: ${relPath}`);
+      return;
+    }
+    await this.getGit().rm(relPath);
+  }
+
+  /**
+   * 把相对路径解析为工作区内真实存在的相对路径。
+   *
+   * 如果传入的是 basename（如 `ltmMetadataGenerator.ts`），通过 `git ls-files` 查找
+   * 唯一匹配项并返回其相对路径；找不到或有多项匹配时返回 null。
+   */
+  async resolveFilePath(relPath: string): Promise<string | null> {
+    const exactPath = join(this.worktreePath, relPath);
+    if (existsSync(exactPath) && statSync(exactPath).isFile()) {
+      return relPath.replace(/\\/g, '/');
+    }
+
+    const basename = relPath.split(/[\\/]/).pop();
+    if (!basename) {
+      return null;
+    }
+
+    try {
+      const result = await this.getGit().raw(['ls-files', '-z', '--exclude-standard']);
+      const files = result
+        .split('\0')
+        .filter((f) => f.length > 0)
+        .map((f) => f.replace(/\\/g, '/'));
+
+      const matches = files.filter(
+        (f) => f === basename || f.endsWith(`/${basename}`)
+      );
+
+      if (matches.length === 1) {
+        return matches[0];
+      }
+
+      // 若有多项匹配，尝试用原始 relPath 做子路径匹配
+      const subPathMatch = files.find((f) => f.endsWith(relPath.replace(/\\/g, '/')));
+      if (subPathMatch) {
+        return subPathMatch;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[WorktreeManager] git ls-files 解析 ${relPath} 失败: ${message}`);
+    }
+
+    return null;
+  }
+
+  /**
    * 切换到指定分支（通常是 MR 的 source branch）
    *
    * 先丢弃本地变更、清理未跟踪文件、拉取最新状态，再 checkout。

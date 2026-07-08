@@ -9,6 +9,7 @@ import {
   type IGitProvider,
   type MergeRequest,
   type MrDiff,
+  type Discussion,
   type ReviewerComment,
   type MergeOptions,
   type GitLabDiffPosition,
@@ -272,38 +273,38 @@ export class GitLabProvider implements IGitProvider {
    */
   async getDiscussions(
     iid: number
-  ): Promise<
-    Array<{ id: string; resolvable: boolean; resolved: boolean; notes: ReviewerComment[] }>
-  > {
+  ): Promise<Discussion[]> {
     const discussions = await this.client.getMergeRequestDiscussions(iid);
     return discussions
       .filter(
         (d) =>
           d.notes.length > 0 &&
-          !d.notes[0].system &&
-          !isBot(d.notes[0].author.username)
+          !d.notes[0].system
       )
-      .map((d) => ({
-        id: d.id,
-        // 某些 GitLab 实例/版本对普通 note discussion 不返回 resolvable/resolved，默认视为可处理
-        resolvable: d.resolvable ?? true,
-        resolved: d.resolved ?? false,
-        notes: d.notes.map((note) => ({
-          id: note.id,
-          author: note.author.username,
-          body: note.body,
-          createdAt: note.created_at,
-          resolved: note.resolved ?? false,
-        })),
-        position: d.position
-          ? {
-              newPath: d.position.new_path,
-              newLine: d.position.new_line,
-              oldPath: d.position.old_path,
-              oldLine: d.position.old_line,
-            }
-          : undefined,
-      }));
+      .map((d) => {
+        const position = d.position ?? d.notes.find((n) => n.position)?.position;
+        return {
+          id: d.id,
+          // 某些 GitLab 实例/版本对普通 note discussion 不返回 resolvable/resolved，默认视为可处理
+          resolvable: d.resolvable ?? true,
+          resolved: d.resolved ?? false,
+          notes: d.notes.map((note) => ({
+            id: note.id,
+            author: note.author.username,
+            body: note.body,
+            createdAt: note.created_at,
+            resolved: note.resolved ?? false,
+          })),
+          position: position
+            ? {
+                newPath: position.new_path,
+                newLine: position.new_line,
+                oldPath: position.old_path,
+                oldLine: position.old_line,
+              }
+            : undefined,
+        };
+      });
   }
 
   /**
