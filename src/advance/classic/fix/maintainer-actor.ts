@@ -1,7 +1,7 @@
 import type { GitLabProvider } from '../provider/gitlab-provider.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
 import type { MrFixAgent } from './mr-fix-agent.js';
-import type { MaintainerDecision } from './maintainer-brain.js';
+import type { MaintainerDecision, CognitiveDecision } from './maintainer-brain.js';
 import type { MrAgentState } from '../runners/shared/state-utils.js';
 import { formatAgentFooter, MAINTAINER_ROLE_LABEL } from '../runners/shared/review-utils.js';
 
@@ -39,11 +39,7 @@ export class MaintainerActor {
   ): Promise<void> {
     switch (decision.action) {
       case 'fix': {
-        const fixDescription = decision.fixDescription ?? '根据 Reviewer 意见修改代码';
-        const success = await this.executeFix(mr, discussion, finding, fixDescription, {
-          scope: decision.scope,
-          deleteFile: decision.deleteFile,
-        });
+        const success = await this.executeFix(mr, discussion, finding, decision);
         if (!success) {
           const question = `我尝试自动修复 ${finding.file}:${finding.line}，但未成功。请 Reviewer 补充期望的修改方式或范围，我会再试一次。`;
           await this.ask(mr, discussion, question, finding.file, state);
@@ -128,9 +124,9 @@ export class MaintainerActor {
     mr: MergeRequest,
     discussion: Discussion,
     finding: ReviewFinding,
-    fixDescription: string,
-    options?: { scope?: MaintainerDecision['scope']; deleteFile?: boolean }
+    decision: MaintainerDecision
   ): Promise<boolean> {
+    const fixDescription = decision.fixDescription ?? '根据 Reviewer 意见修改代码';
     const syntheticFinding: ReviewFinding = {
       ...finding,
       message: fixDescription || finding.message,
@@ -139,7 +135,10 @@ export class MaintainerActor {
     };
 
     console.log(`[MaintainerActor] 执行修复: ${finding.file}:${finding.line}`);
-    const fixResult = await this.options.fixAgent.executeFix(syntheticFinding, mr, options);
+    const fixResult = await this.options.fixAgent.executeFix(syntheticFinding, mr, {
+      scope: decision.scope,
+      deleteFile: decision.deleteFile,
+    });
     console.log(`[MaintainerActor] 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`);
 
     const { maintainerName, provider } = this.options;
@@ -147,10 +146,16 @@ export class MaintainerActor {
     if (fixResult.success) {
       try {
         await provider.resolveDiscussion(mr.iid, discussion.id);
+
+        const cognitive = decision as CognitiveDecision;
+        const reasoningSection = cognitive.reasoning
+          ? `\n\n**问题分析**\n${cognitive.analysis ?? '未提供'}\n\n**考虑过的方案**\n${cognitive.consideredOptions?.map((o) => `- ${o}`).join('\n') ?? '无'}\n\n**最终决策**\n${cognitive.reasoning}`
+          : '';
+
         await provider.addDiscussionNote(
           mr.iid,
           discussion.id,
-          `✅ ${maintainerName} 已根据 Reviewer 的意见自动修复并推送至本分支。\n\n请 Reviewer 复核变更。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+          `✅ ${maintainerName} 已根据 Reviewer 的意见自动修复并推送至本分支。${reasoningSection}\n\n请 Reviewer 复核变更。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
         );
         console.log(`[MaintainerActor] 已修复并 resolve discussion ${discussion.id}`);
       } catch (error) {
