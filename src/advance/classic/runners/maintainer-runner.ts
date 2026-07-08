@@ -20,6 +20,7 @@ import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
 import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
 import { formatAgentFooter, isMaintainerAuthoredNote, MAINTAINER_ROLE_LABEL } from './shared/review-utils.js';
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
+import { isDiscussionPending } from './shared/maintainer-filter.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 
 /**
@@ -148,17 +149,14 @@ export class MaintainerRunner extends BaseRoleRunner {
       });
 
       const pendingDiscussions = discussions.filter((d) => {
-        if (d.resolved || !d.resolvable) return false;
-
-        const hasMaintainerNote = d.notes.some((note) => isMaintainerAuthoredNote(note.body));
-        const isInteractive = state.interactiveThreads[d.id]?.status === 'awaiting-reply';
-        // 如果已处理过且没有新 note，且非交互式，跳过
-        const processed = state.processedDiscussions?.[d.id];
-        const hasNewNotes = processed ? d.notes.length > processed.noteCount : true;
-        if (processed && !hasNewNotes && !isInteractive) return false;
-        // 如果 Maintainer 已经处理过且不在交互等待中，跳过（避免重复回复）
-        if (hasMaintainerNote && !isInteractive) return false;
-        return true;
+        const pending = isDiscussionPending(d, state);
+        if (!pending) {
+          const processed = state.processedDiscussions?.[d.id];
+          console.log(
+            `[MaintainerRunner] discussion ${d.id} 跳过: resolved=${d.resolved}, resolvable=${d.resolvable}, interactive=${state.interactiveThreads[d.id]?.status ?? 'none'}, processed=${processed ? `${processed.noteCount}/${d.notes.length}` : 'no'}`
+          );
+        }
+        return pending;
       });
 
       console.log(`[MaintainerRunner] MR !${mr.iid} 过滤后待处理 discussion 数量: ${pendingDiscussions.length}`);
