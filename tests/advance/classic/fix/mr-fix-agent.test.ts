@@ -240,21 +240,54 @@ describe('MrFixAgent', () => {
     expect(worktree.writeFile).toHaveBeenCalledWith('src/use.ts', '// use error\n');
   });
 
-  it('deleteFile 为 true 时执行 git rm 并推送', async () => {
-    const worktree = createMockWorktreeManager();
+  it('批量修复统一应用 patch 并只提交一次', async () => {
+    const worktree = createMockWorktreeManager({
+      readFile: vi.fn().mockImplementation((filePath: string) => {
+        if (filePath === 'src/a.ts') return 'const a = 1;\n';
+        if (filePath === 'src/b.ts') return 'const b = 1;\n';
+        return 'line1\nline2\nline3\n';
+      }),
+    });
     const agent = new MrFixAgent({
       worktreeManager: worktree,
       llmClient: createMockLlmClient(''),
     });
 
-    const result = await agent.executeFix(mockFinding, mockMR, { deleteFile: true });
+    const plan = {
+      reason: '修复两个文件',
+      patches: [
+        {
+          filePath: 'src/a.ts',
+          patch: `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,1 +1,1 @@
+-const a = 1;
++const a = 2;
+`,
+        },
+        {
+          filePath: 'src/b.ts',
+          patch: `diff --git a/src/b.ts b/src/b.ts
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1,1 +1,1 @@
+-const b = 1;
++const b = 2;
+`,
+        },
+      ],
+    };
+
+    const result = await agent.executeBatchFix(plan, mockMR);
 
     expect(result.success).toBe(true);
-    expect(worktree.removeFile).toHaveBeenCalledWith('src/index.ts');
-    expect(worktree.readFile).not.toHaveBeenCalled();
+    expect(worktree.writeFile).toHaveBeenCalledTimes(2);
+    expect(worktree.validate).toHaveBeenCalledTimes(1);
+    expect(worktree.commitAndPush).toHaveBeenCalledTimes(1);
     expect(worktree.commitAndPush).toHaveBeenCalledWith(
       'feature/test',
-      expect.stringContaining('[CodeKeeper] remove'),
+      expect.stringContaining('批量修复'),
       { setUpstream: false }
     );
   });

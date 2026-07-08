@@ -5,6 +5,7 @@ import { parsePatch, applyPatch } from './patch-applier.js';
 import { buildFocusedContext } from './focused-context-builder.js';
 import { CrossFilePlanner } from './cross-file-planner.js';
 import type { IssueScope } from './issue-scope.js';
+import type { BatchFixPlan } from './batch-fix-planner.js';
 
 export interface MrFixAgentOptions {
   worktreeManager: WorktreeManager;
@@ -15,6 +16,17 @@ export interface FixAttemptResult {
   success: boolean;
   reason: string;
   commitSha?: string;
+}
+
+export interface BatchFixResult {
+  /** 整体是否成功 */
+  success: boolean;
+  /** 说明 */
+  reason: string;
+  /** 成功应用的文件列表 */
+  appliedFiles: string[];
+  /** 应用失败的文件列表 */
+  failedFiles: string[];
 }
 
 export interface ExecuteFixOptions {
@@ -68,6 +80,112 @@ export class MrFixAgent {
       return {
         success: false,
         reason,
+      };
+    }
+  }
+
+  /**
+   * 批量执行同一条 discussion 的多个 patch，统一校验并只提交一次
+   */
+  async executeBatchFix(
+    plan: BatchFixPlan,
+    mr: MergeRequest,
+    options?: { deletions?: string[] }
+  ): Promise<BatchFixResult> {
+    console.log(`[MrFixAgent] 开始批量修复，涉及 ${plan.patches.length} 个 patch，${options?.deletions?.length ?? 0} 个删除`);
+
+    try {
+      console.log(`[MrFixAgent] 阶段=worktree 准备/更新 worktree`);
+      await this.options.worktreeManager.ensureWorktree();
+      console.log(`[MrFixAgent] 阶段=checkout 切换到 source branch: ${mr.sourceBranch}`);
+      await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
+      console.log(`[MrFixAgent] 阶段=prepare 准备运行环境`);
+      await this.options.worktreeManager.prepareEnvironment();
+
+      const appliedFiles: string[] = [];
+      const failedFiles: string[] = [];
+      const deletedFiles: string[] = [];
+
+      for (const filePath of options?.deletions ?? []) {
+        console.log(`[MrFixAgent] 阶段=delete 删除文件: ${filePath}`);
+        try {
+          await this.options.worktreeManager.removeFile(filePath);
+          deletedFiles.push(filePath);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`[MrFixAgent] 删除 ${filePath} 失败: ${message}`);
+          failedFiles.push(filePath);
+        }
+      }
+
+      for (const { filePath, patch } of plan.patches) {
+        console.log(`[MrFixAgent] 阶段=apply 应用 patch: ${filePath}`);
+        try {
+          const originalContent = this.options.worktreeManager.readFile(filePath);
+          const newContent = await this.applyPatchText(originalContent, patch, filePath);
+          if (newContent === null) {
+            failedFiles.push(filePath);
+            continue;
+          }
+          this.options.worktreeManager.writeFile(filePath, newContent);
+          appliedFiles.push(filePath);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`[MrFixAgent] 应用 ${filePath} patch 异常: ${message}`);
+          failedFiles.push(filePath);
+        }
+      }
+
+      if (appliedFiles.length === 0 && deletedFiles.length === 0) {
+        return {
+          success: false,
+          reason: '没有 patch 成功应用或文件被删除',
+          appliedFiles,
+          failedFiles,
+        };
+      }
+
+      console.log(`[MrFixAgent] 阶段=validate 运行 lint / typecheck 校验`);
+      const validation = await this.options.worktreeManager.validate();
+      console.log(`[MrFixAgent] 校验结果: lint=${validation.lint}, typecheck=${validation.typecheck}`);
+      if (!validation.lint || !validation.typecheck) {
+        const reasons: string[] = [];
+        if (!validation.lint) {
+          reasons.push(`lint=${validation.lint}${validation.lintReason ? ` (${validation.lintReason})` : ''}`);
+        }
+        if (!validation.typecheck) {
+          reasons.push(`typecheck=${validation.typecheck}${validation.typecheckReason ? ` (${validation.typecheckReason})` : ''}`);
+        }
+        return {
+          success: false,
+          reason: `校验未通过：${reasons.join(', ')}`,
+          appliedFiles,
+          failedFiles,
+        };
+      }
+
+      const message = `[CodeKeeper] fix: 批量修复\n\n${
+        appliedFiles.length > 0 ? `修改文件：\n${appliedFiles.map((f) => `- ${f}`).join('\n')}\n\n` : ''
+      }${deletedFiles.length > 0 ? `删除文件：\n${deletedFiles.map((f) => `- ${f}`).join('\n')}\n\n` : ''}`;
+      console.log(`[MrFixAgent] 阶段=commit-push 提交并推送到分支: ${mr.sourceBranch}`);
+      await this.options.worktreeManager.commitAndPush(mr.sourceBranch, message, {
+        setUpstream: false,
+      });
+
+      return {
+        success: true,
+        reason: '批量修复已推送至 source branch',
+        appliedFiles,
+        failedFiles,
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[MrFixAgent] 批量修复异常: ${reason}`);
+      return {
+        success: false,
+        reason,
+        appliedFiles: [],
+        failedFiles: plan.patches.map((p) => p.filePath),
       };
     }
   }

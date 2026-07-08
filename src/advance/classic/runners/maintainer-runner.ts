@@ -22,6 +22,7 @@ import { formatAgentFooter, isMaintainerAuthoredNote, MAINTAINER_ROLE_LABEL } fr
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { isDiscussionPending } from './shared/maintainer-filter.js';
 import { BaseRoleRunner } from './base-role-runner.js';
+import { BatchFixPlanner } from '../fix/batch-fix-planner.js';
 
 /**
  * 构建 Maintainer 修复尝试会话 ID（按 MR 粒度）
@@ -353,11 +354,18 @@ export class MaintainerRunner extends BaseRoleRunner {
       return;
     }
 
-    // 多条 finding：逐个决策并执行修复，最后统一汇总回复
+    // 多条 finding：先逐条决策，再对需要修复的项做统一规划、一次提交
     const fixedItems: string[] = [];
     const failedItems: string[] = [];
     const askedItems: Array<{ fileLine: string; text: string }> = [];
     const ignoredItems: Array<{ fileLine: string; reason: string }> = [];
+
+    const fixableItems: Array<{
+      finding: ReviewFinding;
+      fileContent: string;
+      scope?: import('../fix/maintainer-brain.js').MaintainerDecision['scope'];
+      deleteFile?: boolean;
+    }> = [];
 
     for (const finding of findings) {
       const fileContent = await readDiscussionFileContent(
@@ -395,14 +403,55 @@ export class MaintainerRunner extends BaseRoleRunner {
         continue;
       }
 
-      const fixResult = await fixAgent.executeFix(finding, mr, { scope: decision.scope });
+      fixableItems.push({
+        finding,
+        fileContent,
+        scope: decision.scope,
+        deleteFile: decision.deleteFile,
+      });
+    }
+
+    if (fixableItems.length > 0) {
+      const fileContents: Record<string, string> = {};
+      for (const item of fixableItems) {
+        fileContents[item.finding.file] = item.fileContent;
+      }
+
       console.log(
-        `[MaintainerRunner] finding ${finding.file}:${finding.line} 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`
+        `[MaintainerRunner] 对 discussion ${discussion.id} 的 ${fixableItems.length} 个 finding 进行批量修复规划`
       );
-      if (fixResult.success) {
-        fixedItems.push(`${finding.file}:${finding.line}`);
-      } else {
-        failedItems.push(`${finding.file}:${finding.line} — ${fixResult.reason}`);
+      const planner = new BatchFixPlanner({ llmClient: this.llmClient });
+      const plan = await planner.plan({
+        findings: fixableItems.map((item) => item.finding),
+        fileContents,
+        originalComment: firstNote.body,
+      });
+      console.log(`[MaintainerRunner] 批量修复计划: ${plan.reason}，${plan.patches.length} 个 patch`);
+
+      const deletions = fixableItems
+        .filter((item) => item.deleteFile)
+        .map((item) => item.finding.file);
+
+      const batchResult = await fixAgent.executeBatchFix(plan, mr, { deletions });
+      console.log(
+        `[MaintainerRunner] 批量修复结果: success=${batchResult.success}, applied=[${batchResult.appliedFiles.join(',')}], failed=[${batchResult.failedFiles.join(',')}]`
+      );
+
+      for (const item of fixableItems) {
+        const key = `${item.finding.file}:${item.finding.line}`;
+        if (item.deleteFile) {
+          if (batchResult.success || batchResult.appliedFiles.length > 0 || batchResult.failedFiles.length === 0) {
+            fixedItems.push(key);
+          } else {
+            failedItems.push(`${key} — ${batchResult.reason}`);
+          }
+          continue;
+        }
+        if (batchResult.appliedFiles.includes(item.finding.file)) {
+          fixedItems.push(key);
+        } else {
+          failedItems.push(`${key} — ${batchResult.reason || 'patch 应用失败'}`);
+        }
       }
     }
 
