@@ -18,6 +18,17 @@ registerRoleUI<'maintainer'>({
     { key: 'maintainerName', label: '维护者名称', type: 'text', defaultValue: 'CodeKeeper Maintainer' },
     { key: 'autoFixRiskLevels', label: '自动处理风险等级', type: 'risk-levels', defaultValue: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
     { key: 'resolveOthersDiscussions', label: '自动 resolve 他人 discussion', type: 'toggle', defaultValue: true },
+    {
+      key: 'cognitiveDepth',
+      label: '认知深度',
+      type: 'select',
+      defaultValue: 'deep',
+      options: [
+        { value: 'fast', label: '快速（1 步推理）' },
+        { value: 'standard', label: '标准（3 步推理）' },
+        { value: 'deep', label: '深度（3 步推理 + 反思）' },
+      ],
+    },
   ],
   defaultConfig: {
     role: 'maintainer',
@@ -28,5 +39,6 @@ registerRoleUI<'maintainer'>({
     autoFixEnabled: true,
     autoFixRiskLevels: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
     resolveOthersDiscussions: true,
+    cognitiveDepth: 'deep',
   },
 });

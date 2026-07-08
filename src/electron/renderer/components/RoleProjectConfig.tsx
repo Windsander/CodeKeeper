@@ -450,6 +450,21 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
           </div>
         );
       }
+      case 'select': {
+        const selectValue = typeof value === 'string' ? value : String(field.defaultValue ?? '');
+        const selectOptions = field.options ?? [];
+        return (
+          <div key={String(field.key)} className="form-group">
+            <label id={`${fieldId}-label`}>{field.label}</label>
+            <Dropdown
+              value={selectValue}
+              options={selectOptions}
+              onChange={(v) => updateConfigField(field.key as keyof RoleConfig, v)}
+              aria-labelledby={`${fieldId}-label`}
+            />
+          </div>
+        );
+      }
       default:
         return null;
     }

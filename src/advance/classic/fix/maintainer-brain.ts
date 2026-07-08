@@ -6,7 +6,7 @@ import { buildFocusedContext, type FocusedContext } from './focused-context-buil
 import { buildFindingCaseKey } from '../memory/finding-case-key.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
 import { CognitiveEngine } from '../cognitive-engine.js';
-import type { CognitiveDecision, CognitiveContext, MrContext } from './cognitive-types.js';
+import type { CognitiveDecision, MrContext } from './cognitive-types.js';
 import {
   summarizeThreadNotes,
   formatThreadContext,

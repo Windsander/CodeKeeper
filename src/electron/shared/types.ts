@@ -156,6 +156,8 @@ export interface MaintainerConfig {
   /** 允许自动修复的风险等级，未配置时默认全部允许 */
   autoFixRiskLevels?: Array<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>;
   resolveOthersDiscussions: boolean;
+  /** 认知深度，默认 deep */
+  cognitiveDepth?: 'fast' | 'standard' | 'deep';
   filter?: RoleFilter;
 }
 

@@ -399,7 +399,7 @@ export class CognitiveEngine {
         needsMoreContext: parsed.needsMoreContext === true,
         queries: (parsed.queries ?? [])
           .filter((q) => typeof q.type === 'string' && typeof q.target === 'string')
-          .map((q) => ({ type: q.type!, target: q.target! })),
+          .map((q) => ({ type: q.type as string, target: q.target as string })),
         reason: parsed.reason ?? '未说明',
       };
     } catch {

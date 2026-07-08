@@ -12,6 +12,7 @@ import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MrFixAgent } from '../fix/mr-fix-agent.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';
 import { MaintainerActor } from '../fix/maintainer-actor.js';
+import { CognitiveEngine } from '../cognitive-engine.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { RecallPlanner } from '../memory/recall-planner.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
@@ -82,7 +83,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     const fixAgent = new MrFixAgent({ worktreeManager, llmClient: this.llmClient });
     const actor = new MaintainerActor({ provider, fixAgent, maintainerName });
 
-    const cognitiveDepth = maintainerConfig.cognitiveDepth ?? 'standard';
+    const cognitiveDepth = maintainerConfig.cognitiveDepth ?? 'deep';
     const brainOptions = {
       llmClient: this.llmClient,
       allowedRiskLevels,
@@ -186,7 +187,9 @@ export class MaintainerRunner extends BaseRoleRunner {
           worktreeManager,
           maintainerName,
           state,
-          project.rootPath
+          project.rootPath,
+          memoryClient,
+          cognitiveDepth
         );
       }
       await memoryClient?.disconnect().catch(() => undefined);
@@ -208,7 +211,9 @@ export class MaintainerRunner extends BaseRoleRunner {
     worktreeManager: WorktreeManager,
     maintainerName: string,
     state: MrAgentState,
-    projectRootPath: string
+    projectRootPath: string,
+    memoryClient?: MemoryClient,
+    cognitiveDepth: 'fast' | 'standard' | 'deep' = 'standard'
   ): Promise<void> {
     const recordProcessed = () => {
       state.processedDiscussions ??= {};
@@ -341,7 +346,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         diffSummary,
         changedFiles: diffs.map((d) => d.filePath),
       };
-    } catch (err) {
+    } catch {
       console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} diff 失败，继续使用基础上下文`);
     }
 
@@ -373,7 +378,32 @@ export class MaintainerRunner extends BaseRoleRunner {
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
       );
 
-      await actor.applyDecision(mr, discussion, finding, decision, state);
+      const applied = await actor.applyDecision(mr, discussion, finding, decision, state);
+
+      if (cognitiveDepth === 'deep' && applied && decision.action === 'fix' && decision.fixDescription) {
+        const engine = new CognitiveEngine({ llmClient: this.llmClient, memoryClient });
+        await engine.reflect(
+          {
+            finding,
+            fileContent,
+            originalComment: firstNote.body,
+            mrContext: mrContext ?? {
+              iid: mr.iid,
+              title: mr.title,
+              sourceBranch: mr.sourceBranch,
+              targetBranch: mr.targetBranch,
+              description: mr.description,
+              diffSummary: '',
+              changedFiles: [],
+            },
+            relatedFindings: [],
+            recalledMemories: [],
+          },
+          'success',
+          decision.fixDescription
+        );
+      }
+
       recordProcessed();
       return;
     }
@@ -462,6 +492,33 @@ export class MaintainerRunner extends BaseRoleRunner {
       console.log(
         `[MaintainerRunner] 批量修复结果: success=${batchResult.success}, applied=[${batchResult.appliedFiles.join(',')}], failed=[${batchResult.failedFiles.join(',')}]`
       );
+
+      if (cognitiveDepth === 'deep' && batchResult.success && memoryClient) {
+        const engine = new CognitiveEngine({ llmClient: this.llmClient, memoryClient });
+        for (const item of fixableItems) {
+          if (item.deleteFile) continue;
+          await engine.reflect(
+            {
+              finding: item.finding,
+              fileContent: item.fileContent,
+              originalComment: firstNote.body,
+              mrContext: mrContext ?? {
+                iid: mr.iid,
+                title: mr.title,
+                sourceBranch: mr.sourceBranch,
+                targetBranch: mr.targetBranch,
+                description: mr.description,
+                diffSummary: '',
+                changedFiles: [],
+              },
+              relatedFindings: findings.filter((f) => f !== item.finding),
+              recalledMemories: [],
+            },
+            'success',
+            plan.reason
+          );
+        }
+      }
 
       for (const item of fixableItems) {
         const key = `${item.finding.file}:${item.finding.line}`;

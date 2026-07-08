@@ -1,7 +1,8 @@
 import type { GitLabProvider } from '../provider/gitlab-provider.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
 import type { MrFixAgent } from './mr-fix-agent.js';
-import type { MaintainerDecision, CognitiveDecision } from './maintainer-brain.js';
+import type { MaintainerDecision } from './maintainer-brain.js';
+import type { CognitiveDecision } from './cognitive-types.js';
 import type { MrAgentState } from '../runners/shared/state-utils.js';
 import { formatAgentFooter, MAINTAINER_ROLE_LABEL } from '../runners/shared/review-utils.js';
 
@@ -36,7 +37,7 @@ export class MaintainerActor {
     finding: ReviewFinding,
     decision: MaintainerDecision,
     state: MrAgentState
-  ): Promise<void> {
+  ): Promise<boolean> {
     switch (decision.action) {
       case 'fix': {
         const success = await this.executeFix(mr, discussion, finding, decision);
@@ -44,16 +45,16 @@ export class MaintainerActor {
           const question = `我尝试自动修复 ${finding.file}:${finding.line}，但未成功。请 Reviewer 补充期望的修改方式或范围，我会再试一次。`;
           await this.ask(mr, discussion, question, finding.file, state);
         }
-        break;
+        return success;
       }
       case 'ask': {
         const question = decision.question ?? '能否补充一下期望的修改方式或范围？';
         await this.ask(mr, discussion, question, finding.file, state);
-        break;
+        return true;
       }
       case 'ignore': {
         await this.ignore(mr, discussion, decision.reason ?? '无需处理');
-        break;
+        return true;
       }
     }
   }
@@ -149,7 +150,7 @@ export class MaintainerActor {
 
         const cognitive = decision as CognitiveDecision;
         const reasoningSection = cognitive.reasoning
-          ? `\n\n**问题分析**\n${cognitive.analysis ?? '未提供'}\n\n**考虑过的方案**\n${cognitive.consideredOptions?.map((o) => `- ${o}`).join('\n') ?? '无'}\n\n**最终决策**\n${cognitive.reasoning}`
+          ? `\n\n**问题分析**\n${cognitive.analysis ?? '未提供'}\n\n**考虑过的方案**\n${cognitive.consideredOptions?.map((o: string) => `- ${o}`).join('\n') ?? '无'}\n\n**最终决策**\n${cognitive.reasoning}`
           : '';
 
         await provider.addDiscussionNote(
