@@ -1,4 +1,6 @@
 import type { LlmClient } from '../llm/client.js';
+import type { RecallPlanner } from './memory/recall-planner.js';
+import type { IMemoryClient } from './memory/types.js';
 import type {
   CognitiveContext,
   CognitiveDecision,
@@ -7,6 +9,21 @@ import type {
 
 export interface CognitiveEngineOptions {
   llmClient: LlmClient;
+  recallPlanner?: RecallPlanner;
+  memoryClient?: IMemoryClient;
+}
+
+interface InquiryResult {
+  needsMoreContext: boolean;
+  queries: Array<{ type: string; target: string }>;
+  reason: string;
+}
+
+interface OptionItem {
+  description: string;
+  pros: string[];
+  cons: string[];
+  risk: 'low' | 'medium' | 'high';
 }
 
 /**
@@ -27,8 +44,8 @@ export class CognitiveEngine {
     if (depth === 'fast') {
       return this.decideFast(context);
     }
-    // standard / deep 先使用 fast 兜底，后续任务会展开多步推理
-    return this.decideFast(context);
+    // deep 模式在决策阶段与 standard 一致，反射由调用方在修复后触发
+    return this.decideStandard(context);
   }
 
   private async decideFast(context: CognitiveContext): Promise<CognitiveDecision> {
@@ -37,6 +54,157 @@ export class CognitiveEngine {
       prompt,
       '你是谨慎的代码维护助手。请只输出 JSON。'
     );
+    return this.parseDecision(raw, context);
+  }
+
+  private async decideStandard(context: CognitiveContext): Promise<CognitiveDecision> {
+    const inquiry = await this.runInquiry(context);
+    const enrichedContext = await this.enrichContext(context, inquiry);
+    const options = await this.generateOptions(enrichedContext);
+    return this.finalDecision(enrichedContext, options);
+  }
+
+  private async runInquiry(context: CognitiveContext): Promise<InquiryResult> {
+    const prompt = [
+      '请根据当前问题判断还需要补充哪些上下文信息。',
+      '',
+      '## 当前问题',
+      `- 文件：${context.finding.file}:${context.finding.line}`,
+      `- 描述：${context.finding.message}`,
+      `- 建议：${context.finding.suggestion}`,
+      '',
+      '## 已掌握上下文',
+      context.relatedFindings.length > 0
+        ? `同 MR 其他 findings：\n${context.relatedFindings.map((f) => `- ${f.file}:${f.line} ${f.message}`).join('\n')}`
+        : '无',
+      context.recalledMemories.length > 0
+        ? `已召回记忆：\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
+        : '无',
+      '',
+      '可查询的上下文类型：',
+      '- file_history：某文件最近修改历史',
+      '- reviewer_preference：某 Reviewer 对某类问题的偏好',
+      '- project_knowledge：项目规范/架构约定',
+      '',
+      '请输出 JSON：',
+      '{',
+      '  "needsMoreContext": true|false,',
+      '  "queries": [',
+      '    { "type": "file_history", "target": "src/foo.ts" },',
+      '    { "type": "reviewer_preference", "target": "no-any" }',
+      '  ],',
+      '  "reason": "为什么需要这些补充"',
+      '}',
+    ].join('\n');
+
+    const raw = await this.options.llmClient.complete(prompt, '你是上下文决策助手，只输出 JSON。');
+    return this.parseInquiry(raw);
+  }
+
+  private async enrichContext(
+    context: CognitiveContext,
+    inquiry: InquiryResult
+  ): Promise<CognitiveContext> {
+    if (!inquiry.needsMoreContext || inquiry.queries.length === 0) {
+      return context;
+    }
+
+    const extraMemories: string[] = [...context.recalledMemories];
+
+    for (const q of inquiry.queries) {
+      if (q.type === 'project_knowledge' && this.options.recallPlanner) {
+        const plan = await this.options.recallPlanner.plan({
+          role: 'maintainer',
+          taskType: 'fix',
+          taskSummary: `${q.target} ${context.finding.message}`,
+        });
+        const memories = await this.options.recallPlanner.execute(plan);
+        extraMemories.push(...memories);
+      }
+      if (q.type === 'reviewer_preference' && this.options.memoryClient) {
+        const items = await this.options.memoryClient.recallUserPreferences(
+          context.mrContext.iid.toString(),
+          q.target
+        );
+        extraMemories.push(...items);
+      }
+      // file_history 由调用方在组装 CognitiveContext 时提供，或后续 Runner 补充
+    }
+
+    return { ...context, recalledMemories: extraMemories };
+  }
+
+  private async generateOptions(context: CognitiveContext): Promise<OptionItem[]> {
+    const prompt = [
+      '请根据以下上下文生成 2~3 个候选修复方案，并列出各自优缺点和风险。',
+      '',
+      '## 问题',
+      `- 文件：${context.finding.file}:${context.finding.line}`,
+      `- 描述：${context.finding.message}`,
+      `- 建议：${context.finding.suggestion}`,
+      '',
+      '## 代码',
+      '```',
+      context.fileContent,
+      '```',
+      '',
+      context.recalledMemories.length > 0
+        ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
+        : '',
+      '',
+      '请输出 JSON：',
+      '{',
+      '  "options": [',
+      '    {',
+      '      "description": "方案描述",',
+      '      "pros": ["优点1"],',
+      '      "cons": ["缺点1"],',
+      '      "risk": "low|medium|high"',
+      '    }',
+      '  ]',
+      '}',
+    ].join('\n');
+
+    const raw = await this.options.llmClient.complete(prompt, '你是代码方案设计助手，只输出 JSON。');
+    return this.parseOptions(raw);
+  }
+
+  private async finalDecision(
+    context: CognitiveContext,
+    options: OptionItem[]
+  ): Promise<CognitiveDecision> {
+    const prompt = [
+      '请从以下候选方案中选择最优方案，并输出最终决策。',
+      '',
+      '## 问题',
+      `- 文件：${context.finding.file}:${context.finding.line}`,
+      `- 描述：${context.finding.message}`,
+      `- 建议：${context.finding.suggestion}`,
+      '',
+      '## 候选方案',
+      options
+        .map(
+          (o, i) =>
+            `${i + 1}. ${o.description}\n   优点：${o.pros.join('，')}\n   缺点：${o.cons.join('，')}\n   风险：${o.risk}`
+        )
+        .join('\n\n'),
+      '',
+      '请输出 JSON：',
+      '{',
+      '  "action": "fix" | "ask" | "ignore",',
+      '  "reason": "简要说明",',
+      '  "question": "ask 时的问题",',
+      '  "fixDescription": "fix 时的描述",',
+      '  "deleteFile": true|false,',
+      '  "scope": "trivial|local|cross-file",',
+      '  "analysis": "问题分析",',
+      '  "consideredOptions": ["方案1", "方案2"],',
+      '  "reasoning": "选择最优方案的原因",',
+      '  "confidence": "high|medium|low"',
+      '}',
+    ].join('\n');
+
+    const raw = await this.options.llmClient.complete(prompt, '你是代码维护决策助手，只输出 JSON。');
     return this.parseDecision(raw, context);
   }
 
@@ -81,12 +249,10 @@ export class CognitiveEngine {
   }
 
   private parseDecision(raw: string, context: CognitiveContext): CognitiveDecision {
-    const text = raw.trim();
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    const jsonText = jsonMatch ? jsonMatch[1].trim() : text;
+    const text = this.extractJson(raw);
 
     try {
-      const parsed = JSON.parse(jsonText) as {
+      const parsed = JSON.parse(text) as {
         action: string;
         reason?: string;
         question?: string;
@@ -177,5 +343,40 @@ export class CognitiveEngine {
   private normalizeConfidence(confidence?: string): 'high' | 'medium' | 'low' {
     if (confidence === 'high' || confidence === 'low') return confidence;
     return 'medium';
+  }
+
+  private parseInquiry(raw: string): InquiryResult {
+    const text = this.extractJson(raw);
+    try {
+      const parsed = JSON.parse(text) as {
+        needsMoreContext?: boolean;
+        queries?: Array<{ type?: string; target?: string }>;
+        reason?: string;
+      };
+      return {
+        needsMoreContext: parsed.needsMoreContext === true,
+        queries: (parsed.queries ?? [])
+          .filter((q) => typeof q.type === 'string' && typeof q.target === 'string')
+          .map((q) => ({ type: q.type!, target: q.target! })),
+        reason: parsed.reason ?? '未说明',
+      };
+    } catch {
+      return { needsMoreContext: false, queries: [], reason: '解析失败' };
+    }
+  }
+
+  private parseOptions(raw: string): OptionItem[] {
+    const text = this.extractJson(raw);
+    try {
+      const parsed = JSON.parse(text) as { options?: OptionItem[] };
+      return (parsed.options ?? []).filter((o) => typeof o.description === 'string');
+    } catch {
+      return [];
+    }
+  }
+
+  private extractJson(text: string): string {
+    const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    return match ? match[1].trim() : text.trim();
   }
 }

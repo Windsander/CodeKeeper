@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { CognitiveEngine } from '../../../../src/advance/classic/cognitive-engine.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { CognitiveContext } from '../../../../src/advance/classic/fix/cognitive-types.js';
@@ -76,5 +76,52 @@ describe('CognitiveEngine', () => {
     const decision = await engine.decide(makeContext());
 
     expect(decision.action).toBe('fix');
+  });
+
+  it('standard 模式经过 Inquiry + Options + Decide 三步', async () => {
+    let callCount = 0;
+    const responses = [
+      JSON.stringify({
+        needsMoreContext: true,
+        queries: [{ type: 'project_knowledge', target: 'unused variable convention' }],
+        reason: '需要确认项目约定',
+      }),
+      JSON.stringify({
+        options: [
+          { description: '删除变量', pros: ['干净'], cons: [], risk: 'low' },
+          { description: '保留注释', pros: ['安全'], cons: ['残留'], risk: 'low' },
+        ],
+      }),
+      JSON.stringify({
+        action: 'fix',
+        reason: '删除',
+        fixDescription: '删除未使用变量',
+        analysis: 'b 未使用',
+        consideredOptions: ['删除变量', '保留注释'],
+        reasoning: '删除更干净',
+        confidence: 'high',
+      }),
+    ];
+
+    const llmClient = {
+      complete: vi.fn().mockImplementation(async () => {
+        return responses[callCount++] ?? '{}';
+      }),
+    } as unknown as LlmClient;
+
+    const recallPlanner = {
+      plan: vi.fn().mockResolvedValue({
+        needsRecall: true,
+        queries: [{ type: 'project_knowledge', query: 'unused variable convention' }],
+      }),
+      execute: vi.fn().mockResolvedValue(['项目约定：未使用变量应删除']),
+    };
+
+    const engine = new CognitiveEngine({ llmClient, recallPlanner: recallPlanner as unknown as import('../../../../src/advance/classic/memory/recall-planner.js').RecallPlanner });
+    const decision = await engine.decide(makeContext(), 'standard');
+
+    expect(decision.action).toBe('fix');
+    expect(decision.analysis).toBe('b 未使用');
+    expect(llmClient.complete).toHaveBeenCalledTimes(3);
   });
 });
