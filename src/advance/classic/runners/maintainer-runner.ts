@@ -169,6 +169,9 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       console.log(`[MaintainerRunner] MR !${mr.iid} 有 ${pendingDiscussions.length} 个待处理 discussion`);
       for (const discussion of pendingDiscussions) {
+        console.log(
+          `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
+        );
         await this.processDiscussion(
           mr,
           discussion,
@@ -280,6 +283,9 @@ export class MaintainerRunner extends BaseRoleRunner {
       } else {
         console.warn(
           `[MaintainerRunner] 无法从 discussion ${discussion.id} 解析 finding，body 前 200 字符: ${firstNote.body.slice(0, 200)}`
+        );
+        console.warn(
+          `[MaintainerRunner] discussion ${discussion.id} 解析结果: ${JSON.stringify(findings)}`
         );
         try {
           await provider.addDiscussionNote(
