@@ -16,6 +16,7 @@ import { MemoryClient } from '../memory/memory-client.js';
 import { RecallPlanner } from '../memory/recall-planner.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
+import type { MrContext } from '../fix/cognitive-types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
 import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
 import { formatAgentFooter, isMaintainerAuthoredNote, MAINTAINER_ROLE_LABEL } from './shared/review-utils.js';
@@ -81,11 +82,13 @@ export class MaintainerRunner extends BaseRoleRunner {
     const fixAgent = new MrFixAgent({ worktreeManager, llmClient: this.llmClient });
     const actor = new MaintainerActor({ provider, fixAgent, maintainerName });
 
+    const cognitiveDepth = maintainerConfig.cognitiveDepth ?? 'standard';
     const brainOptions = {
       llmClient: this.llmClient,
       allowedRiskLevels,
       soulContent: soul.content || undefined,
       projectContext,
+      cognitiveDepth,
     };
 
     const state = loadState(project);
@@ -323,6 +326,25 @@ export class MaintainerRunner extends BaseRoleRunner {
       `[MaintainerRunner] 从 discussion ${discussion.id} 解析到 ${findings.length} 个 finding`
     );
 
+    let mrContext: MrContext | undefined;
+    try {
+      const diffs = await provider.getMRDiff(mr.iid);
+      const diffSummary = diffs
+        .map((d) => `${d.filePath}: +${d.additions}/-${d.deletions}`)
+        .join('\n');
+      mrContext = {
+        iid: mr.iid,
+        title: mr.title,
+        sourceBranch: mr.sourceBranch,
+        targetBranch: mr.targetBranch,
+        description: mr.description,
+        diffSummary,
+        changedFiles: diffs.map((d) => d.filePath),
+      };
+    } catch (err) {
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} diff 失败，继续使用基础上下文`);
+    }
+
     // 单条 finding：直接交给 Actor 执行决策后的动作
     if (findings.length === 1) {
       const finding = findings[0];
@@ -344,6 +366,8 @@ export class MaintainerRunner extends BaseRoleRunner {
         originalComment: firstNote.body,
         mrIid: mr.iid,
         userId: firstNote.author,
+        mrContext,
+        relatedFindings: [],
       });
       console.log(
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
@@ -385,6 +409,8 @@ export class MaintainerRunner extends BaseRoleRunner {
         originalComment: firstNote.body,
         mrIid: mr.iid,
         userId: firstNote.author,
+        mrContext,
+        relatedFindings: findings.filter((f) => f !== finding),
       });
       console.log(
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
