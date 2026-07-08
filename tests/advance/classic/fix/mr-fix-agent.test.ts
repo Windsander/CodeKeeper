@@ -13,6 +13,7 @@ function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): Wo
     readFile: vi.fn().mockReturnValue('line1\nline2\nline3\n'),
     writeFile: vi.fn().mockReturnValue(undefined),
     removeFile: vi.fn().mockResolvedValue(undefined),
+    applyPatch: vi.fn().mockResolvedValue(false),
     commitAndPush: vi.fn().mockResolvedValue(undefined),
     validate: vi.fn().mockResolvedValue({ lint: true, typecheck: true }),
     ...overrides,

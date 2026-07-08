@@ -124,7 +124,7 @@ export class MrFixAgent {
       };
     }
 
-    const newContent = this.applyPatchText(originalContent, patchText, finding.file);
+    const newContent = await this.applyPatchText(originalContent, patchText, finding.file);
     if (newContent === null) {
       return {
         success: false,
@@ -163,7 +163,7 @@ export class MrFixAgent {
         };
       }
 
-      const newContent = this.applyPatchText(fileContent, patchText, planned.filePath);
+      const newContent = await this.applyPatchText(fileContent, patchText, planned.filePath);
       if (newContent === null) {
         return {
           success: false,
@@ -178,7 +178,7 @@ export class MrFixAgent {
     return this.validateAndPush(finding, mr);
   }
 
-  private applyPatchText(originalContent: string, patchText: string, filePath: string): string | null {
+  private async applyPatchText(originalContent: string, patchText: string, filePath: string): Promise<string | null> {
     const patches = parsePatch(patchText);
     if (patches.length === 0) {
       console.warn(`[MrFixAgent] 无法从 LLM 输出解析出 patch: ${filePath}`);
@@ -188,13 +188,27 @@ export class MrFixAgent {
     // 如果 LLM 只返回一个文件 patch，直接应用
     const targetPatch = patches.find((p) => p.oldPath === filePath || p.newPath === filePath) ?? patches[0];
     const result = applyPatch(originalContent, targetPatch);
-    if (!result.success) {
-      console.warn(
-        `[MrFixAgent] patch 应用失败: ${filePath}, hunk=${result.conflict?.hunkIndex}, line=${result.conflict?.expectedLine}, reason=${result.conflict?.reason}`
-      );
-      return null;
+    if (result.success) {
+      return result.content ?? null;
     }
-    return result.content ?? null;
+
+    console.warn(
+      `[MrFixAgent] 自研 patch 应用失败: ${filePath}, 原因=${result.conflict?.reason}，尝试 git apply`
+    );
+
+    // 自研应用器失败后，尝试用 git apply 容错
+    const gitApplied = await this.options.worktreeManager.applyPatch(patchText);
+    if (gitApplied) {
+      try {
+        return this.options.worktreeManager.readFile(filePath);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[MrFixAgent] git apply 后读取文件失败: ${filePath}, ${message}`);
+      }
+    }
+
+    console.warn(`[MrFixAgent] git apply 也失败: ${filePath}`);
+    return null;
   }
 
   private async validateAndPush(

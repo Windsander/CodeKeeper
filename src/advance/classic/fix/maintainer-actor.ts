@@ -45,7 +45,7 @@ export class MaintainerActor {
           deleteFile: decision.deleteFile,
         });
         if (!success) {
-          const question = `我尝试自动修复 ${finding.file}:${finding.line}，但未成功。请 Reviewer 补充期望的修改方式或范围。`;
+          const question = `我尝试自动修复 ${finding.file}:${finding.line}，但未成功。请 Reviewer 补充期望的修改方式或范围，我会再试一次。`;
           await this.ask(mr, discussion, question, finding.file, state);
         }
         break;
@@ -160,17 +160,7 @@ export class MaintainerActor {
       return true;
     }
 
-    try {
-      await provider.addDiscussionNote(
-        mr.iid,
-        discussion.id,
-        `⏸️ ${maintainerName} 尝试按 Reviewer 描述修复但未成功：${fixResult.reason}\n\n请 Reviewer 确认是否需要人工处理。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
-      );
-      console.log(`[MaintainerActor] 已追加修复失败说明`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[MaintainerActor] 回复 discussion ${discussion.id} 失败: ${message}`);
-    }
+    console.log(`[MaintainerActor] 修复未成功: ${fixResult.reason}`);
     return false;
   }
 

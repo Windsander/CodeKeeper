@@ -1,5 +1,5 @@
 import simpleGit, { type SimpleGit, CleanOptions } from 'simple-git';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -232,6 +232,30 @@ export class WorktreeManager {
       return;
     }
     await this.getGit().rm(relPath);
+  }
+
+  /**
+   * 把 unified diff 文本应用到当前工作区。
+   *
+   * 使用 `git apply` 作为容错手段，比自研 patch 应用器更能容忍行号偏移。
+   */
+  async applyPatch(patchText: string): Promise<boolean> {
+    const patchPath = join(this.worktreePath, '.codekeeper-temp.patch');
+    writeFileSync(patchPath, patchText, 'utf-8');
+    try {
+      await this.getGit().applyPatch(patchPath);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[WorktreeManager] git apply 失败: ${message}`);
+      return false;
+    } finally {
+      try {
+        unlinkSync(patchPath);
+      } catch {
+        // 忽略清理失败
+      }
+    }
   }
 
   /**

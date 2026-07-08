@@ -221,15 +221,15 @@ export class MaintainerRunner extends BaseRoleRunner {
     const existingThread = state.interactiveThreads?.[discussion.id];
     if (existingThread?.status === 'awaiting-reply') {
       const askedAt = existingThread.askedAt;
-      const maintainerQuestionNotes = discussion.notes.filter((note) => {
+      // 只要 discussion 里在提问时间之后还有 Maintainer 发布的 note，就说明状态有效
+      const maintainerNotesAfterAsk = discussion.notes.filter((note) => {
         if (!isMaintainerAuthoredNote(note.body)) return false;
-        if (!/[?？]/.test(note.body)) return false;
         const noteTime = new Date(note.createdAt).getTime();
         return !Number.isNaN(noteTime) && noteTime >= askedAt - 1000;
       });
 
-      // 如果 discussion 里已经找不到对应的 Maintainer 提问 note，说明状态已脏，清除后继续处理
-      if (maintainerQuestionNotes.length === 0) {
+      // 如果 discussion 里已经找不到提问后的 Maintainer note，说明状态已脏，清除后继续处理
+      if (maintainerNotesAfterAsk.length === 0) {
         console.warn(
           `[MaintainerRunner] discussion ${discussion.id} 的交互状态已过期，清除后重新处理`
         );

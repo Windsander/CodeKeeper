@@ -114,6 +114,9 @@ export function parsePatch(unifiedDiff: string): FilePatch[] {
 
 /**
  * 把单个 FilePatch 应用到原始文件内容
+ *
+ * 采用“上下文优先、行号为 hint”的策略：先按 hunk.oldStart 尝试精确匹配，
+ * 失败后在附近窗口内搜索上下文行，提升对 LLM 生成 patch 的容错能力。
  */
 export function applyPatch(originalContent: string, filePatch: FilePatch): ApplyResult {
   const { lines, endsWithNewline } = splitContent(originalContent);
@@ -122,44 +125,77 @@ export function applyPatch(originalContent: string, filePatch: FilePatch): Apply
 
   for (let hunkIndex = 0; hunkIndex < filePatch.hunks.length; hunkIndex++) {
     const hunk = filePatch.hunks[hunkIndex];
-    const expectedStart = hunk.oldStart + offset - 1;
+    const pos = findHunkPosition(result, hunk, hunk.oldStart + offset - 1);
 
-    if (expectedStart < 0 || expectedStart + hunk.oldLines > result.length) {
+    if (pos < 0) {
       return {
         success: false,
         conflict: {
           filePath: filePatch.newPath,
           hunkIndex,
           expectedLine: hunk.oldStart,
-          reason: `hunk 目标行范围超出文件边界 (expected ${expectedStart + 1}, 文件共 ${result.length} 行)`,
+          reason: '无法在文件中找到匹配的上下文',
         },
       };
     }
 
-    const expectedLines = hunk.lines.filter((l) => l.type !== 'add').map((l) => l.content);
-    for (let i = 0; i < hunk.oldLines; i++) {
-      if (result[expectedStart + i] !== expectedLines[i]) {
-        return {
-          success: false,
-          conflict: {
-            filePath: filePatch.newPath,
-            hunkIndex,
-            expectedLine: hunk.oldStart + i,
-            reason: `上下文不匹配：期望 "${expectedLines[i]}", 实际 "${result[expectedStart + i]}"`,
-          },
-        };
-      }
-    }
-
+    const oldLines = hunk.lines.filter((l) => l.type !== 'add').map((l) => l.content);
     const replacement = hunk.lines.filter((l) => l.type !== 'remove').map((l) => l.content);
-    result.splice(expectedStart, hunk.oldLines, ...replacement);
-    offset += replacement.length - hunk.oldLines;
+    result.splice(pos, oldLines.length, ...replacement);
+    offset += replacement.length - oldLines.length;
   }
 
   return {
     success: true,
     content: joinContent(result, endsWithNewline),
   };
+}
+
+/**
+ * 在文件行数组中定位 hunk 可应用的位置。
+ *
+ * 优先使用 hintIndex（hunk.oldStart 对应 0-based 索引），在其周围窗口搜索；
+ * 找不到时再全文件搜索。返回匹配起始索引，找不到返回 -1。
+ */
+function findHunkPosition(
+  fileLines: string[],
+  hunk: Hunk,
+  hintIndex: number,
+  windowSize = 20
+): number {
+  const oldLines = hunk.lines.filter((l) => l.type !== 'add').map((l) => l.content);
+  if (oldLines.length === 0) {
+    // 没有旧内容需要匹配时，直接返回 hint
+    return Math.max(0, Math.min(hintIndex, fileLines.length));
+  }
+
+  const searchStart = Math.max(0, hintIndex - windowSize);
+  const searchEnd = Math.min(fileLines.length - oldLines.length, hintIndex + windowSize);
+
+  for (let start = searchStart; start <= searchEnd; start++) {
+    if (matchOldLines(fileLines, start, oldLines)) {
+      return start;
+    }
+  }
+
+  // 窗口内未命中，尝试全文件搜索
+  for (let start = 0; start <= fileLines.length - oldLines.length; start++) {
+    if (start >= searchStart && start <= searchEnd) continue;
+    if (matchOldLines(fileLines, start, oldLines)) {
+      return start;
+    }
+  }
+
+  return -1;
+}
+
+function matchOldLines(fileLines: string[], start: number, oldLines: string[]): boolean {
+  for (let i = 0; i < oldLines.length; i++) {
+    if (fileLines[start + i] !== oldLines[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
