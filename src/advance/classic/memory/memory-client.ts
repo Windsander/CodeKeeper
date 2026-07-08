@@ -85,6 +85,14 @@ export class MemoryClient implements IMemoryClient {
     await this.callTool('record_interaction', { ...input, context: this.context });
   }
 
+  async recordReflection(input: {
+    caseKey: string;
+    reflection: string;
+    outcome: 'success' | 'failure';
+  }): Promise<void> {
+    await this.callTool('record_reflection', { ...input, context: this.context });
+  }
+
   async recordProjectKnowledge(items: ProjectKnowledgeItem[]): Promise<void> {
     await this.callTool('record_project_knowledge', { context: this.context, items });
   }

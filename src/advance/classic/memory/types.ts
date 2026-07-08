@@ -160,6 +160,13 @@ export interface IMemoryClient {
     outcome: string;
   }): Promise<void>;
 
+  /** 记录修复后的反思，并关联到指定 finding case */
+  recordReflection(input: {
+    caseKey: string;
+    reflection: string;
+    outcome: 'success' | 'failure';
+  }): Promise<void>;
+
   recordProjectKnowledge(items: ProjectKnowledgeItem[]): Promise<void>;
 
   /** 批量记录 finding case，用于跨轮次去重与跨 RoleAgent 检索 */

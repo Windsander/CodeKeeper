@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { CognitiveEngine } from '../../../../src/advance/classic/cognitive-engine.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { CognitiveContext } from '../../../../src/advance/classic/fix/cognitive-types.js';
+import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
 
 function makeContext(): CognitiveContext {
   return {
@@ -123,5 +124,26 @@ describe('CognitiveEngine', () => {
     expect(decision.action).toBe('fix');
     expect(decision.analysis).toBe('b 未使用');
     expect(llmClient.complete).toHaveBeenCalledTimes(3);
+  });
+
+  it('reflect 生成反思并关联 case key', async () => {
+    const recorded: Array<{ caseKey: string; reflection: string; outcome: 'success' | 'failure' }> = [];
+    const memoryClient = {
+      context: { projectId: 'p1' },
+      recordReflection: vi.fn().mockImplementation(async (input) => {
+        recorded.push(input);
+      }),
+    } as unknown as IMemoryClient;
+
+    const engine = new CognitiveEngine({
+      llmClient: makeLlmClient('下次遇到未使用变量应优先删除，保持代码干净。'),
+      memoryClient,
+    });
+
+    const reflection = await engine.reflect(makeContext(), 'success', '删除未使用变量 b');
+
+    expect(reflection).toContain('未使用变量');
+    expect(memoryClient.recordReflection).toHaveBeenCalled();
+    expect(recorded[0].caseKey).toContain('mr-1');
   });
 });

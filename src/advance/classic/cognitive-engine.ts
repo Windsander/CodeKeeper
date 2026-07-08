@@ -1,6 +1,7 @@
 import type { LlmClient } from '../llm/client.js';
 import type { RecallPlanner } from './memory/recall-planner.js';
 import type { IMemoryClient } from './memory/types.js';
+import { buildFindingCaseKey } from './memory/finding-case-key.js';
 import type {
   CognitiveContext,
   CognitiveDecision,
@@ -46,6 +47,47 @@ export class CognitiveEngine {
     }
     // deep 模式在决策阶段与 standard 一致，反射由调用方在修复后触发
     return this.decideStandard(context);
+  }
+
+  /**
+   * 根据修复执行结果生成反思，并关联到对应 finding case 记忆
+   */
+  async reflect(
+    context: CognitiveContext,
+    outcome: 'success' | 'failure',
+    executedDescription: string
+  ): Promise<string> {
+    const prompt = [
+      '请根据以下修复执行情况生成一句简短反思，用于后续同类问题参考。',
+      '',
+      '## 问题',
+      `- 文件：${context.finding.file}:${context.finding.line}`,
+      `- 描述：${context.finding.message}`,
+      '',
+      '## 执行方案',
+      executedDescription,
+      '',
+      '## 结果',
+      outcome,
+      '',
+      '请只输出一句反思，不要输出 JSON 或其他内容。',
+    ].join('\n');
+
+    const raw = await this.options.llmClient.complete(prompt);
+    const reflection = raw.trim();
+
+    if (this.options.memoryClient) {
+      const key = buildFindingCaseKey({
+        projectId: this.options.memoryClient.context.projectId,
+        mrIid: context.mrContext.iid,
+        file: context.finding.file,
+        line: context.finding.line,
+        ruleId: context.finding.ruleId,
+      });
+      await this.options.memoryClient.recordReflection({ caseKey: key, reflection, outcome });
+    }
+
+    return reflection;
   }
 
   private async decideFast(context: CognitiveContext): Promise<CognitiveDecision> {

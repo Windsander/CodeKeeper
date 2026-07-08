@@ -389,6 +389,20 @@ export class EverOSMcpServer {
           },
         },
         {
+          name: 'record_reflection',
+          description: '记录 Maintainer 对某条 finding case 的修复反思',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+              caseKey: { type: 'string' },
+              reflection: { type: 'string' },
+              outcome: { type: 'string', enum: ['success', 'failure'] },
+            },
+            required: ['context', 'caseKey', 'reflection', 'outcome'],
+          },
+        },
+        {
           name: 'recall_for_review',
           description: 'Reviewer 召回与本次 MR 相关的历史评审经验',
           inputSchema: {
@@ -490,6 +504,10 @@ export class EverOSMcpServer {
         }
         if (name === 'record_interaction') {
           await this.handleRecordInteraction(args as { context: MemoryContext } & Record<string, unknown>);
+          return this.okResult();
+        }
+        if (name === 'record_reflection') {
+          await this.handleRecordReflection(args as { context: MemoryContext } & Record<string, unknown>);
           return this.okResult();
         }
         if (name === 'recall_for_review') {
@@ -685,6 +703,19 @@ export class EverOSMcpServer {
     this.persistMessages(interactionCtx, messages).catch((err) => {
       logger.error({ err, sessionId }, 'record_interaction 后台记忆写入失败，已入队重试');
       this.queue?.enqueue(interactionCtx, 'add_messages', messages);
+    });
+  }
+
+  private async handleRecordReflection(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+    const ctx = args.context;
+    const caseKey = String(args.caseKey ?? '');
+    const reflection = String(args.reflection ?? '');
+    const outcome = String(args.outcome ?? '');
+    const content = `[CASE:${caseKey}]\n反思: ${reflection}\n结果: ${outcome}\n时间: ${new Date().toISOString()}`;
+
+    // 反思记录为 best-effort，后台执行避免阻塞 MCP
+    this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content).catch((err) => {
+      logger.error({ err, sessionId: ctx.sessionId }, 'record_reflection 后台记忆写入失败');
     });
   }
 

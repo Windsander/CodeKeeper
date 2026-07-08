@@ -110,6 +110,19 @@ describe('MemoryClient 记录方法', () => {
     });
   });
 
+  it('recordReflection 调用 record_reflection tool', async () => {
+    await client.recordReflection({ caseKey: 'case:p1:mr-1:src_a_ts:10:rule-any', reflection: '下次优先删除未使用变量', outcome: 'success' });
+    expect(callToolSpy).toHaveBeenCalledWith({
+      name: 'record_reflection',
+      arguments: {
+        context: mockContext,
+        caseKey: 'case:p1:mr-1:src_a_ts:10:rule-any',
+        reflection: '下次优先删除未使用变量',
+        outcome: 'success',
+      },
+    });
+  });
+
   it('recordReview 传递 findings', async () => {
     const findings = [{ file: 'a.ts', line: 1, message: '问题' }];
     await client.recordReview({ mrIid: 1, title: 'MR', findingsCount: 1, summary: 'ok', findings });
