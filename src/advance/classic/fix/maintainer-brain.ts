@@ -5,6 +5,8 @@ import { IssueScopeClassifier, type IssueScope } from './issue-scope.js';
 import { buildFocusedContext, type FocusedContext } from './focused-context-builder.js';
 import { buildFindingCaseKey } from '../memory/finding-case-key.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
+import { CognitiveEngine } from '../cognitive-engine.js';
+import type { CognitiveDecision, CognitiveContext, MrContext } from './cognitive-types.js';
 import {
   summarizeThreadNotes,
   formatThreadContext,
@@ -47,6 +49,8 @@ export interface MaintainerBrainOptions {
   memoryClient?: IMemoryClient;
   /** 可选的记忆查询规划器，让 Agent 按需决定查什么记忆 */
   recallPlanner?: RecallPlanner;
+  /** 认知深度，默认 standard */
+  cognitiveDepth?: 'fast' | 'standard' | 'deep';
 }
 
 export interface ParseFindingsInput {
@@ -83,8 +87,12 @@ export class MaintainerBrain {
     mrIid: number;
     /** discussion 发起者（远端 Reviewer / 用户），用于召回用户偏好 */
     userId: string;
-  }): Promise<MaintainerDecision> {
-    const { finding, fileContent, originalComment, mrIid, userId } = params;
+    /** MR 级上下文（可选） */
+    mrContext?: MrContext;
+    /** 同 MR 其他相关 findings（可选） */
+    relatedFindings?: ReviewFinding[];
+  }): Promise<CognitiveDecision> {
+    const { finding, fileContent, originalComment, mrIid, userId, mrContext, relatedFindings } = params;
 
     // 风险等级未开启时，不直接修复，而是询问 Reviewer 如何处理
     if (!this.allowedRiskLevels.includes(finding.severity)) {
@@ -92,6 +100,10 @@ export class MaintainerBrain {
         action: 'ask',
         reason: `${finding.severity} 风险等级未开启自动修复`,
         question: `该 finding 的风险等级为 ${finding.severity}，当前未开启自动修复。请 Reviewer 确认是否需要我处理，或指定处理方式。`,
+        analysis: '风险等级未开启',
+        consideredOptions: [],
+        reasoning: '当前配置不自动处理该风险等级',
+        confidence: 'high',
       };
     }
 
@@ -107,18 +119,40 @@ export class MaintainerBrain {
         reason: classification.reason,
         question: '请补充问题所在的文件路径、行号或更具体的修改建议。',
         scope: classification.scope,
+        analysis: '缺少足够上下文',
+        consideredOptions: [],
+        reasoning: classification.reason,
+        confidence: 'low',
       };
     }
 
-    const prompt = this.buildInitialPrompt(
-      finding,
-      focusedContext,
-      originalComment,
-      recalledMemories,
-      classification.scope
+    const engine = new CognitiveEngine({
+      llmClient: this.options.llmClient,
+      recallPlanner: this.options.recallPlanner,
+      memoryClient: this.options.memoryClient,
+    });
+
+    const decision = await engine.decide(
+      {
+        finding,
+        fileContent: this.buildFocusedFileContent(focusedContext),
+        originalComment: originalComment ?? '',
+        mrContext: mrContext ?? {
+          iid: mrIid,
+          title: '',
+          sourceBranch: '',
+          targetBranch: '',
+          description: '',
+          diffSummary: '',
+          changedFiles: [],
+        },
+        relatedFindings: relatedFindings ?? [],
+        recalledMemories,
+        projectContext: this.options.projectContext,
+        soulContent: this.options.soulContent,
+      },
+      this.options.cognitiveDepth ?? 'standard'
     );
-    const raw = await this.options.llmClient.complete(prompt, this.systemPrompt());
-    const decision = this.parseDecision(raw);
 
     if (this.options.memoryClient) {
       await this.options.memoryClient.recordFixAttempt({
@@ -132,7 +166,7 @@ export class MaintainerBrain {
 
     return {
       ...decision,
-      scope: classification.scope,
+      scope: decision.scope && decision.scope !== 'local' ? decision.scope : classification.scope,
     };
   }
 
@@ -154,7 +188,7 @@ export class MaintainerBrain {
     userId: string,
     finding: ReviewFinding,
     originalComment?: string
-  ): Promise<string> {
+  ): Promise<string[]> {
     // 优先使用 RecallPlanner 让 Agent 自己决定查什么记忆
     if (this.options.recallPlanner) {
       const query = `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(0, 2000);
@@ -163,14 +197,13 @@ export class MaintainerBrain {
         taskType: 'fix',
         taskSummary: query,
       });
-      if (!plan.needsRecall || plan.queries.length === 0) return '';
+      if (!plan.needsRecall || plan.queries.length === 0) return [];
       const memories = await this.options.recallPlanner.execute(plan);
-      if (memories.length === 0) return '';
-      return `\n\n## 相关记忆\n\n${memories.map((m) => `- ${m}`).join('\n')}`;
+      return memories;
     }
 
     // fallback：未提供 planner 时维持原有三路查询
-    if (!this.options.memoryClient) return '';
+    if (!this.options.memoryClient) return [];
     const query = `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(
       0,
       2000
@@ -181,18 +214,29 @@ export class MaintainerBrain {
       this.options.memoryClient.recallForMaintenance(query),
     ]);
 
-    const sections: string[] = [];
+    const memories: string[] = [];
     if (userPrefs.length > 0) {
-      sections.push(`用户偏好：\n${userPrefs.map((m) => `- ${m}`).join('\n')}`);
+      memories.push(`用户偏好：\n${userPrefs.map((m) => `- ${m}`).join('\n')}`);
     }
     if (projectKnowledge.length > 0) {
-      sections.push(`项目知识：\n${projectKnowledge.map((m) => `- ${m}`).join('\n')}`);
+      memories.push(`项目知识：\n${projectKnowledge.map((m) => `- ${m}`).join('\n')}`);
     }
     if (maintenanceMemories.length > 0) {
-      sections.push(`维护历史：\n${maintenanceMemories.map((m) => `- ${m}`).join('\n')}`);
+      memories.push(`维护历史：\n${maintenanceMemories.map((m) => `- ${m}`).join('\n')}`);
     }
-    if (sections.length === 0) return '';
-    return `\n\n## 相关记忆\n\n${sections.join('\n\n')}`;
+    return memories;
+  }
+
+  /**
+   * 把聚焦上下文拼成一段带 imports 的代码内容，供认知引擎使用
+   */
+  private buildFocusedFileContent(focusedContext: FocusedContext): string {
+    const parts: string[] = [];
+    if (focusedContext.imports?.trim()) {
+      parts.push(focusedContext.imports);
+    }
+    parts.push(focusedContext.snippet);
+    return parts.join('\n\n');
   }
 
   /**
@@ -315,7 +359,7 @@ ${positionHint}
     // 匹配常见文件路径 + 行号，例如 src/a.ts:10、./src/a.ts:10
     const fileLinePattern = /\b([\w\-./]+\.[a-zA-Z0-9]+):(\d+)\b/;
     // 匹配常见列表标记：- * + 或 1. 2.
-    const listMarkerPattern = /^([-*+]\s+|\d+\.\s+)/;
+    const listMarkerPattern = /^([-+*]\s+|\d+\.\s+)/;
 
     const finalizeCurrent = () => {
       if (current) {
@@ -494,52 +538,6 @@ ${positionHint}
     ].join('\n');
   }
 
-  private buildInitialPrompt(
-    finding: ReviewFinding,
-    focusedContext: FocusedContext,
-    originalComment?: string,
-    recalledMemories?: string,
-    scope?: IssueScope
-  ): string {
-    return [
-      '## 文件路径',
-      finding.file,
-      '',
-      '## 修改范围',
-      scope ?? 'local',
-      '',
-      '## 相关导入',
-      '```',
-      focusedContext.imports || '（无）',
-      '```',
-      '',
-      `## 相关代码片段（行 ${focusedContext.snippetStartLine}-${focusedContext.snippetEndLine}）`,
-      '```',
-      focusedContext.snippet,
-      '```',
-      '',
-      '## Reviewer 评论',
-      originalComment ?? '',
-      '',
-      '## 解析出的 finding',
-      `- 严重程度：${finding.severity}`,
-      finding.ruleId ? `- 规则：${finding.ruleId}` : '',
-      `- 行号：${finding.line}`,
-      `- 问题描述：${finding.message}`,
-      `- 修改建议：${finding.suggestion}`,
-      recalledMemorySection(recalledMemories),
-      '',
-      '请输出 JSON：',
-      '{',
-      '  "action": "fix" | "ask" | "ignore",',
-      '  "reason": "简要说明理由",',
-      '  "question": "如果 action=ask，填写向 Reviewer 提出的澄清问题",',
-      '  "fixDescription": "如果 action=fix，可选的修复描述",',
-      '  "deleteFile": "如果 action=fix 且需要从 MR 中移除某个文件，填 true"',
-      '}',
-    ].join('\n');
-  }
-
   private buildReplyPrompt(
     filePath: string,
     fileContent: string,
@@ -626,9 +624,4 @@ ${positionHint}
       };
     }
   }
-}
-
-function recalledMemorySection(memories?: string): string {
-  if (!memories || memories.trim().length === 0) return '';
-  return `${memories}`;
 }

@@ -65,6 +65,34 @@ describe('MaintainerBrain', () => {
     expect(decision.reason).toContain('HIGH');
   });
 
+  it('decide 返回 CognitiveDecision 包含 reasoning', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createMockLlmClient(
+        JSON.stringify({
+          action: 'fix',
+          reason: '可以修复',
+          fixDescription: '修复描述',
+          analysis: '问题分析',
+          consideredOptions: ['方案A', '方案B'],
+          reasoning: '选择方案A因为风险低',
+          confidence: 'high',
+        })
+      ),
+      cognitiveDepth: 'fast',
+    });
+    const decision = await brain.decide({
+      finding: makeFinding(),
+      fileContent: 'const a = 1;\n',
+      originalComment: '有个问题',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
+
+    expect(decision.action).toBe('fix');
+    expect(decision.reasoning).toBe('选择方案A因为风险低');
+    expect(decision.consideredOptions).toEqual(['方案A', '方案B']);
+  });
+
   it('LLM 返回非法 JSON 时保守 ask', async () => {
     const brain = new MaintainerBrain({
       llmClient: createMockLlmClient('不是 JSON'),
@@ -140,7 +168,12 @@ describe('MaintainerBrain', () => {
     >;
     const recallPlanner = new RecallPlanner({ llmClient, memoryClient });
 
-    const brain = new MaintainerBrain({ llmClient, memoryClient, recallPlanner });
+    const brain = new MaintainerBrain({
+      llmClient,
+      memoryClient,
+      recallPlanner,
+      cognitiveDepth: 'fast',
+    });
     await brain.decide({
       finding: makeFinding(),
       fileContent: 'const x = 1;',
@@ -241,9 +274,9 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
   });
 
   it('prompt 中使用聚焦代码片段和 imports', async () => {
-    const complete = vi.fn().mockResolvedValue('{"action":"fix","reason":"可以安全修复"}');
+    const complete = vi.fn().mockResolvedValue('{"action":"fix","reason":"可以安全修复","analysis":"分析","consideredOptions":[],"reasoning":"理由","confidence":"medium"}');
     const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
-    const brain = new MaintainerBrain({ llmClient });
+    const brain = new MaintainerBrain({ llmClient, cognitiveDepth: 'fast' });
 
     const fileContent = `import { foo } from './foo';\n\nfunction target() {\n  const x = 1;\n  return x;\n}\n`;
     await brain.decide({
@@ -254,7 +287,7 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
     });
 
     const prompt = complete.mock.calls[0][0] as string;
-    expect(prompt).toContain('相关代码片段');
+    expect(prompt).toContain('相关代码');
     expect(prompt).toContain("import { foo } from './foo';");
     expect(prompt).toContain('function target');
     expect(prompt).not.toContain('文件内容（节选）');
@@ -268,7 +301,7 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
       finding: makeFinding({
         line: 10,
         message: 'MemoryLlmCallParams 接口定义缺少 error 字段',
-        suggestion: '在接口中添加可选 error 字段，多个调用点传入了 error',
+        suggestion: '扩展接口定义并同步所有调用点',
         ruleId: 'TYPE-SAFETY',
       }),
       fileContent: 'interface MemoryLlmCallParams {}',
