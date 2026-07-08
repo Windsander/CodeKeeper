@@ -251,12 +251,21 @@ export class MaintainerRunner extends BaseRoleRunner {
       isSummary: firstNote.body.includes('CodeKeeper Advance MR 评审 Agent'),
     });
 
-    // 无法从 body 解析时，若 position 提供了文件路径，则构造一个 synthetic finding
-    if (findings.length === 0) {
+    // 如果解析出来的文件无效，使用 position 兜底
+    const hasValidFinding =
+      findings.length > 0 &&
+      findings.every(
+        (f) => f.file && f.file !== 'unknown' && f.line > 0
+      );
+
+    // 无法从 body 解析，或解析结果无效时，若 position 提供了文件路径，则构造 synthetic finding
+    if (findings.length === 0 || !hasValidFinding) {
       const fallbackFile = discussion.position?.newPath ?? discussion.position?.oldPath;
       if (fallbackFile) {
         console.log(
-          `[MaintainerRunner] discussion ${discussion.id} 无法从 body 解析 finding，使用 position 兜底`
+          `[MaintainerRunner] discussion ${discussion.id} 解析结果无效（${JSON.stringify(
+            findings.map((f) => `${f.file}:${f.line}`)
+          )}），使用 position 兜底: ${fallbackFile}`
         );
         findings = [
           {
@@ -269,7 +278,9 @@ export class MaintainerRunner extends BaseRoleRunner {
           },
         ];
       } else {
-        console.warn(`[MaintainerRunner] 无法从 discussion ${discussion.id} 解析 finding`);
+        console.warn(
+          `[MaintainerRunner] 无法从 discussion ${discussion.id} 解析 finding，body 前 200 字符: ${firstNote.body.slice(0, 200)}`
+        );
         try {
           await provider.addDiscussionNote(
             mr.iid,
