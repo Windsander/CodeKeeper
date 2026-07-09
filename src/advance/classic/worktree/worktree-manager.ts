@@ -1,11 +1,20 @@
 import simpleGit, { type SimpleGit, CleanOptions } from 'simple-git';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, unlinkSync, createReadStream } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createInterface } from 'node:readline';
 import { logger } from '../../../core/logger.js';
+import { readWindow, readRange } from './streaming-file-reader.js';
+import { buildFileOverview, type FileOverview } from './file-overview-builder.js';
+import { buildFocusedContextStreamed } from '../fix/focused-context-streamer.js';
+import type { FocusedContext } from '../fix/focused-context-builder.js';
+import type { ReviewFinding } from '../provider/types.js';
 
 const execFileAsync = promisify(execFile);
+
+/** 工作区单文件读取上限（字节），防止一次性把超大生成文件读入堆内存 */
+const MAX_READ_FILE_SIZE = 512 * 1024;
 
 export class WorktreeError extends Error {
   constructor(
@@ -51,7 +60,8 @@ async function defaultRunScript(script: string, cwd: string): Promise<RunScriptR
     return { success: true };
   } catch (err) {
     logger.warn({ err, script }, `运行 ${script} 失败`);
-    const reason = err instanceof Error ? err.message : String(err);
+    const execErr = err as Error & { stdout?: string; stderr?: string };
+    const reason = [execErr.message, execErr.stdout ?? '', execErr.stderr ?? ''].filter(Boolean).join('\n');
     return { success: false, reason };
   }
 }
@@ -210,9 +220,73 @@ export class WorktreeManager {
     return branchName;
   }
 
-  /** 读取工作区内的相对路径文件 */
+  /** 读取工作区内的相对路径文件，超过大小上限时抛出异常 */
   readFile(relPath: string): string {
-    return readFileSync(join(this.worktreePath, relPath), 'utf-8');
+    const targetPath = join(this.worktreePath, relPath);
+    const stats = statSync(targetPath);
+    if (stats.size > MAX_READ_FILE_SIZE) {
+      throw new WorktreeError('read', `文件 ${relPath} 过大（${stats.size} bytes），超过 ${MAX_READ_FILE_SIZE} bytes 读取上限`);
+    }
+    return readFileSync(targetPath, 'utf-8');
+  }
+
+  /**
+   * 流式读取目标行周围的聚焦上下文，不受 512KB 全读限制
+   */
+  async readFileWindow(
+    relPath: string,
+    finding: ReviewFinding,
+    options?: { padding?: number; maxLines?: number }
+  ): Promise<FocusedContext> {
+    const targetPath = join(this.worktreePath, relPath);
+    return buildFocusedContextStreamed(targetPath, finding, options);
+  }
+
+  /**
+   * 读取任意行范围，不受 512KB 限制
+   */
+  async readFileRange(relPath: string, startLine: number, endLine: number): Promise<string> {
+    const targetPath = join(this.worktreePath, relPath);
+    const result = await readRange(targetPath, startLine, endLine);
+    return result.content;
+  }
+
+  /**
+   * 获取文件概览
+   */
+  async getFileOverview(relPath: string): Promise<FileOverview> {
+    const targetPath = join(this.worktreePath, relPath);
+    return buildFileOverview(targetPath);
+  }
+
+  /**
+   * 在文件中搜索关键字，返回匹配的连续行号范围
+   */
+  async searchInFile(
+    relPath: string,
+    keyword: string
+  ): Promise<Array<{ startLine: number; endLine: number }>> {
+    const targetPath = join(this.worktreePath, relPath);
+    const ranges: Array<{ startLine: number; endLine: number }> = [];
+    let currentRange: { startLine: number; endLine: number } | null = null;
+    let lineNumber = 0;
+
+    const rl = createInterface({
+      input: createReadStream(targetPath),
+      crlfDelay: Infinity,
+    });
+    for await (const rawLine of rl) {
+      lineNumber++;
+      if (rawLine.includes(keyword)) {
+        if (currentRange && currentRange.endLine === lineNumber - 1) {
+          currentRange.endLine = lineNumber;
+        } else {
+          currentRange = { startLine: lineNumber, endLine: lineNumber };
+          ranges.push(currentRange);
+        }
+      }
+    }
+    return ranges;
   }
 
   /** 写入工作区内的相对路径文件 */
@@ -381,5 +455,13 @@ export class WorktreeManager {
       lintReason: lint.reason,
       typecheckReason: typecheck.reason,
     };
+  }
+
+  /**
+   * 在 worktree 中运行任意 npm script
+   */
+  async runScript(script: string): Promise<RunScriptResult> {
+    const runner = this.options.runScript ?? defaultRunScript;
+    return runner(script, this.worktreePath);
   }
 }
