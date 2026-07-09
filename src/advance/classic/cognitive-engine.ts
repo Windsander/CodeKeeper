@@ -1,6 +1,7 @@
 import type { LlmClient } from '../llm/client.js';
 import type { RecallPlanner } from './memory/recall-planner.js';
 import type { IMemoryClient } from './memory/types.js';
+import type { WorktreeManager } from './worktree/worktree-manager.js';
 import { buildFindingCaseKey } from './memory/finding-case-key.js';
 import type {
   CognitiveContext,
@@ -12,6 +13,7 @@ export interface CognitiveEngineOptions {
   llmClient: LlmClient;
   recallPlanner?: RecallPlanner;
   memoryClient?: IMemoryClient;
+  worktreeManager?: WorktreeManager;
 }
 
 interface InquiryResult {
@@ -107,6 +109,13 @@ export class CognitiveEngine {
   }
 
   private async runInquiry(context: CognitiveContext): Promise<InquiryResult> {
+    const overviewText = context.fileOverview
+      ? `文件总行数：${context.fileOverview.lineCount}\n主要符号：\n${context.fileOverview.symbols
+          .slice(0, 20)
+          .map((s) => `- ${s.name} (${s.kind}) @ ${s.startLine}`)
+          .join('\n')}`
+      : '未提供文件概览';
+
     const prompt = [
       '请根据当前问题判断还需要补充哪些上下文信息。',
       '',
@@ -123,17 +132,23 @@ export class CognitiveEngine {
         ? `已召回记忆：\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
         : '无',
       '',
+      '## 文件概览',
+      overviewText,
+      '',
       '可查询的上下文类型：',
       '- file_history：某文件最近修改历史',
       '- reviewer_preference：某 Reviewer 对某类问题的偏好',
       '- project_knowledge：项目规范/架构约定',
+      '- file_range：需要读取某文件指定行范围，target 格式为 "src/foo.ts:10-30"',
+      '- file_search：需要在某文件搜索关键字，target 格式为 "src/foo.ts:keyword"',
       '',
       '请输出 JSON：',
       '{',
       '  "needsMoreContext": true|false,',
       '  "queries": [',
       '    { "type": "file_history", "target": "src/foo.ts" },',
-      '    { "type": "reviewer_preference", "target": "no-any" }',
+      '    { "type": "file_range", "target": "src/foo.ts:10-30" },',
+      '    { "type": "file_search", "target": "src/foo.ts:someKeyword" }',
       '  ],',
       '  "reason": "为什么需要这些补充"',
       '}',
@@ -152,6 +167,7 @@ export class CognitiveEngine {
     }
 
     const extraMemories: string[] = [...context.recalledMemories];
+    const extraFileContexts: string[] = context.extraFileContexts ? [...context.extraFileContexts] : [];
 
     for (const q of inquiry.queries) {
       if (q.type === 'project_knowledge' && this.options.recallPlanner) {
@@ -170,13 +186,63 @@ export class CognitiveEngine {
         );
         extraMemories.push(...items);
       }
+      if (q.type === 'file_range' && this.options.worktreeManager) {
+        const ctx = await this.readFileRangeContext(q.target);
+        if (ctx) extraFileContexts.push(ctx);
+      }
+      if (q.type === 'file_search' && this.options.worktreeManager) {
+        const ctx = await this.searchFileContext(q.target);
+        if (ctx) extraFileContexts.push(ctx);
+      }
       // file_history 由调用方在组装 CognitiveContext 时提供，或后续 Runner 补充
     }
 
-    return { ...context, recalledMemories: extraMemories };
+    return { ...context, recalledMemories: extraMemories, extraFileContexts };
+  }
+
+  private async readFileRangeContext(target: string): Promise<string | null> {
+    const lastColon = target.lastIndexOf(':');
+    if (lastColon === -1) return null;
+    const filePath = target.slice(0, lastColon);
+    const range = target.slice(lastColon + 1);
+    const [startStr, endStr] = range.split('-');
+    const startLine = parseInt(startStr, 10);
+    const endLine = parseInt(endStr, 10);
+    if (Number.isNaN(startLine) || Number.isNaN(endLine)) return null;
+
+    try {
+      const content = await this.options.worktreeManager!.readFileRange(filePath, startLine, endLine);
+      return `## ${filePath} 行 ${startLine}-${endLine}\n\`\`\`\n${content}\n\`\`\``;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CognitiveEngine] 读取文件范围 ${target} 失败: ${message}`);
+      return null;
+    }
+  }
+
+  private async searchFileContext(target: string): Promise<string | null> {
+    const lastColon = target.lastIndexOf(':');
+    if (lastColon === -1) return null;
+    const filePath = target.slice(0, lastColon);
+    const keyword = target.slice(lastColon + 1);
+    if (!keyword) return null;
+
+    try {
+      const ranges = await this.options.worktreeManager!.searchInFile(filePath, keyword);
+      if (ranges.length === 0) return null;
+      const lines = ranges.map((r) => `- ${filePath}:${r.startLine}-${r.endLine}`).join('\n');
+      return `## ${filePath} 中 "${keyword}" 的匹配位置\n${lines}`;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CognitiveEngine] 搜索文件 ${target} 失败: ${message}`);
+      return null;
+    }
   }
 
   private async generateOptions(context: CognitiveContext): Promise<OptionItem[]> {
+    const overviewText = this.formatFileOverview(context.fileOverview);
+    const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
+
     const prompt = [
       '请根据以下上下文生成 2~3 个候选修复方案，并列出各自优缺点和风险。',
       '',
@@ -190,6 +256,8 @@ export class CognitiveEngine {
       context.fileContent,
       '```',
       '',
+      overviewText,
+      extraContextsText,
       context.recalledMemories.length > 0
         ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
         : '',
@@ -215,6 +283,9 @@ export class CognitiveEngine {
     context: CognitiveContext,
     options: OptionItem[]
   ): Promise<CognitiveDecision> {
+    const overviewText = this.formatFileOverview(context.fileOverview);
+    const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
+
     const prompt = [
       '请从以下候选方案中选择最优方案，并输出最终决策。',
       '',
@@ -230,6 +301,12 @@ export class CognitiveEngine {
             `${i + 1}. ${o.description}\n   优点：${o.pros.join('，')}\n   缺点：${o.cons.join('，')}\n   风险：${o.risk}`
         )
         .join('\n\n'),
+      '',
+      overviewText,
+      extraContextsText,
+      context.recalledMemories.length > 0
+        ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
+        : '',
       '',
       '请输出 JSON：',
       '{',
@@ -251,15 +328,20 @@ export class CognitiveEngine {
   }
 
   private buildFastPrompt(context: CognitiveContext): string {
+    const overviewText = this.formatFileOverview(context.fileOverview);
+    const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
+
     return [
       '## 文件路径',
       context.finding.file,
       '',
+      overviewText,
       '## 相关代码',
       '```',
       context.fileContent,
       '```',
       '',
+      extraContextsText,
       '## Reviewer 评论',
       context.originalComment,
       '',
@@ -288,6 +370,20 @@ export class CognitiveEngine {
       '  "confidence": "high|medium|low"',
       '}',
     ].join('\n');
+  }
+
+  private formatFileOverview(overview?: CognitiveContext['fileOverview']): string {
+    if (!overview) return '';
+    const symbols = overview.symbols
+      .slice(0, 20)
+      .map((s) => `- ${s.name} (${s.kind}) @ ${s.startLine}`)
+      .join('\n');
+    return `## 文件概览\n总行数：${overview.lineCount}\n主要符号：\n${symbols || '（未识别到顶层符号）'}\n\n`;
+  }
+
+  private formatExtraFileContexts(contexts?: CognitiveContext['extraFileContexts']): string {
+    if (!contexts || contexts.length === 0) return '';
+    return `## 补充上下文\n${contexts.join('\n\n')}\n\n`;
   }
 
   private parseDecision(raw: string, context: CognitiveContext): CognitiveDecision {

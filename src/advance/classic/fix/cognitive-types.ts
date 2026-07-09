@@ -1,5 +1,6 @@
 import type { ReviewFinding } from '../provider/types.js';
 import type { MaintainerDecision } from './maintainer-brain.js';
+import type { FileOverview } from '../worktree/file-overview-builder.js';
 
 /**
  * 认知深度：控制 Maintainer 决策前推理的步数与 token 消耗
@@ -42,6 +43,10 @@ export interface CognitiveContext {
   relatedFindings: ReviewFinding[];
   /** 已召回的记忆文本列表 */
   recalledMemories: string[];
+  /** 文件概览（可选） */
+  fileOverview?: FileOverview;
+  /** LLM 主动请求的额外文件上下文（可选） */
+  extraFileContexts?: string[];
   /** Reviewer 偏好摘要（可选） */
   reviewerProfile?: string;
   /** 项目上下文（可选） */

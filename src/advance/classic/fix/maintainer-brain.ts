@@ -9,6 +9,8 @@ import type { RecallPlanner } from '../memory/recall-planner.js';
 import { CognitiveEngine } from '../cognitive-engine.js';
 import type { CognitiveDecision, MrContext } from './cognitive-types.js';
 import type { EnvironmentPrepContext, EnvironmentPrepDecision } from './fix-result.js';
+import type { WorktreeManager } from '../worktree/worktree-manager.js';
+import type { FileOverview } from '../worktree/file-overview-builder.js';
 import {
   summarizeThreadNotes,
   formatThreadContext,
@@ -53,6 +55,8 @@ export interface MaintainerBrainOptions {
   recallPlanner?: RecallPlanner;
   /** 认知深度，默认 standard */
   cognitiveDepth?: 'fast' | 'standard' | 'deep';
+  /** 可选的 worktree 管理器，用于获取文件概览和扩展读取 */
+  worktreeManager?: WorktreeManager;
 }
 
 export interface ParseFindingsInput {
@@ -131,10 +135,15 @@ export class MaintainerBrain {
       };
     }
 
+    const fileOverview = this.options.worktreeManager
+      ? await this.safeGetFileOverview(finding.file)
+      : undefined;
+
     const engine = new CognitiveEngine({
       llmClient: this.options.llmClient,
       recallPlanner: this.options.recallPlanner,
       memoryClient: this.options.memoryClient,
+      worktreeManager: this.options.worktreeManager,
     });
 
     const decision = await engine.decide(
@@ -153,6 +162,8 @@ export class MaintainerBrain {
         },
         relatedFindings: relatedFindings ?? [],
         recalledMemories,
+        fileOverview,
+        extraFileContexts: [],
         projectContext: this.options.projectContext,
         soulContent: this.options.soulContent,
       },
@@ -237,6 +248,20 @@ export class MaintainerBrain {
    */
   private buildFocusedFileContent(focusedContext: FocusedContext): string {
     return focusedContextToString(focusedContext);
+  }
+
+  /**
+   * 安全获取文件概览，失败时返回 undefined 不影响主流程
+   */
+  private async safeGetFileOverview(filePath: string): Promise<FileOverview | undefined> {
+    if (!this.options.worktreeManager) return undefined;
+    try {
+      return await this.options.worktreeManager.getFileOverview(filePath);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[MaintainerBrain] 获取文件概览 ${filePath} 失败: ${message}`);
+      return undefined;
+    }
   }
 
   /**
