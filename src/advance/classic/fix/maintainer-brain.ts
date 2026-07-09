@@ -3,10 +3,12 @@ import { LlmClient } from '../../llm/client.js';
 import type { IMemoryClient } from '../memory/types.js';
 import { IssueScopeClassifier, type IssueScope } from './issue-scope.js';
 import { buildFocusedContext, type FocusedContext } from './focused-context-builder.js';
+import { focusedContextToString } from './focused-context-streamer.js';
 import { buildFindingCaseKey } from '../memory/finding-case-key.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
 import { CognitiveEngine } from '../cognitive-engine.js';
 import type { CognitiveDecision, MrContext } from './cognitive-types.js';
+import type { EnvironmentPrepContext, EnvironmentPrepDecision } from './fix-result.js';
 import {
   summarizeThreadNotes,
   formatThreadContext,
@@ -80,7 +82,7 @@ export class MaintainerBrain {
    */
   async decide(params: {
     finding: ReviewFinding;
-    fileContent: string;
+    fileContent: string | FocusedContext;
     /** 原始评论内容，优先于 finding.message 用于理解 Reviewer 意图 */
     originalComment?: string;
     /** MR 在 GitLab 中的 IID，用于记忆关联 */
@@ -108,7 +110,10 @@ export class MaintainerBrain {
     }
 
     const recalledMemories = await this.recallMemories(userId, finding, originalComment);
-    const focusedContext = buildFocusedContext(fileContent, finding);
+    const focusedContext =
+      typeof fileContent === 'string'
+        ? buildFocusedContext(fileContent, finding)
+        : fileContent;
     const classification = await new IssueScopeClassifier({
       llmClient: this.options.llmClient,
     }).classify(finding, focusedContext);
@@ -231,12 +236,7 @@ export class MaintainerBrain {
    * 把聚焦上下文拼成一段带 imports 的代码内容，供认知引擎使用
    */
   private buildFocusedFileContent(focusedContext: FocusedContext): string {
-    const parts: string[] = [];
-    if (focusedContext.imports?.trim()) {
-      parts.push(focusedContext.imports);
-    }
-    parts.push(focusedContext.snippet);
-    return parts.join('\n\n');
+    return focusedContextToString(focusedContext);
   }
 
   /**
@@ -244,7 +244,7 @@ export class MaintainerBrain {
    */
   async decideReply(params: {
     filePath: string;
-    fileContent: string;
+    fileContent: string | FocusedContext;
     threadNotes: Array<{ author: string; body: string; createdAt: string }>;
     maintainerName: string;
   }): Promise<MaintainerDecision> {
@@ -253,14 +253,62 @@ export class MaintainerBrain {
       params.threadNotes,
       { maxRawTokens: 8000, maxRecentItems: 5 }
     );
+    const fileContentString =
+      typeof params.fileContent === 'string'
+        ? params.fileContent
+        : focusedContextToString(params.fileContent);
     const prompt = this.buildReplyPrompt(
       params.filePath,
-      params.fileContent,
+      fileContentString,
       threadContext,
       params.maintainerName
     );
     const raw = await this.options.llmClient.complete(prompt, this.systemPrompt());
     return this.parseDecision(raw);
+  }
+
+  /**
+   * 当校验因 workspace 包未编译等环境问题失败时，由 LLM 决定执行哪个 npm script 修复环境
+   */
+  async decideEnvironmentPrep(context: EnvironmentPrepContext): Promise<EnvironmentPrepDecision> {
+    const prompt = [
+      '修复 patch 已应用，但 typecheck 失败。请根据以下信息判断是否需要先运行某个 npm script 来准备环境。',
+      '',
+      '## 可用的 npm scripts',
+      context.availableScripts.length > 0
+        ? context.availableScripts.map((s) => `- ${s}`).join('\n')
+        : '（未能读取到 package.json scripts）',
+      '',
+      '## typecheck 原始输出（节选）',
+      '```',
+      context.validateOutput.slice(0, 4000),
+      '```',
+      '',
+      '## 输出要求',
+      '请输出 JSON：',
+      '{',
+      '  "script": "要执行的 script 名称，若认为不需要或无法处理则留空",',
+      '  "reason": "选择该脚本或不选择的理由"',
+      '}',
+      '',
+      '注意：只输出 JSON，不要附加解释。',
+    ].join('\n');
+
+    const raw = await this.options.llmClient.complete(
+      prompt,
+      '你是项目构建环境诊断助手，只输出 JSON。'
+    );
+
+    try {
+      const text = this.extractJsonFromMarkdown(raw);
+      const parsed = JSON.parse(text) as { script?: string; reason?: string };
+      if (typeof parsed.script === 'string' && context.availableScripts.includes(parsed.script)) {
+        return { script: parsed.script, reason: parsed.reason ?? '已选择环境准备脚本' };
+      }
+      return { reason: parsed.reason ?? 'LLM 未选择可用脚本' };
+    } catch {
+      return { reason: '无法解析 LLM 环境准备决策，保守跳过' };
+    }
   }
 
   private buildParseFindingsPrompt(input: ParseFindingsInput): string {
