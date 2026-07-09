@@ -16,13 +16,14 @@ describe('readDiscussionFileContent', () => {
       readFile: vi.fn(),
     };
 
-    const content = await readDiscussionFileContent(
+    const focused = await readDiscussionFileContent(
       worktreeManager as any,
       root,
-      'src/a.ts',
+      { file: 'src/a.ts', line: 1, severity: 'MEDIUM', message: '', suggestion: '' },
       'feature'
     );
-    expect(content).toBe('const x = 1;');
+    expect(focused).not.toBeNull();
+    expect(focused!.snippet).toBe('const x = 1;');
 
     rmSync(root, { recursive: true, force: true });
   });
@@ -37,13 +38,13 @@ describe('readDiscussionFileContent', () => {
       readFile: vi.fn(),
     };
 
-    const content = await readDiscussionFileContent(
+    const focused = await readDiscussionFileContent(
       worktreeManager as any,
       root,
-      'not-exist.ts',
+      { file: 'not-exist.ts', line: 1, severity: 'MEDIUM', message: '', suggestion: '' },
       'feature'
     );
-    expect(content).toBeNull();
+    expect(focused).toBeNull();
 
     rmSync(root, { recursive: true, force: true });
   });
