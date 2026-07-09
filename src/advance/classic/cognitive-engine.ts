@@ -201,6 +201,9 @@ export class CognitiveEngine {
   }
 
   private async readFileRangeContext(target: string): Promise<string | null> {
+    const manager = this.options.worktreeManager;
+    if (!manager) return null;
+
     const lastColon = target.lastIndexOf(':');
     if (lastColon === -1) return null;
     const filePath = target.slice(0, lastColon);
@@ -211,7 +214,7 @@ export class CognitiveEngine {
     if (Number.isNaN(startLine) || Number.isNaN(endLine)) return null;
 
     try {
-      const content = await this.options.worktreeManager!.readFileRange(filePath, startLine, endLine);
+      const content = await manager.readFileRange(filePath, startLine, endLine);
       return `## ${filePath} 行 ${startLine}-${endLine}\n\`\`\`\n${content}\n\`\`\``;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -221,6 +224,9 @@ export class CognitiveEngine {
   }
 
   private async searchFileContext(target: string): Promise<string | null> {
+    const manager = this.options.worktreeManager;
+    if (!manager) return null;
+
     const lastColon = target.lastIndexOf(':');
     if (lastColon === -1) return null;
     const filePath = target.slice(0, lastColon);
@@ -228,7 +234,7 @@ export class CognitiveEngine {
     if (!keyword) return null;
 
     try {
-      const ranges = await this.options.worktreeManager!.searchInFile(filePath, keyword);
+      const ranges = await manager.searchInFile(filePath, keyword);
       if (ranges.length === 0) return null;
       const lines = ranges.map((r) => `- ${filePath}:${r.startLine}-${r.endLine}`).join('\n');
       return `## ${filePath} 中 "${keyword}" 的匹配位置\n${lines}`;

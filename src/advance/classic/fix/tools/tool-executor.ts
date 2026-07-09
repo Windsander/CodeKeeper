@@ -97,13 +97,17 @@ export class ToolExecutor {
     }
 
     if (targetLine !== undefined) {
-      const focused = await this.worktreeManager.readFileWindow(resolved, {
-        file: resolved,
-        line: targetLine,
-        severity: 'MEDIUM',
-        message: '',
-        suggestion: '',
-      });
+      const focused = await this.worktreeManager.readFileWindow(
+        resolved,
+        {
+          file: resolved,
+          line: targetLine,
+          severity: 'MEDIUM',
+          message: '',
+          suggestion: '',
+        },
+        { maxLines: windowLines ?? 80 }
+      );
       return {
         content: focusedContextToString(focused),
         startLine: focused.snippetStartLine,

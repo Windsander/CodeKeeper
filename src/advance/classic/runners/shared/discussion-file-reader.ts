@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { WorktreeManager } from '../../worktree/worktree-manager.js';
-import type { FocusedContext } from '../fix/focused-context-builder.js';
-import { buildFocusedContext } from '../fix/focused-context-builder.js';
-import { buildFocusedContextStreamed } from '../fix/focused-context-streamer.js';
-import type { ReviewFinding } from '../provider/types.js';
+import type { FocusedContext } from '../../fix/focused-context-builder.js';
+import { buildFocusedContext } from '../../fix/focused-context-builder.js';
+import { buildFocusedContextStreamed } from '../../fix/focused-context-streamer.js';
+import type { ReviewFinding } from '../../provider/types.js';
 
 /**
  * 读取 discussion 关联文件的聚焦上下文。

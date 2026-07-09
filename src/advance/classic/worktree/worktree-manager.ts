@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
 import { logger } from '../../../core/logger.js';
-import { readWindow, readRange } from './streaming-file-reader.js';
+import { readRange } from './streaming-file-reader.js';
 import { buildFileOverview, type FileOverview } from './file-overview-builder.js';
 import { buildFocusedContextStreamed } from '../fix/focused-context-streamer.js';
 import type { FocusedContext } from '../fix/focused-context-builder.js';

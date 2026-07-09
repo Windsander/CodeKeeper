@@ -9,7 +9,6 @@
 import { LlmClient } from '../../llm/client.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
-import { MrFixAgent } from '../fix/mr-fix-agent.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';
 import { MaintainerActor } from '../fix/maintainer-actor.js';
 import { CognitiveEngine } from '../cognitive-engine.js';
@@ -19,12 +18,27 @@ import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
 import type { MrContext } from '../fix/cognitive-types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
+import { logger } from '../../../core/logger.js';
 import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
 import { formatAgentFooter, isMaintainerAuthoredNote, MAINTAINER_ROLE_LABEL } from './shared/review-utils.js';
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
+import { focusedContextToString } from '../fix/focused-context-streamer.js';
 import { isDiscussionPending } from './shared/maintainer-filter.js';
+
+function logMemoryUsage(label: string): void {
+  const usage = process.memoryUsage();
+  logger.info(
+    {
+      label,
+      rssMB: Math.round(usage.rss / 1024 / 1024),
+      heapUsedMB: Math.round(usage.heapUsed / 1024 / 1024),
+      heapTotalMB: Math.round(usage.heapTotal / 1024 / 1024),
+      externalMB: Math.round(usage.external / 1024 / 1024),
+    },
+    '内存使用快照'
+  );
+}
 import { BaseRoleRunner } from './base-role-runner.js';
-import { BatchFixPlanner } from '../fix/batch-fix-planner.js';
 
 /**
  * 构建 Maintainer 修复尝试会话 ID（按 MR 粒度）
@@ -59,7 +73,11 @@ export class MaintainerRunner extends BaseRoleRunner {
    */
   protected async runProject(project: Project, config: RoleConfig): Promise<void> {
     const maintainerConfig = config as MaintainerConfig;
-    const gitlabConfig = project.gitlab!;
+    if (!project.gitlab) {
+      logger.warn({ projectId: project.id }, '项目未配置 GitLab，跳过 Maintainer 轮询');
+      return;
+    }
+    const gitlabConfig = project.gitlab;
 
     const provider = new GitLabProvider(gitlabConfig);
 
@@ -80,8 +98,6 @@ export class MaintainerRunner extends BaseRoleRunner {
       rootPath: project.rootPath,
       remoteUrl: buildAuthenticatedRemoteUrl(gitlabConfig),
     });
-    const fixAgent = new MrFixAgent({ worktreeManager, llmClient: this.llmClient });
-    const actor = new MaintainerActor({ provider, fixAgent, maintainerName });
 
     const cognitiveDepth = maintainerConfig.cognitiveDepth ?? 'deep';
     const brainOptions = {
@@ -90,6 +106,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       soulContent: soul.content || undefined,
       projectContext,
       cognitiveDepth,
+      worktreeManager,
     };
 
     const state = loadState(project);
@@ -109,6 +126,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
 
     console.log(`[MaintainerRunner] 项目 ${project.name} 发现 ${mrs.length} 个 open MR`);
+    logMemoryUsage('开始处理项目前');
 
     // 默认跳过 draft；如果 filter 里显式配置了 Draft=true，则保留 draft MR
     const draftCondition = maintainerConfig.filter?.conditions.find((c) => c.field === 'draft');
@@ -145,6 +163,15 @@ export class MaintainerRunner extends BaseRoleRunner {
         ? new RecallPlanner({ llmClient: this.llmClient, memoryClient })
         : undefined;
       const brain = new MaintainerBrain({ ...brainOptions, memoryClient, recallPlanner });
+      const actor = new MaintainerActor({
+        provider,
+        llmClient: this.llmClient,
+        worktreeManager,
+        brain,
+        maintainerName,
+        memoryClient,
+        recallPlanner,
+      });
 
       console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
       discussions.forEach((d, idx) => {
@@ -177,13 +204,13 @@ export class MaintainerRunner extends BaseRoleRunner {
         console.log(
           `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
         );
+        logMemoryUsage(`处理 discussion ${discussion.id} 前`);
         await this.processDiscussion(
           mr,
           discussion,
           provider,
           brain,
           actor,
-          fixAgent,
           worktreeManager,
           maintainerName,
           state,
@@ -207,7 +234,6 @@ export class MaintainerRunner extends BaseRoleRunner {
     provider: GitLabProvider,
     brain: MaintainerBrain,
     actor: MaintainerActor,
-    fixAgent: MrFixAgent,
     worktreeManager: WorktreeManager,
     maintainerName: string,
     state: MrAgentState,
@@ -356,7 +382,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       const fileContent = await readDiscussionFileContent(
         worktreeManager,
         projectRootPath,
-        finding.file,
+        finding,
         mr.sourceBranch
       );
       if (fileContent === null) {
@@ -385,7 +411,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         await engine.reflect(
           {
             finding,
-            fileContent,
+            fileContent: focusedContextToString(fileContent),
             originalComment: firstNote.body,
             mrContext: mrContext ?? {
               iid: mr.iid,
@@ -422,20 +448,20 @@ export class MaintainerRunner extends BaseRoleRunner {
     }> = [];
 
     for (const finding of findings) {
-      const fileContent = await readDiscussionFileContent(
+      const focusedContent = await readDiscussionFileContent(
         worktreeManager,
         projectRootPath,
-        finding.file,
+        finding,
         mr.sourceBranch
       );
-      if (fileContent === null) {
+      if (focusedContent === null) {
         failedItems.push(`${finding.file}:${finding.line} — 读取文件失败`);
         continue;
       }
 
       const decision = await brain.decide({
         finding,
-        fileContent,
+        fileContent: focusedContent,
         originalComment: firstNote.body,
         mrIid: mr.iid,
         userId: firstNote.author,
@@ -461,36 +487,28 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       fixableItems.push({
         finding,
-        fileContent,
+        fileContent: focusedContextToString(focusedContent),
         scope: decision.scope,
         deleteFile: decision.deleteFile,
       });
     }
 
     if (fixableItems.length > 0) {
-      const fileContents: Record<string, string> = {};
-      for (const item of fixableItems) {
-        fileContents[item.finding.file] = item.fileContent;
-      }
-
       console.log(
-        `[MaintainerRunner] 对 discussion ${discussion.id} 的 ${fixableItems.length} 个 finding 进行批量修复规划`
+        `[MaintainerRunner] 对 discussion ${discussion.id} 的 ${fixableItems.length} 个 finding 进行批量修复`
       );
-      const planner = new BatchFixPlanner({ llmClient: this.llmClient });
-      const plan = await planner.plan({
-        findings: fixableItems.map((item) => item.finding),
-        fileContents,
-        originalComment: firstNote.body,
-      });
-      console.log(`[MaintainerRunner] 批量修复计划: ${plan.reason}，${plan.patches.length} 个 patch`);
 
-      const deletions = fixableItems
-        .filter((item) => item.deleteFile)
-        .map((item) => item.finding.file);
-
-      const batchResult = await fixAgent.executeBatchFix(plan, mr, { deletions });
+      const batchResult = await actor.executeBatchFix(
+        mr,
+        fixableItems.map((item) => ({
+          finding: item.finding,
+          fileContent: item.fileContent,
+          deleteFile: item.deleteFile,
+        })),
+        firstNote.body
+      );
       console.log(
-        `[MaintainerRunner] 批量修复结果: success=${batchResult.success}, applied=[${batchResult.appliedFiles.join(',')}], failed=[${batchResult.failedFiles.join(',')}]`
+        `[MaintainerRunner] 批量修复结果: success=${batchResult.success}, applied=[${batchResult.appliedFiles.join(',')}], deleted=[${batchResult.deletedFiles.join(',')}]`
       );
 
       if (cognitiveDepth === 'deep' && batchResult.success && memoryClient) {
@@ -515,7 +533,7 @@ export class MaintainerRunner extends BaseRoleRunner {
               recalledMemories: [],
             },
             'success',
-            plan.reason
+            batchResult.reason
           );
         }
       }
@@ -523,7 +541,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       for (const item of fixableItems) {
         const key = `${item.finding.file}:${item.finding.line}`;
         if (item.deleteFile) {
-          if (batchResult.success || batchResult.appliedFiles.length > 0 || batchResult.failedFiles.length === 0) {
+          if (batchResult.success || batchResult.deletedFiles.length > 0) {
             fixedItems.push(key);
           } else {
             failedItems.push(`${key} — ${batchResult.reason}`);
@@ -533,7 +551,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         if (batchResult.appliedFiles.includes(item.finding.file)) {
           fixedItems.push(key);
         } else {
-          failedItems.push(`${key} — ${batchResult.reason || 'patch 应用失败'}`);
+          failedItems.push(`${key} — ${batchResult.reason || '修复失败'}`);
         }
       }
     }
@@ -571,10 +589,19 @@ export class MaintainerRunner extends BaseRoleRunner {
       return;
     }
 
+    const syntheticFinding: ReviewFinding = {
+      severity: 'MEDIUM',
+      file: filePath,
+      line: 1,
+      message: '交互式回复上下文',
+      suggestion: '',
+      autoFixable: true,
+    };
+
     const fileContent = await readDiscussionFileContent(
       worktreeManager,
       projectRootPath,
-      filePath,
+      syntheticFinding,
       mr.sourceBranch
     );
     if (fileContent === null) {
@@ -597,7 +624,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     });
     console.log(`[MaintainerRunner] LLM 决策: action=${decision.action}`);
 
-    const syntheticFinding: ReviewFinding = {
+    const syntheticFindingForApply: ReviewFinding = {
       severity: 'MEDIUM',
       file: filePath,
       line: 1,
@@ -606,6 +633,6 @@ export class MaintainerRunner extends BaseRoleRunner {
       autoFixable: true,
     };
 
-    await actor.applyDecision(mr, discussion, syntheticFinding, decision, state);
+    await actor.applyDecision(mr, discussion, syntheticFindingForApply, decision, state);
   }
 }
