@@ -1,10 +1,17 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { WorktreeManager } from '../../worktree/worktree-manager.js';
 import type { FocusedContext } from '../../fix/focused-context-builder.js';
 import { buildFocusedContext } from '../../fix/focused-context-builder.js';
 import { buildFocusedContextStreamed } from '../../fix/focused-context-streamer.js';
 import type { ReviewFinding } from '../../provider/types.js';
+
+function logMemoryUsage(label: string): void {
+  const usage = process.memoryUsage();
+  console.log(
+    `[readDiscussionFileContent] ${label} 内存: rss=${Math.round(usage.rss / 1024 / 1024)}MB, heapUsed=${Math.round(usage.heapUsed / 1024 / 1024)}MB, heapTotal=${Math.round(usage.heapTotal / 1024 / 1024)}MB`
+  );
+}
 
 /**
  * 读取 discussion 关联文件的聚焦上下文。
@@ -20,9 +27,11 @@ export async function readDiscussionFileContent(
 
   try {
     console.log(`[readDiscussionFileContent] 阶段=ensure 准备 worktree`);
+    logMemoryUsage('ensure 前');
     await worktreeManager.ensureWorktree();
     console.log(`[readDiscussionFileContent] 阶段=checkout 切换到 ${sourceBranch}`);
     await worktreeManager.checkoutBranch(sourceBranch);
+    logMemoryUsage('checkout 后');
 
     console.log(`[readDiscussionFileContent] 阶段=resolve 解析 ${filePath}`);
     const resolvedPath = await worktreeManager.resolveFilePath(filePath);
@@ -34,8 +43,18 @@ export async function readDiscussionFileContent(
       console.log(`[readDiscussionFileContent] 解析结果: ${filePath} -> ${resolvedPath}`);
     }
 
+    const targetPath = join(worktreeManager.getWorktreePath(), resolvedPath);
+    try {
+      const stats = statSync(targetPath);
+      console.log(`[readDiscussionFileContent] 目标文件大小: ${stats.size} bytes`);
+    } catch {
+      // 忽略 stat 失败
+    }
+
     console.log(`[readDiscussionFileContent] 阶段=readWindow 读取 ${resolvedPath}:${finding.line}`);
-    return await worktreeManager.readFileWindow(resolvedPath, finding);
+    const result = await worktreeManager.readFileWindow(resolvedPath, finding);
+    logMemoryUsage('readWindow 后');
+    return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[MaintainerRunner] 从 worktree 读取 ${filePath} 失败: ${message}`);

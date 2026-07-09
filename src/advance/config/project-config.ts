@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join, normalize, resolve } from 'node:path';
+import { join, normalize, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
 
@@ -32,6 +32,22 @@ export const projectConfigSchema = z.object({
 export type ProjectConfig = z.infer<typeof projectConfigSchema>;
 
 /**
+ * 计算归档目录相对于项目根的排除模式
+ */
+function computeArchiveExcludePattern(projectRoot: string, archiveRoot: string): string | null {
+  const normalizedProject = normalize(resolve(projectRoot));
+  const normalizedArchive = normalize(resolve(archiveRoot));
+  if (!normalizedArchive.startsWith(normalizedProject)) {
+    return null;
+  }
+  const rel = relative(normalizedProject, normalizedArchive);
+  if (!rel || rel === '.') {
+    return '.codekeeper/**';
+  }
+  return `${rel.replace(/\\/g, '/')}/**`;
+}
+
+/**
  * 读取项目配置，若文件不存在则返回默认配置
  * @param projectRoot 项目根目录
  * @param archiveRoot 归档位置；未提供时使用 projectRoot/.codekeeper
@@ -39,15 +55,25 @@ export type ProjectConfig = z.infer<typeof projectConfigSchema>;
 export function loadProjectConfig(projectRoot: string, archiveRoot?: string): ProjectConfig {
   const configDir = archiveRoot ? normalize(resolve(archiveRoot)) : join(projectRoot, '.codekeeper');
   const configPath = join(configDir, 'config.yaml');
+  let config: ProjectConfig;
   try {
     const raw = readFileSync(configPath, 'utf-8');
     const parsed = YAML.parse(raw);
-    return projectConfigSchema.parse(parsed);
+    config = projectConfigSchema.parse(parsed);
   } catch (err) {
     // 仅对配置文件不存在的情况回退到默认配置；其他 IO 错误（如 EACCES）原样抛出
     if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
-      return projectConfigSchema.parse({});
+      config = projectConfigSchema.parse({});
+    } else {
+      throw err;
     }
-    throw err;
   }
+
+  // 自动把归档目录加入排除列表，避免文件监控和扫描重复处理归档输出
+  const archivePattern = computeArchiveExcludePattern(projectRoot, configDir);
+  if (archivePattern && !config.exclude.includes(archivePattern)) {
+    config.exclude.push(archivePattern);
+  }
+
+  return config;
 }

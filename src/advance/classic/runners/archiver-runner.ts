@@ -1,11 +1,12 @@
 import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { BaseRoleRunner } from './base-role-runner.js';
 import { ArchiverBrain } from '../archive/archiver-brain.js';
 import { ArchiverActor } from '../archive/archiver-actor.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import type { Project, RoleConfig } from '../../types.js';
 import type { LlmClient } from '../../llm/client.js';
+import { getArchiveRoot } from '../../types.js';
 
 export interface ArchiverRunnerOptions {
   /** LLM 客户端实例 */
@@ -62,7 +63,8 @@ export class ArchiverRunner extends BaseRoleRunner {
   protected async runProject(project: Project, _config: RoleConfig): Promise<void> {
     console.log(`[ArchiverRunner] 扫描项目 ${project.name}`);
 
-    const files = await this.listProjectFiles(project.rootPath);
+    const archiveRoot = getArchiveRoot(project);
+    const files = await this.listProjectFiles(project.rootPath, archiveRoot);
     if (files.length === 0) {
       console.log(`[ArchiverRunner] 项目 ${project.name} 无文件，跳过`);
       return;
@@ -93,15 +95,18 @@ export class ArchiverRunner extends BaseRoleRunner {
     await memoryClient.disconnect().catch(() => undefined);
   }
 
-  private async listProjectFiles(rootPath: string, subPath = ''): Promise<string[]> {
+  private async listProjectFiles(rootPath: string, archiveRoot: string, subPath = ''): Promise<string[]> {
     const dir = join(rootPath, subPath);
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
     const files: string[] = [];
     for (const entry of entries) {
       const relativePath = subPath ? `${subPath}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
+        const absolutePath = join(rootPath, relativePath);
         if (['node_modules', '.git', '.codekeeper', 'dist'].includes(entry.name)) continue;
-        files.push(...(await this.listProjectFiles(rootPath, relativePath)));
+        // 跳过归档目录及其子目录，避免归档输出被反复扫描
+        if (!relative(archiveRoot, absolutePath).startsWith('..')) continue;
+        files.push(...(await this.listProjectFiles(rootPath, archiveRoot, relativePath)));
       } else if (entry.isFile()) {
         files.push(relativePath);
       }
