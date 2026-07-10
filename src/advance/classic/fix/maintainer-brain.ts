@@ -16,6 +16,8 @@ import {
   formatThreadContext,
   type ThreadContext,
 } from '../utils/context-window.js';
+import { logMemorySnapshot } from '../utils/memory-snapshot.js';
+import { extractJsonText } from '../utils/json-extraction.js';
 
 /**
  * Maintainer 对单条 finding/discussion 可执行的最终动作
@@ -114,6 +116,9 @@ export class MaintainerBrain {
     }
 
     const recalledMemories = await this.recallMemories(userId, finding, originalComment);
+    logMemorySnapshot('MaintainerBrain.decide 召回记忆后');
+    console.log(`[MaintainerBrain] recalledMemories 数量=${recalledMemories.length}, 总字符=${recalledMemories.reduce((sum, m) => sum + m.length, 0)}`);
+
     const focusedContext =
       typeof fileContent === 'string'
         ? buildFocusedContext(fileContent, finding)
@@ -121,6 +126,7 @@ export class MaintainerBrain {
     const classification = await new IssueScopeClassifier({
       llmClient: this.options.llmClient,
     }).classify(finding, focusedContext);
+    logMemorySnapshot('MaintainerBrain.decide 范围分类后');
 
     if (classification.scope === 'needs-clarification') {
       return {
@@ -138,6 +144,7 @@ export class MaintainerBrain {
     const fileOverview = this.options.worktreeManager
       ? await this.safeGetFileOverview(finding.file)
       : undefined;
+    logMemorySnapshot('MaintainerBrain.decide 获取文件概览后');
 
     const engine = new CognitiveEngine({
       llmClient: this.options.llmClient,
@@ -146,6 +153,7 @@ export class MaintainerBrain {
       worktreeManager: this.options.worktreeManager,
     });
 
+    logMemorySnapshot('MaintainerBrain.decide 调用认知引擎前');
     const decision = await engine.decide(
       {
         finding,
@@ -169,6 +177,7 @@ export class MaintainerBrain {
       },
       this.options.cognitiveDepth ?? 'standard'
     );
+    logMemorySnapshot('MaintainerBrain.decide 认知引擎返回后');
 
     if (this.options.memoryClient) {
       await this.options.memoryClient.recordFixAttempt({
@@ -196,7 +205,21 @@ export class MaintainerBrain {
     }
 
     const prompt = this.buildParseFindingsPrompt(input);
-    const response = await this.options.llmClient.complete(prompt, '你是代码评审解析助手。请只输出 JSON。');
+    const response = await this.options.llmClient.completeJson(
+      prompt,
+      '你是代码评审解析助手。请只输出 JSON。',
+      {
+        type: 'object',
+        properties: {
+          findings: {
+            type: 'array',
+            items: { type: 'object', additionalProperties: true },
+          },
+        },
+        required: ['findings'],
+        additionalProperties: true,
+      }
+    );
     return this.extractFindingsFromResponse(response, input.position);
   }
 
@@ -288,7 +311,7 @@ export class MaintainerBrain {
       threadContext,
       params.maintainerName
     );
-    const raw = await this.options.llmClient.complete(prompt, this.systemPrompt());
+    const raw = await this.options.llmClient.completeJson(prompt, this.systemPrompt());
     return this.parseDecision(raw);
   }
 
@@ -319,7 +342,7 @@ export class MaintainerBrain {
       '注意：只输出 JSON，不要附加解释。',
     ].join('\n');
 
-    const raw = await this.options.llmClient.complete(
+    const raw = await this.options.llmClient.completeJson(
       prompt,
       '你是项目构建环境诊断助手，只输出 JSON。'
     );
@@ -341,7 +364,7 @@ export class MaintainerBrain {
       ? `该评论所在文件：${input.position.newPath}，行号：${input.position.newLine ?? '未知'}`
       : '评论中没有文件定位信息。';
 
-    return `请从以下代码评审评论中提取所有可修复的代码问题，输出 JSON 数组。
+    return `请从以下代码评审评论中提取所有可修复的代码问题，输出 JSON 对象。
 
 评论内容：
 ${input.body}
@@ -359,22 +382,24 @@ ${positionHint}
 3. 对文件的描述性说明（可能包含多个具体问题）。
 
 输出格式：
-[
-  {
-    "severity": "CRITICAL|HIGH|MEDIUM|LOW",
-    "file": "文件路径",
-    "line": 123,
-    "ruleId": "可选的规则编号",
-    "message": "问题描述",
-    "suggestion": "修改建议",
-    "autoFixable": true
-  }
-]
+{
+  "findings": [
+    {
+      "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+      "file": "文件路径",
+      "line": 123,
+      "ruleId": "可选的规则编号",
+      "message": "问题描述",
+      "suggestion": "修改建议",
+      "autoFixable": true
+    }
+  ]
+}
 
 注意：
 - 一条评论中可能包含多个问题，请全部提取。
-- 如果评论里没有需要修复的代码问题，返回空数组 []。
-- 如果评论是机器人签名、系统提示或 Maintainer 自己的回复，返回空数组 []。
+- 如果评论里没有需要修复的代码问题，findings 为空数组。
+- 如果评论是机器人签名、系统提示或 Maintainer 自己的回复，findings 为空数组。
 - 当评论中没有明确文件路径时，使用上面提供的文件和行号作为兜底。
 - 不要输出任何 JSON 以外的内容。`;
   }
@@ -586,9 +611,7 @@ ${positionHint}
   }
 
   private extractJsonFromMarkdown(text: string): string {
-    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch) return codeBlockMatch[1].trim();
-    return text.trim();
+    return extractJsonText(text);
   }
 
   private systemPrompt(): string {

@@ -264,7 +264,7 @@ function processEntry(
       if (projectUserSet) projectUserSet.add(ownerId);
     }
     if (!userTopics.has(ownerNodeId)) userTopics.set(ownerNodeId, new Set());
-    userTopics.get(ownerNodeId)!.add(topicId);
+    userTopics.get(ownerNodeId)?.add(topicId);
   }
 }
 
@@ -338,7 +338,7 @@ function processProfile(
     addEdge(edges, projectNodeId, profileNodeId, 'contains');
   }
   if (!profileProjects.has(userId)) profileProjects.set(userId, new Set());
-  profileProjects.get(userId)!.add(projectId);
+  profileProjects.get(userId)?.add(projectId);
 
   if (!nodes.has(ownerNodeId)) {
     nodes.set(ownerNodeId, { id: ownerNodeId, label: getOwnerLabel(userId, displayNames), group: ownerGroup });
@@ -404,7 +404,7 @@ function buildStats(
   const memoryGroups = ['episode', 'agent_case', 'agent_skill', 'profile'] as const;
   let totalMemories = 0;
   for (const node of nodes) {
-    if (memoryGroups.includes(node.group as any)) totalMemories++;
+    if (memoryGroups.some((group) => group === node.group)) totalMemories++;
   }
 
   // 按图表层的实际节点粒度统计每日增长，避免同一条记忆被多个 owner 查询重复计数

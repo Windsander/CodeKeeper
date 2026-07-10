@@ -10,6 +10,11 @@ export class ElectronIpcClient {
     { resolve: (value: unknown) => void; reject: (err: Error) => void }
   >();
   private pushListeners = new Set<(event: IpcPushEvent) => void>();
+  private disconnectListeners = new Set<() => void>();
+
+  isConnected(): boolean {
+    return this.socket !== null && !this.socket.destroyed;
+  }
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -17,10 +22,14 @@ export class ElectronIpcClient {
         resolve();
       });
       this.socket.on('data', (data) => this.handleData(data));
-      this.socket.on('error', reject);
-      this.socket.on('close', () => {
-        this.socket = null;
+      this.socket.on('error', (err) => {
+        // 连接阶段的错误交给 connect Promise
+        if (!this.isConnected()) {
+          reject(err);
+        }
+        this.handleDisconnect();
       });
+      this.socket.on('close', () => this.handleDisconnect());
     });
   }
 
@@ -29,22 +38,38 @@ export class ElectronIpcClient {
     this.socket = null;
   }
 
+  onDisconnect(listener: () => void): () => void {
+    this.disconnectListeners.add(listener);
+    return () => this.disconnectListeners.delete(listener);
+  }
+
   invoke(method: string, params?: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      if (!this.socket) {
+      const socket = this.socket;
+      if (!socket || socket.destroyed) {
         reject(new Error('IPC 未连接'));
         return;
       }
       const id = `${Date.now()}-${Math.random()}`;
       const request: IpcRequest = { id, method, params };
       this.pending.set(id, { resolve, reject });
-      this.socket.write(JSON.stringify(request) + '\n');
+      socket.write(JSON.stringify(request) + '\n');
     });
   }
 
   onPush(listener: (event: IpcPushEvent) => void): () => void {
     this.pushListeners.add(listener);
     return () => this.pushListeners.delete(listener);
+  }
+
+  private handleDisconnect(): void {
+    if (!this.socket) {
+      return;
+    }
+    this.socket = null;
+    for (const listener of this.disconnectListeners) {
+      listener();
+    }
   }
 
   private handleData(data: Buffer): void {

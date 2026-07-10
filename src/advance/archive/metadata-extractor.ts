@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs';
+import { statSync, openSync, closeSync, readSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 
@@ -76,13 +76,13 @@ function readHeader(filePath: string, maxBytes: number): string {
 
 function openFile(filePath: string): { read: (b: Buffer, o: number, l: number, p: number) => { bytesRead: number }; close: () => void } | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require('node:fs');
-    const fd = fs.openSync(filePath, 'r');
+    const fd = openSync(filePath, 'r');
     return {
-      read: (buffer: Buffer, offset: number, length: number, position: number) =>
-        fs.readSync(fd, buffer, { offset, length, position }),
-      close: () => fs.closeSync(fd),
+      read: (buffer: Buffer, offset: number, length: number, position: number) => {
+        const bytesRead = readSync(fd, buffer, { offset, length, position });
+        return { bytesRead };
+      },
+      close: () => closeSync(fd),
     };
   } catch {
     return null;

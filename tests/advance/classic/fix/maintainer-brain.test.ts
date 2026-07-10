@@ -121,7 +121,7 @@ describe('MaintainerBrain', () => {
 
   it('决策前召回用户偏好并拼入 prompt', async () => {
     const complete = vi.fn().mockResolvedValue('{"action":"fix","reason":"可以安全修复"}');
-    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallUserPreferences: vi.fn().mockResolvedValue(['该用户偏好显式类型注解']),
       recallProjectKnowledge: vi.fn().mockResolvedValue([]),
@@ -156,7 +156,7 @@ describe('MaintainerBrain', () => {
         })
       )
       .mockResolvedValueOnce('{"action":"fix","reason":"可以安全修复"}');
-    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallUserPreferences: vi.fn().mockResolvedValue([]),
       recallProjectKnowledge: vi.fn().mockResolvedValue([]),
@@ -275,7 +275,7 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
 
   it('prompt 中使用聚焦代码片段和 imports', async () => {
     const complete = vi.fn().mockResolvedValue('{"action":"fix","reason":"可以安全修复","analysis":"分析","consideredOptions":[],"reasoning":"理由","confidence":"medium"}');
-    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const brain = new MaintainerBrain({ llmClient, cognitiveDepth: 'fast' });
 
     const fileContent = `import { foo } from './foo';\n\nfunction target() {\n  const x = 1;\n  return x;\n}\n`;

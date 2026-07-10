@@ -117,7 +117,7 @@ describe('ReviewerBrain', () => {
         })
       )
       .mockResolvedValueOnce(JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] }));
-    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallForReview: vi.fn().mockResolvedValue(['项目使用 TypeScript 严格模式']),
     } as unknown as NonNullable<
@@ -140,7 +140,7 @@ describe('ReviewerBrain', () => {
 
   it('没有 recallPlanner 时 review 不查记忆', async () => {
     const complete = vi.fn().mockResolvedValue(JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] }));
-    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallForReview: vi.fn().mockResolvedValue([]),
     } as unknown as NonNullable<
@@ -170,7 +170,7 @@ describe('ReviewerBrain', () => {
       reason: '用户询问历史处理方式',
     });
     const complete = vi.fn().mockResolvedValueOnce(decisionResponse).mockResolvedValueOnce(replyResponse);
-    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallForReview: vi.fn().mockResolvedValue(['历史处理方式 A', '历史处理方式 B']),
     } as unknown as NonNullable<
@@ -221,7 +221,7 @@ describe('ReviewerBrain', () => {
       .mockResolvedValueOnce(summaryResponse)
       .mockResolvedValueOnce(decisionResponse)
       .mockResolvedValueOnce(replyResponse);
-    const llmClient = { complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const recallPlanner = new RecallPlanner({
       llmClient,
       memoryClient: {

@@ -3,6 +3,8 @@ import type { RecallPlanner } from './memory/recall-planner.js';
 import type { IMemoryClient } from './memory/types.js';
 import type { WorktreeManager } from './worktree/worktree-manager.js';
 import { buildFindingCaseKey } from './memory/finding-case-key.js';
+import { logMemorySnapshot } from './utils/memory-snapshot.js';
+import { extractJsonText } from './utils/json-extraction.js';
 import type {
   CognitiveContext,
   CognitiveDecision,
@@ -94,18 +96,27 @@ export class CognitiveEngine {
 
   private async decideFast(context: CognitiveContext): Promise<CognitiveDecision> {
     const prompt = this.buildFastPrompt(context);
-    const raw = await this.options.llmClient.complete(
+    console.log(`[CognitiveEngine] decideFast prompt 长度=${prompt.length}`);
+    const raw = await this.options.llmClient.completeJson(
       prompt,
       '你是谨慎的代码维护助手。请只输出 JSON。'
     );
+    console.log(`[CognitiveEngine] decideFast response 长度=${raw.length}`);
+    logMemorySnapshot('CognitiveEngine.decideFast LLM 返回后');
     return this.parseDecision(raw, context);
   }
 
   private async decideStandard(context: CognitiveContext): Promise<CognitiveDecision> {
+    logMemorySnapshot('CognitiveEngine.decideStandard 开始');
     const inquiry = await this.runInquiry(context);
+    logMemorySnapshot('CognitiveEngine.decideStandard inquiry 后');
     const enrichedContext = await this.enrichContext(context, inquiry);
+    logMemorySnapshot('CognitiveEngine.decideStandard enrichContext 后');
     const options = await this.generateOptions(enrichedContext);
-    return this.finalDecision(enrichedContext, options);
+    logMemorySnapshot('CognitiveEngine.decideStandard generateOptions 后');
+    const decision = await this.finalDecision(enrichedContext, options);
+    logMemorySnapshot('CognitiveEngine.decideStandard finalDecision 后');
+    return decision;
   }
 
   private async runInquiry(context: CognitiveContext): Promise<InquiryResult> {
@@ -154,7 +165,10 @@ export class CognitiveEngine {
       '}',
     ].join('\n');
 
-    const raw = await this.options.llmClient.complete(prompt, '你是上下文决策助手，只输出 JSON。');
+    console.log(`[CognitiveEngine] runInquiry prompt 长度=${prompt.length}`);
+    const raw = await this.options.llmClient.completeJson(prompt, '你是上下文决策助手，只输出 JSON。');
+    console.log(`[CognitiveEngine] runInquiry response 长度=${raw.length}`);
+    logMemorySnapshot('CognitiveEngine.runInquiry LLM 返回后');
     return this.parseInquiry(raw);
   }
 
@@ -165,6 +179,9 @@ export class CognitiveEngine {
     if (!inquiry.needsMoreContext || inquiry.queries.length === 0) {
       return context;
     }
+
+    logMemorySnapshot('CognitiveEngine.enrichContext 开始');
+    console.log(`[CognitiveEngine] enrichContext 查询数量=${inquiry.queries.length}`);
 
     const extraMemories: string[] = [...context.recalledMemories];
     const extraFileContexts: string[] = context.extraFileContexts ? [...context.extraFileContexts] : [];
@@ -177,6 +194,7 @@ export class CognitiveEngine {
           taskSummary: `${q.target} ${context.finding.message}`,
         });
         const memories = await this.options.recallPlanner.execute(plan);
+        console.log(`[CognitiveEngine] project_knowledge 召回结果数量=${memories.length}, 总字符=${memories.reduce((sum, m) => sum + m.length, 0)}`);
         extraMemories.push(...memories);
       }
       if (q.type === 'reviewer_preference' && this.options.memoryClient) {
@@ -184,19 +202,27 @@ export class CognitiveEngine {
           context.mrContext.iid.toString(),
           q.target
         );
+        console.log(`[CognitiveEngine] reviewer_preference 召回结果数量=${items.length}, 总字符=${items.reduce((sum, m) => sum + m.length, 0)}`);
         extraMemories.push(...items);
       }
       if (q.type === 'file_range' && this.options.worktreeManager) {
         const ctx = await this.readFileRangeContext(q.target);
-        if (ctx) extraFileContexts.push(ctx);
+        if (ctx) {
+          console.log(`[CognitiveEngine] file_range 上下文长度=${ctx.length}`);
+          extraFileContexts.push(ctx);
+        }
       }
       if (q.type === 'file_search' && this.options.worktreeManager) {
         const ctx = await this.searchFileContext(q.target);
-        if (ctx) extraFileContexts.push(ctx);
+        if (ctx) {
+          console.log(`[CognitiveEngine] file_search 上下文长度=${ctx.length}`);
+          extraFileContexts.push(ctx);
+        }
       }
       // file_history 由调用方在组装 CognitiveContext 时提供，或后续 Runner 补充
     }
 
+    logMemorySnapshot('CognitiveEngine.enrichContext 结束');
     return { ...context, recalledMemories: extraMemories, extraFileContexts };
   }
 
@@ -281,7 +307,10 @@ export class CognitiveEngine {
       '}',
     ].join('\n');
 
-    const raw = await this.options.llmClient.complete(prompt, '你是代码方案设计助手，只输出 JSON。');
+    console.log(`[CognitiveEngine] generateOptions prompt 长度=${prompt.length}`);
+    const raw = await this.options.llmClient.completeJson(prompt, '你是代码方案设计助手，只输出 JSON。');
+    console.log(`[CognitiveEngine] generateOptions response 长度=${raw.length}`);
+    logMemorySnapshot('CognitiveEngine.generateOptions LLM 返回后');
     return this.parseOptions(raw);
   }
 
@@ -329,7 +358,10 @@ export class CognitiveEngine {
       '}',
     ].join('\n');
 
-    const raw = await this.options.llmClient.complete(prompt, '你是代码维护决策助手，只输出 JSON。');
+    console.log(`[CognitiveEngine] finalDecision prompt 长度=${prompt.length}`);
+    const raw = await this.options.llmClient.completeJson(prompt, '你是代码维护决策助手，只输出 JSON。');
+    console.log(`[CognitiveEngine] finalDecision response 长度=${raw.length}`);
+    logMemorySnapshot('CognitiveEngine.finalDecision LLM 返回后');
     return this.parseDecision(raw, context);
   }
 
@@ -520,7 +552,6 @@ export class CognitiveEngine {
   }
 
   private extractJson(text: string): string {
-    const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    return match ? match[1].trim() : text.trim();
+    return extractJsonText(text);
   }
 }

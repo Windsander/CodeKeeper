@@ -4,7 +4,8 @@ import type { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
 
 function createMockLlm(response: string): LlmClient {
-  return { complete: vi.fn().mockResolvedValue(response) } as unknown as LlmClient;
+  const complete = vi.fn().mockResolvedValue(response);
+  return { complete, completeJson: complete } as unknown as LlmClient;
 }
 
 function createMemoryClient(): IMemoryClient {

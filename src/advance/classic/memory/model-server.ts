@@ -131,7 +131,10 @@ export class ModelServer {
 
   async start(): Promise<string> {
     if (this.process) {
-      return this.urlValue!;
+      if (!this.urlValue) {
+        throw new Error('模型服务 URL 尚未就绪');
+      }
+      return this.urlValue;
     }
 
     const port = await getFreePort();

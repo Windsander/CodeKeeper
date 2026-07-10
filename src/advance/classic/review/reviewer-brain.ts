@@ -8,6 +8,7 @@ import {
   type ThreadContext,
 } from '../utils/context-window.js';
 import { logger } from '../../../core/logger.js';
+import { extractJsonText } from '../utils/json-extraction.js';
 
 export interface ReviewerBrainOptions {
   /** LLM 客户端实例 */
@@ -46,7 +47,7 @@ export class ReviewerBrain {
 
     const recalledContext = await this.recallContext(mr, diffs);
     const prompt = this.buildReviewPrompt(mr, diffs, recalledContext);
-    const response = await this.options.llmClient.complete(
+    const response = await this.options.llmClient.completeJson(
       prompt,
       '你是严格的代码评审助手。请只输出 JSON。'
     );
@@ -70,7 +71,7 @@ export class ReviewerBrain {
     );
     const recalledContext = await this.recallContextForReply(input, threadContext);
     const prompt = this.buildReplyPrompt(input, threadContext, recalledContext);
-    const response = await this.options.llmClient.complete(
+    const response = await this.options.llmClient.completeJson(
       prompt,
       '你是严格的代码评审助手。请只输出 JSON。'
     );
@@ -267,11 +268,7 @@ ${this.options.rules}${soulSection}${contextSection}
   }
 
   private extractJsonFromMarkdown(text: string): string {
-    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch) {
-      return codeBlockMatch[1].trim();
-    }
-    return text.trim();
+    return extractJsonText(text);
   }
 
   private normalizeFindings(rawFindings: unknown[]): ReviewFinding[] {

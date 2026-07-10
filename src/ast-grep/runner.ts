@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { execSync } from 'child_process';
 import { logger } from '../core/logger.js';
 import type { AstGrepFinding } from '../types.js';
@@ -10,9 +11,8 @@ export function runAstGrep(configPath: string, filePaths: string[]): AstGrepFind
     return [];
   }
 
-  // Filter to only existing files
-  const fs = require('fs');
-  const existingFiles = filePaths.filter((f) => fs.existsSync(f));
+  // 只保留实际存在的文件
+  const existingFiles = filePaths.filter((f) => existsSync(f));
 
   if (existingFiles.length === 0) {
     return [];

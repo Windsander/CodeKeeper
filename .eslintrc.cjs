@@ -28,4 +28,12 @@ module.exports = {
     '@typescript-eslint/no-non-null-assertion': 'warn',
   },
   ignorePatterns: ['dist/', 'node_modules/'],
+  overrides: [
+    {
+      files: ['src/electron/**/*.ts', 'src/electron/**/*.tsx'],
+      parserOptions: {
+        project: './tsconfig.electron.json',
+      },
+    },
+  ],
 };

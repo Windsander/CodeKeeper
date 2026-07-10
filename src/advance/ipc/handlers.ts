@@ -79,6 +79,7 @@ export interface HandlerContext {
   getEverosStatus?: () => EverosStatus;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const handlers: Record<string, (ctx: HandlerContext, params: any) => Promise<unknown>> = {
   'project.register': async (ctx, params) => {
     const project = ctx.registry.register(params.rootPath, params.archiveRoot);
@@ -586,7 +587,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
     const owner = agentId
       ? { kind: 'agent' as const, agentId }
-      : { kind: 'user' as const, userId: userId! };
+      : { kind: 'user' as const, userId: userId as string };
 
     const result = await everosMemorySearch(ctx.everosUrl, {
       appId: 'codekeeper-advance',
@@ -700,7 +701,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
     // 第二轮：用发现的 users 拉取 user 侧数据
     for (const project of projects) {
-      const projectResult = getResults.get(project.id)!;
+      const projectResult = getResults.get(project.id);
+      if (!projectResult) {
+        continue;
+      }
       for (const userId of knownUsers) {
         const episodeRes = await safeEverosMemoryGet({
           everosUrl: ctx.everosUrl,

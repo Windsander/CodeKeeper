@@ -5,6 +5,7 @@ import { minimatch } from 'minimatch';
 import type { ProjectConfig } from './config/project-config';
 import type { WatchedEvent, WatchEventType } from './types';
 import { logger } from '../core/logger';
+import { logMemorySnapshot } from './classic/utils/memory-snapshot.js';
 
 export interface FileWatcherOptions {
   projectRoot: string;
@@ -34,10 +35,15 @@ export class FileWatcher {
 
   start(options: FileWatcherOptions): void {
     const { projectRoot, config, onEvent, onReady, onError } = options;
+    const normalizedProjectRoot = projectRoot.replace(/\\/g, '/');
 
     const isExcluded = (filePath: string): boolean => {
       const normalized = filePath.replace(/\\/g, '/');
-      return config.exclude.some((pattern) => minimatch(normalized, pattern, { dot: true }));
+      // chokidar 在某些场景下会传绝对路径，排除模式又是相对路径，需要先换算成相对路径
+      const rel = normalized.startsWith(normalizedProjectRoot)
+        ? normalized.slice(normalizedProjectRoot.length).replace(/^\//, '')
+        : normalized;
+      return config.exclude.some((pattern) => minimatch(rel, pattern, { dot: true }));
     };
 
     const usePolling = isWsl();
@@ -57,11 +63,19 @@ export class FileWatcher {
 
     logger.info({ projectRoot }, '文件监控已启动');
 
+    let eventCount = 0;
+    const logEventMemoryThreshold = 500 * 1024 * 1024;
+
     const emit = (type: WatchEventType, filePath: string) => {
-      const absolutePath = join(projectRoot, filePath).replace(/\\/g, '/');
-      if (isExcluded(absolutePath)) {
-        logger.debug({ filePath: absolutePath }, '忽略被排除的文件事件');
+      // filePath 来自 chokidar，此时是相对于 projectRoot 的路径
+      if (isExcluded(filePath)) {
+        logger.debug({ filePath }, '忽略被排除的文件事件');
         return;
+      }
+      const absolutePath = join(projectRoot, filePath).replace(/\\/g, '/');
+      eventCount++;
+      if (eventCount % 50 === 0 || process.memoryUsage().heapUsed > logEventMemoryThreshold) {
+        logMemorySnapshot(`FileWatcher 已处理 ${eventCount} 个事件`);
       }
       logger.info({ type, filePath: absolutePath }, '收到文件变更事件');
       onEvent({

@@ -140,7 +140,9 @@ export class MemoryClient implements IMemoryClient {
     if (!text) return [];
     try {
       const parsed = JSON.parse(text) as { results?: string[] };
-      return Array.isArray(parsed.results) ? parsed.results : [];
+      const items = Array.isArray(parsed.results) ? parsed.results : [];
+      console.log(`[MemoryClient] 召回结果解析 text 长度=${text.length}, 条目数=${items.length}, 总字符=${items.reduce((sum, m) => sum + m.length, 0)}`);
+      return items;
     } catch {
       return [];
     }

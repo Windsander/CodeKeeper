@@ -113,7 +113,10 @@ function parseEnvProjects(): ProjectConfig[] {
     if (!projectKeys.has(id)) {
       projectKeys.set(id, {});
     }
-    projectKeys.get(id)![field] = value;
+    const projectEntry = projectKeys.get(id);
+    if (projectEntry) {
+      projectEntry[field] = value;
+    }
   }
 
   const projects: ProjectConfig[] = [];

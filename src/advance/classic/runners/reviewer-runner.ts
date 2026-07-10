@@ -22,6 +22,7 @@ import {
 import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
 import type { MergeRequest, MrDiff, ReviewFinding, Discussion, ReviewerComment } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
+import { logger } from '../../../core/logger.js';
 
 /**
  * 构建 Reviewer 会话 ID（按 MR 粒度）
@@ -55,7 +56,11 @@ export class ReviewerRunner extends BaseRoleRunner {
    * 对单个项目执行 MR 评审轮询
    */
   protected async runProject(project: Project, config: RoleConfig): Promise<void> {
-    const provider = new GitLabProvider(project.gitlab!);
+    if (!project.gitlab) {
+      logger.warn({ projectId: project.id }, '项目未配置 GitLab，跳过 Reviewer 轮询');
+      return;
+    }
+    const provider = new GitLabProvider(project.gitlab);
     const state = loadState(project);
 
     const { soul, projectContext } = this.loadRoleContext(project);

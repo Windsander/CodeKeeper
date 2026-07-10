@@ -1,6 +1,8 @@
 import { logger } from '../../../core/logger.js';
 import type { LlmClient } from '../../llm/client.js';
 import type { IMemoryClient } from './types.js';
+import { logMemorySnapshot } from '../utils/memory-snapshot.js';
+import { extractJsonText } from '../utils/json-extraction.js';
 
 /**
  * 可召回的记忆类型
@@ -90,7 +92,7 @@ export class RecallPlanner {
    */
   async plan(input: RecallDecisionInput): Promise<RecallPlan> {
     const prompt = this.buildPrompt(input);
-    const response = await this.llmClient.complete(
+    const response = await this.llmClient.completeJson(
       prompt,
       '你是记忆查询决策助手，只输出 JSON。'
     );
@@ -125,6 +127,7 @@ export class RecallPlanner {
       { role: plan.queries[0]?.type, count: validQueries.length },
       'RecallPlanner 执行召回查询'
     );
+    logMemorySnapshot('RecallPlanner.execute 开始');
 
     const results = await Promise.all(
       validQueries.map(async (q) => {
@@ -139,7 +142,10 @@ export class RecallPlanner {
       })
     );
 
-    return results.flat();
+    const flat = results.flat();
+    console.log(`[RecallPlanner] 召回总条目=${flat.length}, 总字符=${flat.reduce((sum, m) => sum + m.length, 0)}`);
+    logMemorySnapshot('RecallPlanner.execute 结束');
+    return flat;
   }
 
   private async executeQuery(query: RecallQuery): Promise<string[]> {
@@ -151,7 +157,10 @@ export class RecallPlanner {
       case 'project_knowledge':
         return this.memoryClient.recallProjectKnowledge(query.query);
       case 'user_preferences':
-        return this.memoryClient.recallUserPreferences(query.userId!, query.query);
+        if (!query.userId) {
+          return [];
+        }
+        return this.memoryClient.recallUserPreferences(query.userId, query.query);
       default:
         return [];
     }
@@ -232,10 +241,6 @@ export class RecallPlanner {
   }
 
   private extractJsonFromMarkdown(text: string): string {
-    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch) {
-      return codeBlockMatch[1].trim();
-    }
-    return text.trim();
+    return extractJsonText(text);
   }
 }

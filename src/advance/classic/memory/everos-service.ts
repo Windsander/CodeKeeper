@@ -20,6 +20,16 @@ export interface EverOSServiceOptions {
 /**
  * 管理 EverOS 本地服务的生命周期
  */
+/**
+ * 追加文本到滚动缓冲区，超过上限时保留最近部分，避免子进程海量输出撑爆主进程堆内存。
+ */
+function appendCapped(buffer: string, text: string, maxBytes: number): string {
+  if (buffer.length + text.length <= maxBytes) {
+    return buffer + text;
+  }
+  return (buffer + text).slice(-maxBytes);
+}
+
 export class EverOSService {
   private process: ChildProcess | null = null;
   private readonly submodulePath: string;
@@ -43,7 +53,10 @@ export class EverOSService {
    */
   async start(): Promise<string> {
     if (this.process) {
-      return this.everosUrl!;
+      if (!this.everosUrl) {
+        throw new Error('EverOS URL 尚未就绪');
+      }
+      return this.everosUrl;
     }
 
     await this.ensureVenv();
@@ -65,30 +78,62 @@ export class EverOSService {
       });
       this.process = child;
 
+      const maxOutputChars = 100 * 1024;
+      const maxLineBufferChars = 10 * 1024;
       let stdout = '';
       let stderr = '';
       let stdoutLineBuffer = '';
       let stderrLineBuffer = '';
+      let urlScanBuffer = '';
+      let stdoutCapped = false;
+      let stderrCapped = false;
 
       child.stdout?.on('data', (chunk) => {
         const text = chunk.toString();
-        stdout += text;
+        stdout = appendCapped(stdout, text, maxOutputChars);
+        if (!stdoutCapped && stdout.length >= maxOutputChars) {
+          stdoutCapped = true;
+          logger.warn('[EverOS] stdout 输出超过 100KB，已滚动截断');
+        }
         stdoutLineBuffer = this.flushLogLines(stdoutLineBuffer + text, (line) => {
           if (this.shouldLogStdoutLine(line)) {
             logger.info({ everos: line }, '[EverOS]');
           }
         });
-        this.tryParseUrl(stdout, resolve);
+        if (stdoutLineBuffer.length > maxLineBufferChars) {
+          logger.warn(`[EverOS] stdout 行缓冲超过 ${maxLineBufferChars} 字符，强制刷新并截断`);
+          this.flushLogLines(stdoutLineBuffer + '\n', (line) => {
+            if (this.shouldLogStdoutLine(line)) {
+              logger.info({ everos: line }, '[EverOS]');
+            }
+          });
+          stdoutLineBuffer = '';
+        }
+        urlScanBuffer = appendCapped(urlScanBuffer, text, 1024);
+        this.tryParseUrl(urlScanBuffer, resolve);
       });
 
       child.stderr?.on('data', (chunk) => {
         const text = chunk.toString();
-        stderr += text;
+        stderr = appendCapped(stderr, text, maxOutputChars);
+        if (!stderrCapped && stderr.length >= maxOutputChars) {
+          stderrCapped = true;
+          logger.warn('[EverOS] stderr 输出超过 100KB，已滚动截断');
+        }
         stderrLineBuffer = this.flushLogLines(stderrLineBuffer + text, (line) => {
           if (this.shouldLogStderrLine(line)) {
             logger.warn({ everos: line }, '[EverOS]');
           }
         });
+        if (stderrLineBuffer.length > maxLineBufferChars) {
+          logger.warn(`[EverOS] stderr 行缓冲超过 ${maxLineBufferChars} 字符，强制刷新并截断`);
+          this.flushLogLines(stderrLineBuffer + '\n', (line) => {
+            if (this.shouldLogStderrLine(line)) {
+              logger.warn({ everos: line }, '[EverOS]');
+            }
+          });
+          stderrLineBuffer = '';
+        }
       });
 
       const flushRemainingLogs = () => {

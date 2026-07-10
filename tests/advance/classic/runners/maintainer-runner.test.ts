@@ -4,7 +4,6 @@ import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { MergeRequest, Discussion, ReviewFinding } from '../../../../src/advance/classic/provider/types.js';
 import type { MaintainerBrain } from '../../../../src/advance/classic/fix/maintainer-brain.js';
 import type { MaintainerActor } from '../../../../src/advance/classic/fix/maintainer-actor.js';
-import type { MrFixAgent } from '../../../../src/advance/classic/fix/mr-fix-agent.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type { MrAgentState } from '../../../../src/advance/classic/runners/shared/state-utils.js';
 
@@ -84,6 +83,16 @@ describe('MaintainerRunner', () => {
       checkoutBranch: vi.fn().mockResolvedValue(undefined),
       prepareEnvironment: vi.fn().mockResolvedValue(undefined),
       resolveFilePath: vi.fn().mockResolvedValue('src/index.ts'),
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
+      readFileWindow: vi.fn().mockResolvedValue({
+        imports: '',
+        snippet: 'const a = 1;\nconst b = 2;',
+        snippetStartLine: 1,
+        snippetEndLine: 2,
+        totalLines: 2,
+        truncated: false,
+        targetLine: 2,
+      }),
       readFile: vi.fn().mockReturnValue('const a = 1;\nconst b = 2;\n'),
     } as unknown as WorktreeManager;
 
@@ -98,7 +107,6 @@ describe('MaintainerRunner', () => {
       provider as unknown as import('../../../../src/advance/classic/provider/gitlab-provider.js').GitLabProvider,
       brain,
       actor,
-      {} as unknown as MrFixAgent,
       worktreeManager,
       'CodeKeeper Maintainer',
       state,

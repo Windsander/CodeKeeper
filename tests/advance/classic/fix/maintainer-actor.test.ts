@@ -1,9 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MaintainerActor } from '../../../../src/advance/classic/fix/maintainer-actor.js';
+import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../../../../src/advance/classic/provider/types.js';
-import type { MrFixAgent } from '../../../../src/advance/classic/fix/mr-fix-agent.js';
-import type { CognitiveDecision } from '../../../../src/advance/classic/fix/maintainer-brain.js';
+import type { MaintainerBrain, CognitiveDecision } from '../../../../src/advance/classic/fix/maintainer-brain.js';
+import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type { MrAgentState } from '../../../../src/advance/classic/runners/shared/state-utils.js';
+
+function createMockBrain(overrides: Partial<MaintainerBrain> = {}) {
+  return {
+    decideEnvironmentPrep: vi.fn().mockResolvedValue({ reason: '无需环境准备' }),
+    ...overrides,
+  } as unknown as MaintainerBrain;
+}
 
 const mockMR: MergeRequest = {
   iid: 1,
@@ -42,11 +50,32 @@ function createMockProvider() {
   } as unknown as import('../../../../src/advance/classic/provider/gitlab-provider.js').GitLabProvider;
 }
 
-function createMockFixAgent(overrides: Partial<MrFixAgent> = {}) {
+function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): WorktreeManager {
   return {
-    executeFix: vi.fn().mockResolvedValue({ success: true, reason: '已推送' }),
+    ensureWorktree: vi.fn().mockResolvedValue(undefined),
+    checkoutBranch: vi.fn().mockResolvedValue(undefined),
+    prepareEnvironment: vi.fn().mockResolvedValue(undefined),
+    resolveFilePath: vi.fn().mockImplementation(async (p: string) => p),
+    readFile: vi.fn().mockReturnValue('const unused = 1;\n'),
+    writeFile: vi.fn().mockReturnValue(undefined),
+    commitAndPush: vi.fn().mockResolvedValue(undefined),
+    validate: vi.fn().mockResolvedValue({ lint: true, typecheck: true }),
+    removeFile: vi.fn().mockResolvedValue(undefined),
+    applyPatch: vi.fn().mockResolvedValue(false),
+    runScript: vi.fn().mockResolvedValue({ success: true }),
     ...overrides,
-  } as unknown as MrFixAgent;
+  } as unknown as WorktreeManager;
+}
+
+function createMockLlmClient(toolResponses: Array<{
+  content?: string;
+  toolCalls: { id: string; name: string; input: Record<string, unknown> }[];
+  stopReason?: string;
+}>): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: { toolResponses },
+  });
 }
 
 function createState(): MrAgentState {
@@ -57,10 +86,41 @@ function createState(): MrAgentState {
 }
 
 describe('MaintainerActor', () => {
-  it('fix 成功后评论包含 reasoning', async () => {
+  it('fix 成功后提交、resolve 并评论包含 reasoning', async () => {
     const provider = createMockProvider();
-    const fixAgent = createMockFixAgent();
-    const actor = new MaintainerActor({ provider, fixAgent, maintainerName: 'CodeKeeper Maintainer' });
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain();
+
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }],
+      },
+      {
+        toolCalls: [
+          { id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: '' } },
+        ],
+      },
+      {
+        toolCalls: [{ id: '3', name: 'validate', input: {} }],
+      },
+      {
+        toolCalls: [
+          {
+            id: '4',
+            name: 'finish',
+            input: { success: true, reason: '已删除未使用变量并校验通过' },
+          },
+        ],
+      },
+    ]);
+
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'CodeKeeper Maintainer',
+    });
 
     const decision: CognitiveDecision = {
       action: 'fix',
@@ -74,6 +134,12 @@ describe('MaintainerActor', () => {
 
     await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
 
+    expect(worktreeManager.commitAndPush).toHaveBeenCalledWith(
+      'feature/test',
+      expect.stringContaining('[CodeKeeper] fix'),
+      { setUpstream: false }
+    );
+    expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
     expect(provider.addDiscussionNote).toHaveBeenCalledWith(
       mockMR.iid,
       mockDiscussion.id,
@@ -84,15 +150,32 @@ describe('MaintainerActor', () => {
       mockDiscussion.id,
       expect.stringContaining('删除更干净')
     );
-    expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
   });
 
-  it('fix 失败时转为 ask', async () => {
+  it('fix 工具循环失败时转为 ask，不提交', async () => {
     const provider = createMockProvider();
-    const fixAgent = createMockFixAgent({
-      executeFix: vi.fn().mockResolvedValue({ success: false, reason: 'patch 应用失败' }),
-    } as Partial<MrFixAgent>);
-    const actor = new MaintainerActor({ provider, fixAgent, maintainerName: 'CodeKeeper Maintainer' });
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain();
+
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          {
+            id: '1',
+            name: 'finish',
+            input: { success: false, reason: '无法安全删除该变量' },
+          },
+        ],
+      },
+    ]);
+
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'CodeKeeper Maintainer',
+    });
 
     const decision: CognitiveDecision = {
       action: 'fix',
@@ -106,6 +189,52 @@ describe('MaintainerActor', () => {
 
     await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
 
+    expect(worktreeManager.commitAndPush).not.toHaveBeenCalled();
+    expect(provider.addDiscussionNote).toHaveBeenCalledWith(
+      mockMR.iid,
+      mockDiscussion.id,
+      expect.stringContaining('未成功')
+    );
+  });
+
+  it('finish 成功但未 validate 时不提交并转 ask', async () => {
+    const provider = createMockProvider();
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain();
+
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          {
+            id: '1',
+            name: 'finish',
+            input: { success: true, reason: '我觉得可以了' },
+          },
+        ],
+      },
+    ]);
+
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'CodeKeeper Maintainer',
+    });
+
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '尝试修复',
+      fixDescription: '删除变量',
+      analysis: '',
+      consideredOptions: [],
+      reasoning: '',
+      confidence: 'medium',
+    };
+
+    await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
+
+    expect(worktreeManager.commitAndPush).not.toHaveBeenCalled();
     expect(provider.addDiscussionNote).toHaveBeenCalledWith(
       mockMR.iid,
       mockDiscussion.id,

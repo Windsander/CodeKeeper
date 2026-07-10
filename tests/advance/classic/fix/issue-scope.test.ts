@@ -92,9 +92,11 @@ describe('IssueScopeClassifier', () => {
   });
 
   it('启用 LLM 二次确认时按 mock 返回', async () => {
+    const complete = async () =>
+      JSON.stringify({ scope: 'cross-file', reason: 'LLM 判断需要改多个调用点' });
     const llmClient = {
-      complete: async () =>
-        JSON.stringify({ scope: 'cross-file', reason: 'LLM 判断需要改多个调用点' }),
+      complete,
+      completeJson: complete,
     } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
 
     const classifier = new IssueScopeClassifier({ llmClient, enableLlmConfirm: true });
@@ -103,8 +105,10 @@ describe('IssueScopeClassifier', () => {
   });
 
   it('LLM 返回非法 JSON 时回退到 local', async () => {
+    const complete = async () => '不是 JSON';
     const llmClient = {
-      complete: async () => '不是 JSON',
+      complete,
+      completeJson: complete,
     } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
 
     const classifier = new IssueScopeClassifier({ llmClient, enableLlmConfirm: true });

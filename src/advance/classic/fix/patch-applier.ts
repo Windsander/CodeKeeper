@@ -64,6 +64,24 @@ export function parsePatch(unifiedDiff: string): FilePatch[] {
       continue;
     }
 
+    // 兼容 LLM 省略 diff --git 头、直接输出 --- / +++ / @@ 的情况
+    if (line.startsWith('--- ')) {
+      if (current && current.hunks.length > 0) {
+        patches.push(current);
+        current = null;
+      }
+      if (!current) {
+        current = {
+          oldPath: extractPath(line.slice(4).trim()),
+          newPath: extractPath(line.slice(4).trim()),
+          hunks: [],
+        };
+      } else {
+        current.oldPath = extractPath(line.slice(4).trim());
+      }
+      continue;
+    }
+
     if (!current) continue;
 
     if (line.startsWith('--- ')) {

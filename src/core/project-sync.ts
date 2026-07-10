@@ -37,7 +37,7 @@ export class ProjectSync {
     try {
       const diff = await this.git.diff([`${targetRef}...${sourceRef}`]);
       return diff;
-    } catch (err) {
+    } catch {
       // Fallback: try two-dot diff
       logger.warn(`[${this.project.id}] Three-dot diff failed, trying two-dot`);
       return await this.git.diff([`${targetRef}..${sourceRef}`]);
@@ -66,7 +66,7 @@ export class ProjectSync {
 
     try {
       await this.git.checkoutBranch(branchName, `origin/${fromBranch}`);
-    } catch (err) {
+    } catch {
       // Branch might already exist locally
       logger.warn(`[${this.project.id}] checkoutBranch failed, trying checkout existing`);
       await this.git.checkout(branchName);

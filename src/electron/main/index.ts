@@ -39,6 +39,11 @@ app.whenReady().then(async () => {
     mainWindow?.webContents.send('ipc-push', event);
   });
 
+  client.onDisconnect(() => {
+    connected = false;
+    console.warn('守护进程连接已断开');
+  });
+
   ipcMain.handle('ipc-invoke', async (_event, method: string, params?: unknown) => {
     // 主题相关调用由主进程本地处理，不转发给守护进程
     if (method === 'theme.get') {
@@ -50,7 +55,7 @@ app.whenReady().then(async () => {
       return { success: true };
     }
 
-    if (!connected) {
+    if (!connected || !client.isConnected()) {
       throw new Error('守护进程未连接');
     }
     return client.invoke(method, params);

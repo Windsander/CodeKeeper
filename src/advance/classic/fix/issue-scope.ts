@@ -8,6 +8,7 @@
 import type { LlmClient } from '../../llm/client.js';
 import type { ReviewFinding } from '../provider/types.js';
 import type { FocusedContext } from './focused-context-builder.js';
+import { extractJsonText } from '../utils/json-extraction.js';
 
 export type IssueScope = 'trivial' | 'local' | 'cross-file' | 'needs-clarification';
 
@@ -152,14 +153,14 @@ ${context.snippet}
   "reason": "一句话说明"
 }`;
 
-    const raw = await llmClient.complete(
+    const raw = await llmClient.completeJson(
       prompt,
       '你是代码修改范围判断助手，只输出 JSON。'
     );
 
     try {
       const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-      const cleaned = jsonMatch ? jsonMatch[1].trim() : raw.trim();
+      const cleaned = jsonMatch ? jsonMatch[1].trim() : extractJsonText(raw);
       const parsed = JSON.parse(cleaned) as { scope?: string; reason?: string };
       const scope = this.normalizeScope(parsed.scope);
       return {

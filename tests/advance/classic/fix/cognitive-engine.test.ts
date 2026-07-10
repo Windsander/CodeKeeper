@@ -104,10 +104,12 @@ describe('CognitiveEngine', () => {
       }),
     ];
 
+    const complete = vi.fn().mockImplementation(async () => {
+      return responses[callCount++] ?? '{}';
+    });
     const llmClient = {
-      complete: vi.fn().mockImplementation(async () => {
-        return responses[callCount++] ?? '{}';
-      }),
+      complete,
+      completeJson: complete,
     } as unknown as LlmClient;
 
     const recallPlanner = {

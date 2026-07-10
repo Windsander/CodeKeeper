@@ -64,6 +64,38 @@ diff --git a/src/b.ts b/src/b.ts
     const added = patches[0].hunks[0].lines.find((l) => l.type === 'add');
     expect(added?.content).toBe('two.point five');
   });
+
+  it('解析省略 diff --git 头的补丁', () => {
+    const diff = `--- a/src/a.ts
++++ b/src/a.ts
+@@ -2,1 +2,1 @@
+-old
++new
+`;
+    const patches = parsePatch(diff);
+    expect(patches).toHaveLength(1);
+    expect(patches[0].oldPath).toBe('src/a.ts');
+    expect(patches[0].newPath).toBe('src/a.ts');
+    expect(patches[0].hunks).toHaveLength(1);
+  });
+
+  it('解析多文件省略 diff --git 头的补丁', () => {
+    const diff = `--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,1 +1,1 @@
+-a
++b
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1,1 +1,1 @@
+-x
++y
+`;
+    const patches = parsePatch(diff);
+    expect(patches).toHaveLength(2);
+    expect(patches[0].oldPath).toBe('src/a.ts');
+    expect(patches[1].oldPath).toBe('src/b.ts');
+  });
 });
 
 describe('applyPatch', () => {
