@@ -200,7 +200,6 @@ export interface EverOSMcpServerOptions {
  * 将 EverOS 能力包装为语义化 MCP Server
  */
 export class EverOSMcpServer {
-  private server: Server;
   private httpServer: HttpServer | null = null;
   private readonly everosUrl: string;
   private readonly port: number;
@@ -216,36 +215,47 @@ export class EverOSMcpServer {
     this.port = options.port ?? 0;
     this.queue = options.queue;
     this.onMemoryOwners = options.onMemoryOwners;
-
-    this.server = new Server(
-      {
-        name: 'codekeeper-everos-mcp',
-        version: '0.1.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
-
-    this.registerTools();
   }
 
   /**
    * 启动 HTTP SSE 服务
+   *
+   * 每个 SSE 连接创建独立的 MCP Server 实例，避免 SDK 的 "Already connected to a transport" 限制。
    */
   async start(): Promise<string> {
     return new Promise((resolve) => {
       const transportMap = new Map<string, SSEServerTransport>();
+      const serverMap = new Map<string, Server>();
+
       this.httpServer = http.createServer(async (req, res) => {
         const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
 
         if (url.pathname === '/sse') {
           const transport = new SSEServerTransport('/messages', res);
-          transportMap.set(transport.sessionId, transport);
-          res.on('close', () => transportMap.delete(transport.sessionId));
-          await this.server.connect(transport);
+          const sessionId = transport.sessionId;
+          transportMap.set(sessionId, transport);
+
+          const server = new Server(
+            { name: 'codekeeper-everos-mcp', version: '0.1.0' },
+            { capabilities: { tools: {} } }
+          );
+          this.registerTools(server);
+          serverMap.set(sessionId, server);
+
+          res.on('close', async () => {
+            transportMap.delete(sessionId);
+            const s = serverMap.get(sessionId);
+            if (s) {
+              try {
+                await s.close();
+              } catch (err) {
+                logger.warn({ err, sessionId }, '关闭 EverOS MCP server 会话失败');
+              }
+              serverMap.delete(sessionId);
+            }
+          });
+
+          await server.connect(transport);
           return;
         }
 
@@ -282,8 +292,8 @@ export class EverOSMcpServer {
     });
   }
 
-  private registerTools(): void {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  private registerTools(server: Server): void {
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
           name: 'record_review',
@@ -478,7 +488,7 @@ export class EverOSMcpServer {
       ],
     }));
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
       logger.info({ tool: name }, '调用 MCP tool');
 
