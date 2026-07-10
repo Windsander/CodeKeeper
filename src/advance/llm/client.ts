@@ -1,8 +1,26 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { logger } from '../../core/logger';
 import { logMemorySnapshot } from '../classic/utils/memory-snapshot.js';
+import { extractJsonText } from '../classic/utils/json-extraction.js';
 
 import type { ToolCall, ToolDefinition, LlmMessage, CompleteWithToolsOptions, CompleteWithToolsResult, ToolResult } from './tool-types.js';
+
+/**
+ * 决策工具调用未按约定返回时抛出的异常。
+ */
+export class LlmDecisionError extends Error {
+  constructor(
+    message: string,
+    public readonly reason:
+      | 'no_tool_calls'
+      | 'multiple_tool_calls'
+      | 'unexpected_tool_name'
+      | 'invalid_input'
+      | 'provider_error'
+  ) {
+    super(message);
+  }
+}
 
 /** 单轮 complete 响应允许的最大字符数，防止异常大响应撑爆堆内存 */
 const MAX_COMPLETE_RESPONSE_CHARS = 200_000;
@@ -117,6 +135,58 @@ export class LlmClient {
       }
     }
     throw new Error(`[LlmClient:${this.provider}] 重试后仍失败`);
+  }
+
+  /**
+   * 强制模型从给定的决策工具中选择一个并调用。
+   * 返回解析后的 ToolCall，不满足条件时抛 LlmDecisionError。
+   */
+  async completeDecision(
+    tools: ToolDefinition[],
+    prompt: string,
+    system?: string
+  ): Promise<ToolCall> {
+    if (this.mock) {
+      if (this.mock.error) {
+        throw this.mock.error;
+      }
+      if (this.mock.toolResponses && this.mock.toolResponses.length > 0) {
+        const idx = this.mockCallIndex % this.mock.toolResponses.length;
+        this.mockCallIndex++;
+        const r = this.mock.toolResponses[idx];
+        const valid = r.toolCalls.filter((tc) => tools.some((t) => t.name === tc.name));
+        if (valid.length === 1) {
+          return valid[0];
+        }
+        if (valid.length === 0) {
+          throw new LlmDecisionError('mock 未返回允许的决策工具', 'no_tool_calls');
+        }
+        throw new LlmDecisionError(`mock 返回了 ${valid.length} 个允许工具，期望 1 个`, 'multiple_tool_calls');
+      }
+      throw new LlmDecisionError('mock 模式下 completeDecision 需要配置 mock.toolResponses', 'no_tool_calls');
+    }
+
+    const result = await this.completeWithTools(
+      [{ role: 'user', content: prompt }],
+      tools,
+      { system, toolChoice: { type: 'any' }, maxTokens: this.maxTokens }
+    );
+
+    if (result.toolCalls.length === 0) {
+      throw new LlmDecisionError('LLM 未返回任何工具调用', 'no_tool_calls');
+    }
+    if (result.toolCalls.length > 1) {
+      throw new LlmDecisionError(`LLM 返回了 ${result.toolCalls.length} 个工具调用，期望 1 个`, 'multiple_tool_calls');
+    }
+
+    const toolCall = result.toolCalls[0];
+    if (!tools.some((t) => t.name === toolCall.name)) {
+      throw new LlmDecisionError(`LLM 调用了未允许的工具: ${toolCall.name}`, 'unexpected_tool_name');
+    }
+    if (!toolCall.input || typeof toolCall.input !== 'object' || Array.isArray(toolCall.input)) {
+      throw new LlmDecisionError(`工具 ${toolCall.name} 的输入不是合法对象`, 'invalid_input');
+    }
+    return toolCall;
   }
 
   private async completeAnthropicWithTools(
@@ -334,7 +404,7 @@ export class LlmClient {
     if (!toolChoice) return 'auto';
     switch (toolChoice.type) {
       case 'any':
-        return 'auto';
+        return 'required'; // OpenAI 中 required 强制模型至少调用一个工具
       case 'none':
         return 'none';
       case 'tool':
@@ -368,6 +438,17 @@ export class LlmClient {
       return this.complete(prompt, system);
     }
 
+    // OpenAI 兼容接口优先使用 response_format=json_object，比 tool_choice 更可靠
+    if (this.provider === 'openai') {
+      try {
+        const text = await this.completeOpenAIJson(prompt, system);
+        if (text) return text;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.log(`[LlmClient] completeJson JSON mode 失败，fallback 到 tool-use: ${message}`);
+      }
+    }
+
     const tool: ToolDefinition = {
       name: 'respond_json',
       description: '以符合 JSON 格式的结构化对象输出响应，不要输出任何其他解释文字。',
@@ -388,17 +469,91 @@ export class LlmClient {
       }
     );
 
-    if (result.toolCalls.length === 0) {
-      throw new Error('LLM 未返回 JSON 工具调用');
+    if (result.toolCalls.length > 0) {
+      const input = result.toolCalls[0].input;
+      if (Object.keys(input).length === 0 && result.content.trim()) {
+        // 极端兜底：如果模型把 JSON 放到了 content 而非 tool input，尝试复用
+        return result.content.trim();
+      }
+      return JSON.stringify(input);
     }
 
-    const input = result.toolCalls[0].input;
-    if (Object.keys(input).length === 0 && result.content.trim()) {
-      // 极端兜底：如果模型把 JSON 放到了 content 而非 tool input，尝试复用
-      return result.content.trim();
+    // 部分模型/端点不支持强制 tool_choice，退而从 content 中提取 JSON
+    const content = result.content.trim();
+    if (content) {
+      try {
+        const extracted = extractJsonText(content);
+        const parsed = JSON.parse(extracted);
+        if (parsed && typeof parsed === 'object') {
+          return extracted;
+        }
+      } catch {
+        // content 不是有效 JSON，尝试一次转换
+      }
+
+      const converted = await this.convertProseToJson(content, tool);
+      if (converted) return converted;
     }
 
-    return JSON.stringify(input);
+    throw new Error('LLM 未返回 JSON 工具调用');
+  }
+
+  private async completeOpenAIJson(prompt: string, system?: string): Promise<string | null> {
+    const messages: Array<{ role: string; content: string }> = [];
+    if (system) {
+      messages.push({ role: 'system', content: system });
+    }
+    messages.push({ role: 'user', content: prompt });
+    const text = await this.completeOpenAIStream(messages, 'json_object');
+    if (!text) return null;
+    const extracted = extractJsonText(text);
+    const parsed = JSON.parse(extracted);
+    if (parsed && typeof parsed === 'object') {
+      return extracted;
+    }
+    return null;
+  }
+
+  private async convertProseToJson(prose: string, tool: ToolDefinition): Promise<string | null> {
+    const retryPrompt = [
+      '你刚才的输出不是严格可解析的 JSON。请把它转换成纯 JSON，只输出 JSON，不要任何解释。',
+      '',
+      '原始输出：',
+      prose,
+      '',
+      '请输出 JSON：',
+    ].join('\n');
+
+    try {
+      const result = await this.completeWithTools(
+        [{ role: 'user', content: retryPrompt }],
+        [tool],
+        {
+          toolChoice: { type: 'tool', name: 'respond_json' },
+          maxTokens: this.maxTokens,
+        }
+      );
+
+      if (result.toolCalls.length > 0) {
+        const input = result.toolCalls[0].input;
+        if (Object.keys(input).length > 0) {
+          return JSON.stringify(input);
+        }
+      }
+
+      const content = result.content.trim();
+      if (content) {
+        const extracted = extractJsonText(content);
+        const parsed = JSON.parse(extracted);
+        if (parsed && typeof parsed === 'object') {
+          return extracted;
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`[LlmClient] convertProseToJson 失败: ${message}`);
+    }
+    return null;
   }
 
   /**
@@ -521,9 +676,22 @@ export class LlmClient {
     return this.completeOpenAIStream(messages);
   }
 
-  private async completeOpenAIStream(messages: Array<{ role: string; content: string }>): Promise<string> {
+  private async completeOpenAIStream(
+    messages: Array<{ role: string; content: string }>,
+    responseFormat?: 'json_object'
+  ): Promise<string> {
     const url = this.baseURL ?? 'https://api.openai.com/v1/chat/completions';
     console.log(`[LlmClient] completeOpenAIStream 请求前 model=${this.model} max_tokens=${this.maxTokens}`);
+
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages,
+      max_tokens: this.maxTokens,
+      stream: true,
+    };
+    if (responseFormat) {
+      body.response_format = { type: responseFormat };
+    }
 
     const response = await fetch(url, {
       method: 'POST',
@@ -532,12 +700,7 @@ export class LlmClient {
         'Content-Type': 'application/json',
         ...this.headers,
       },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        max_tokens: this.maxTokens,
-        stream: true,
-      }),
+      body: JSON.stringify(body),
     });
 
     console.log(`[LlmClient] completeOpenAIStream 响应 status=${response.status} content-length=${response.headers.get('content-length') ?? 'unknown'}`);
