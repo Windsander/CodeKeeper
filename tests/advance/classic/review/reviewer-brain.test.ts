@@ -107,17 +107,23 @@ describe('ReviewerBrain', () => {
   });
 
   it('评审前通过 RecallPlanner 按需召回记忆并拼入 prompt', async () => {
-    const complete = vi
+    const completeDecision = vi.fn().mockResolvedValue({
+      id: '1',
+      name: 'recall_decision',
+      input: {
+        needsRecall: true,
+        queries: [{ type: 'review', query: 'TypeScript 严格模式相关评审' }],
+        reason: '需要历史经验',
+      },
+    });
+    const completeJson = vi
       .fn()
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          needsRecall: true,
-          queries: [{ type: 'review', query: 'TypeScript 严格模式相关评审' }],
-          reason: '需要历史经验',
-        })
-      )
-      .mockResolvedValueOnce(JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] }));
-    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+      .mockResolvedValue(JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] }));
+    const llmClient = {
+      complete: vi.fn(),
+      completeJson,
+      completeDecision,
+    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallForReview: vi.fn().mockResolvedValue(['项目使用 TypeScript 严格模式']),
     } as unknown as NonNullable<
@@ -134,7 +140,7 @@ describe('ReviewerBrain', () => {
     await brain.review(mockMR, mockDiffs);
 
     expect(memoryClient.recallForReview).toHaveBeenCalled();
-    const prompt = complete.mock.calls[1][0] as string;
+    const prompt = completeJson.mock.calls[0][0] as string;
     expect(prompt).toContain('项目使用 TypeScript 严格模式');
   });
 
@@ -159,18 +165,27 @@ describe('ReviewerBrain', () => {
   });
 
   it('replyToComment 通过 RecallPlanner 按需召回记忆并控制讨论历史长度', async () => {
-    const decisionResponse = JSON.stringify({
-      needsRecall: true,
-      queries: [{ type: 'review', query: '历史 medium issue 处理方式' }],
-      reason: '需要历史参考',
+    const completeDecision = vi.fn().mockResolvedValue({
+      id: '1',
+      name: 'recall_decision',
+      input: {
+        needsRecall: true,
+        queries: [{ type: 'review', query: '历史 medium issue 处理方式' }],
+        reason: '需要历史参考',
+      },
     });
-    const replyResponse = JSON.stringify({
-      shouldReply: true,
-      replyBody: '历史上类似问题是这样处理的：...',
-      reason: '用户询问历史处理方式',
-    });
-    const complete = vi.fn().mockResolvedValueOnce(decisionResponse).mockResolvedValueOnce(replyResponse);
-    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const completeJson = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        shouldReply: true,
+        replyBody: '历史上类似问题是这样处理的：...',
+        reason: '用户询问历史处理方式',
+      })
+    );
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue('讨论摘要'),
+      completeJson,
+      completeDecision,
+    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallForReview: vi.fn().mockResolvedValue(['历史处理方式 A', '历史处理方式 B']),
     } as unknown as NonNullable<
@@ -201,7 +216,7 @@ describe('ReviewerBrain', () => {
     expect(result.shouldReply).toBe(true);
     expect(result.replyBody).toContain('历史上');
     expect(memoryClient.recallForReview).toHaveBeenCalled();
-    const prompt = complete.mock.calls[1][0] as string;
+    const prompt = completeJson.mock.calls[0][0] as string;
     expect(prompt).toContain('历史处理方式 A');
   });
 
@@ -213,15 +228,20 @@ describe('ReviewerBrain', () => {
     }));
 
     const summaryResponse = '早期评论摘要：用户在追问 medium issue 的处理方式。';
-    const decisionResponse = JSON.stringify({ needsRecall: false, queries: [], reason: '已有足够上下文' });
-    const replyResponse = JSON.stringify({ shouldReply: true, replyBody: '请参考上述说明。', reason: '用户追问' });
+    const completeDecision = vi.fn().mockResolvedValue({
+      id: '1',
+      name: 'recall_decision',
+      input: { needsRecall: false, queries: [], reason: '已有足够上下文' },
+    });
+    const completeJson = vi.fn().mockResolvedValue(
+      JSON.stringify({ shouldReply: true, replyBody: '请参考上述说明。', reason: '用户追问' })
+    );
 
-    const complete = vi
-      .fn()
-      .mockResolvedValueOnce(summaryResponse)
-      .mockResolvedValueOnce(decisionResponse)
-      .mockResolvedValueOnce(replyResponse);
-    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const llmClient = {
+      complete: vi.fn().mockResolvedValueOnce(summaryResponse).mockResolvedValue(''),
+      completeJson,
+      completeDecision,
+    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const recallPlanner = new RecallPlanner({
       llmClient,
       memoryClient: {
@@ -247,7 +267,7 @@ describe('ReviewerBrain', () => {
     });
 
     expect(result.shouldReply).toBe(true);
-    const prompt = complete.mock.calls[2][0] as string;
+    const prompt = completeJson.mock.calls[0][0] as string;
     expect(prompt).toContain('早期评论摘要');
     expect(prompt).toContain('【最近评论】');
   });

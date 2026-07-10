@@ -217,7 +217,7 @@ export class FixToolLoop {
     return results;
   }
 
-  private trackFileChange(toolCall: ToolCall, result: ToolResult): void {
+  private trackFileChange(toolCall: ToolCall, _result: ToolResult): void {
     if (toolCall.name === 'write_file' || toolCall.name === 'apply_patch') {
       const relPath = String(toolCall.input.relPath ?? '');
       if (relPath) this.appliedFiles.add(relPath);
