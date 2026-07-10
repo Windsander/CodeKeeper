@@ -22,31 +22,80 @@ function createMockLlmClient(response: string): LlmClient {
   });
 }
 
+function createFastDecisionLlmClient(input: Record<string, unknown>): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: {
+      toolResponses: [{ toolCalls: [{ id: '1', name: 'fast_decision', input }] }],
+    },
+  });
+}
+
+function createParseFindingsLlmClient(findings: unknown[]): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: {
+      toolResponses: [{ toolCalls: [{ id: '1', name: 'parse_findings', input: { findings } }] }],
+    },
+  });
+}
+
+function createReplyDecisionLlmClient(input: Record<string, unknown>): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: {
+      toolResponses: [
+        { toolCalls: [{ id: '1', name: 'maintainer_reply_decision', input }] },
+      ],
+    },
+  });
+}
+
 describe('MaintainerBrain', () => {
   it('LLM 决策为 fix 时返回 fix', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient('{"action":"fix","reason":"可以安全修复"}'),
+      llmClient: createFastDecisionLlmClient({ action: 'fix', reason: '可以安全修复' }),
+      cognitiveDepth: 'fast',
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1, userId: 'reviewer' });
+    const decision = await brain.decide({
+      finding: makeFinding(),
+      fileContent: 'const x = 1;',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
     expect(decision.action).toBe('fix');
   });
 
   it('LLM 决策为 ask 时返回 ask 和问题', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient(
-        '{"action":"ask","reason":"需要澄清","question":"这里应该怎么改？"}'
-      ),
+      llmClient: createFastDecisionLlmClient({
+        action: 'ask',
+        reason: '需要澄清',
+        question: '这里应该怎么改？',
+      }),
+      cognitiveDepth: 'fast',
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1, userId: 'reviewer' });
+    const decision = await brain.decide({
+      finding: makeFinding(),
+      fileContent: 'const x = 1;',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
     expect(decision.action).toBe('ask');
     expect(decision.question).toBe('这里应该怎么改？');
   });
 
   it('LLM 决策为 ignore 时返回 ignore', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient('{"action":"ignore","reason":"不相关"}'),
+      llmClient: createFastDecisionLlmClient({ action: 'ignore', reason: '不相关' }),
+      cognitiveDepth: 'fast',
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1, userId: 'reviewer' });
+    const decision = await brain.decide({
+      finding: makeFinding(),
+      fileContent: 'const x = 1;',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
     expect(decision.action).toBe('ignore');
   });
 
@@ -67,17 +116,15 @@ describe('MaintainerBrain', () => {
 
   it('decide 返回 CognitiveDecision 包含 reasoning', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient(
-        JSON.stringify({
-          action: 'fix',
-          reason: '可以修复',
-          fixDescription: '修复描述',
-          analysis: '问题分析',
-          consideredOptions: ['方案A', '方案B'],
-          reasoning: '选择方案A因为风险低',
-          confidence: 'high',
-        })
-      ),
+      llmClient: createFastDecisionLlmClient({
+        action: 'fix',
+        reason: '可以修复',
+        fixDescription: '修复描述',
+        analysis: '问题分析',
+        consideredOptions: ['方案A', '方案B'],
+        reasoning: '选择方案A因为风险低',
+        confidence: 'high',
+      }),
       cognitiveDepth: 'fast',
     });
     const decision = await brain.decide({
@@ -93,19 +140,27 @@ describe('MaintainerBrain', () => {
     expect(decision.consideredOptions).toEqual(['方案A', '方案B']);
   });
 
-  it('LLM 返回非法 JSON 时保守 ask', async () => {
+  it('LLM 决策工具调用失败时保守 ask', async () => {
     const brain = new MaintainerBrain({
       llmClient: createMockLlmClient('不是 JSON'),
+      cognitiveDepth: 'fast',
     });
-    const decision = await brain.decide({ finding: makeFinding(), fileContent: 'const x = 1;', mrIid: 1, userId: 'reviewer' });
+    const decision = await brain.decide({
+      finding: makeFinding(),
+      fileContent: 'const x = 1;',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
     expect(decision.action).toBe('ask');
   });
 
   it('decideReply 能解析交互回复后的 fix 决策', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient(
-        '{"action":"fix","reason":"现在可以修了","fixDescription":"把 x 改成 2"}'
-      ),
+      llmClient: createReplyDecisionLlmClient({
+        action: 'fix',
+        reason: '现在可以修了',
+        fixDescription: '把 x 改成 2',
+      }),
     });
     const decision = await brain.decideReply({
       filePath: 'src/index.ts',
@@ -120,8 +175,22 @@ describe('MaintainerBrain', () => {
   });
 
   it('决策前召回用户偏好并拼入 prompt', async () => {
-    const complete = vi.fn().mockResolvedValue('{"action":"fix","reason":"可以安全修复"}');
-    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const completeDecision = vi.fn().mockResolvedValue({
+      id: '1',
+      name: 'fast_decision',
+      input: {
+        action: 'fix',
+        reason: '可以安全修复',
+        analysis: '分析',
+        consideredOptions: [],
+        reasoning: '理由',
+        confidence: 'medium',
+      },
+    });
+    const llmClient = {
+      complete: vi.fn(),
+      completeDecision,
+    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallUserPreferences: vi.fn().mockResolvedValue(['该用户偏好显式类型注解']),
       recallProjectKnowledge: vi.fn().mockResolvedValue([]),
@@ -131,7 +200,7 @@ describe('MaintainerBrain', () => {
       import('../../../../src/advance/classic/fix/maintainer-brain.js').MaintainerBrainOptions['memoryClient']
     >;
 
-    const brain = new MaintainerBrain({ llmClient, memoryClient });
+    const brain = new MaintainerBrain({ llmClient, memoryClient, cognitiveDepth: 'fast' });
     await brain.decide({
       finding: makeFinding(),
       fileContent: 'const x = 1;',
@@ -141,22 +210,38 @@ describe('MaintainerBrain', () => {
     });
 
     expect(memoryClient.recallUserPreferences).toHaveBeenCalledWith('alice', expect.any(String));
-    const prompt = complete.mock.calls[0][0] as string;
+    const prompt = completeDecision.mock.calls[0][1] as string;
     expect(prompt).toContain('该用户偏好显式类型注解');
   });
 
   it('决策前通过 RecallPlanner 按需召回记忆并拼入 prompt', async () => {
-    const complete = vi
+    const completeDecision = vi
       .fn()
-      .mockResolvedValueOnce(
-        JSON.stringify({
+      .mockResolvedValueOnce({
+        id: '1',
+        name: 'recall_decision',
+        input: {
           needsRecall: true,
           queries: [{ type: 'maintenance', query: '类似问题的修复历史' }],
           reason: '需要参考历史修复',
-        })
-      )
-      .mockResolvedValueOnce('{"action":"fix","reason":"可以安全修复"}');
-    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+        },
+      })
+      .mockResolvedValueOnce({
+        id: '2',
+        name: 'fast_decision',
+        input: {
+          action: 'fix',
+          reason: '可以安全修复',
+          analysis: '分析',
+          consideredOptions: [],
+          reasoning: '理由',
+          confidence: 'medium',
+        },
+      });
+    const llmClient = {
+      complete: vi.fn(),
+      completeDecision,
+    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallUserPreferences: vi.fn().mockResolvedValue([]),
       recallProjectKnowledge: vi.fn().mockResolvedValue([]),
@@ -184,23 +269,23 @@ describe('MaintainerBrain', () => {
 
     expect(memoryClient.recallForMaintenance).toHaveBeenCalled();
     expect(memoryClient.recallUserPreferences).not.toHaveBeenCalled();
-    const prompt = complete.mock.calls[1][0] as string;
+    const prompt = completeDecision.mock.calls[1][1] as string;
     expect(prompt).toContain('历史修复方式：显式类型注解');
   });
 
   it('从 summary 中解析多条 finding', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createParseFindingsLlmClient([
+        { severity: 'HIGH', file: 'src/a.ts', line: 10, ruleId: 'R1', message: '问题 A', suggestion: '改成 X', autoFixable: true },
+        { severity: 'MEDIUM', file: 'src/b.ts', line: 20, ruleId: 'R2', message: '问题 B', suggestion: '改成 Y', autoFixable: false },
+      ]),
+    });
     const summary = `
 - 🔴 **高** (1)
   - \`src/a.ts:10\` · 规则 \`R1\` 问题 A<br>**建议**：改成 X
 - 🟠 **中** (1)
   - \`src/b.ts:20\` · 规则 \`R2\` 问题 B<br>**建议**：改成 Y
 `;
-    const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient(JSON.stringify([
-        { severity: 'HIGH', file: 'src/a.ts', line: 10, ruleId: 'R1', message: '问题 A', suggestion: '改成 X', autoFixable: true },
-        { severity: 'MEDIUM', file: 'src/b.ts', line: 20, ruleId: 'R2', message: '问题 B', suggestion: '改成 Y', autoFixable: false },
-      ])),
-    });
     const findings = await brain.parseFindings({ body: summary, isSummary: true });
     expect(findings).toHaveLength(2);
     expect(findings[0].file).toBe('src/a.ts');
@@ -208,9 +293,9 @@ describe('MaintainerBrain', () => {
 
   it('thread 评论缺少行号时使用 position 兜底', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient(JSON.stringify([
+      llmClient: createParseFindingsLlmClient([
         { severity: 'MEDIUM', message: '问题', suggestion: '建议' },
-      ])),
+      ]),
     });
     const findings = await brain.parseFindings({
       body: '这里有个问题',
@@ -222,15 +307,15 @@ describe('MaintainerBrain', () => {
 
   it('无修复点的评论返回空数组', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient(JSON.stringify([])),
+      llmClient: createParseFindingsLlmClient([]),
     });
     const findings = await brain.parseFindings({ body: '👍 看起来不错' });
     expect(findings).toHaveLength(0);
   });
 
-  it('LLM 返回 markdown JSON 也能解析', async () => {
+  it('LLM 通过 parse_findings 返回空数组时也能解析', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient('```json\n[]\n```'),
+      llmClient: createParseFindingsLlmClient([]),
     });
     const findings = await brain.parseFindings({ body: 'ok' });
     expect(findings).toHaveLength(0);
@@ -238,16 +323,10 @@ describe('MaintainerBrain', () => {
 });
 
 describe('MaintainerBrain 聚焦上下文与范围分类', () => {
-  function createMockLlmClient(response: string): LlmClient {
-    return new LlmClient({
-      apiKey: 'test',
-      mock: { response },
-    });
-  }
-
   it('决策中包含范围分类 scope', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient('{"action":"fix","reason":"可以安全修复"}'),
+      llmClient: createFastDecisionLlmClient({ action: 'fix', reason: '可以安全修复' }),
+      cognitiveDepth: 'fast',
     });
     const decision = await brain.decide({
       finding: makeFinding(),
@@ -274,8 +353,22 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
   });
 
   it('prompt 中使用聚焦代码片段和 imports', async () => {
-    const complete = vi.fn().mockResolvedValue('{"action":"fix","reason":"可以安全修复","analysis":"分析","consideredOptions":[],"reasoning":"理由","confidence":"medium"}');
-    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const completeDecision = vi.fn().mockResolvedValue({
+      id: '1',
+      name: 'fast_decision',
+      input: {
+        action: 'fix',
+        reason: '可以安全修复',
+        analysis: '分析',
+        consideredOptions: [],
+        reasoning: '理由',
+        confidence: 'medium',
+      },
+    });
+    const llmClient = {
+      complete: vi.fn(),
+      completeDecision,
+    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const brain = new MaintainerBrain({ llmClient, cognitiveDepth: 'fast' });
 
     const fileContent = `import { foo } from './foo';\n\nfunction target() {\n  const x = 1;\n  return x;\n}\n`;
@@ -286,7 +379,7 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
       userId: 'reviewer',
     });
 
-    const prompt = complete.mock.calls[0][0] as string;
+    const prompt = completeDecision.mock.calls[0][1] as string;
     expect(prompt).toContain('相关代码');
     expect(prompt).toContain("import { foo } from './foo';");
     expect(prompt).toContain('function target');
@@ -295,7 +388,11 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
 
   it('类型变更问题被分类为 cross-file', async () => {
     const brain = new MaintainerBrain({
-      llmClient: createMockLlmClient('{"action":"fix","reason":"需要改多个调用点"}'),
+      llmClient: createFastDecisionLlmClient({
+        action: 'fix',
+        reason: '需要改多个调用点',
+      }),
+      cognitiveDepth: 'fast',
     });
     const decision = await brain.decide({
       finding: makeFinding({
@@ -358,19 +455,17 @@ describe('MaintainerBrain.parseFindings Markdown fallback', () => {
   });
 
   it('无 Markdown finding 时回退 LLM', async () => {
-    const llmClient = createMockLlmClient(JSON.stringify([]));
+    const llmClient = createParseFindingsLlmClient([]);
     const brain = new MaintainerBrain({ llmClient });
     const findings = await brain.parseFindings({ body: '这是一个无关评论' });
     expect(findings).toHaveLength(0);
   });
 
   it('普通文本段落可解析出多个 finding', async () => {
-    const llmClient = createMockLlmClient(
-      JSON.stringify([
-        { severity: 'HIGH', file: 'src/a.ts', line: 10, message: '类型不安全', suggestion: '使用具体类型', autoFixable: true },
-        { severity: 'MEDIUM', file: 'src/b.ts', line: 25, message: '变量未使用', suggestion: '删除变量', autoFixable: true },
-      ])
-    );
+    const llmClient = createParseFindingsLlmClient([
+      { severity: 'HIGH', file: 'src/a.ts', line: 10, message: '类型不安全', suggestion: '使用具体类型', autoFixable: true },
+      { severity: 'MEDIUM', file: 'src/b.ts', line: 25, message: '变量未使用', suggestion: '删除变量', autoFixable: true },
+    ]);
     const brain = new MaintainerBrain({ llmClient });
     const findings = await brain.parseFindings({
       body: 'src/a.ts 第 10 行的 any 建议改成具体类型；另外 src/b.ts 第 25 行的变量未使用，建议删除。',
@@ -381,11 +476,9 @@ describe('MaintainerBrain.parseFindings Markdown fallback', () => {
   });
 
   it('LLM 返回 { findings: [...] } 对象也能解析', async () => {
-    const llmClient = createMockLlmClient(
-      JSON.stringify({
-        findings: [{ severity: 'LOW', file: 'src/c.ts', line: 5, message: '小问题', suggestion: '改一下' }],
-      })
-    );
+    const llmClient = createParseFindingsLlmClient([
+      { severity: 'LOW', file: 'src/c.ts', line: 5, message: '小问题', suggestion: '改一下' },
+    ]);
     const brain = new MaintainerBrain({ llmClient });
     const findings = await brain.parseFindings({ body: '这里有个小问题' });
     expect(findings).toHaveLength(1);

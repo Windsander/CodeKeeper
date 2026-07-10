@@ -1,5 +1,6 @@
 import type { ReviewFinding } from '../provider/types.js';
-import { LlmClient } from '../../llm/client.js';
+import { LlmClient, LlmDecisionError } from '../../llm/client.js';
+import type { ToolDefinition } from '../../llm/tool-types.js';
 import type { IMemoryClient } from '../memory/types.js';
 import { IssueScopeClassifier, type IssueScope } from './issue-scope.js';
 import { buildFocusedContext, type FocusedContext } from './focused-context-builder.js';
@@ -17,7 +18,66 @@ import {
   type ThreadContext,
 } from '../utils/context-window.js';
 import { logMemorySnapshot } from '../utils/memory-snapshot.js';
-import { extractJsonText } from '../utils/json-extraction.js';
+
+const PARSE_FINDINGS_TOOL: ToolDefinition = {
+  name: 'parse_findings',
+  description: '从代码评审评论中提取所有可修复的代码问题',
+  input_schema: {
+    type: 'object',
+    properties: {
+      findings: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            severity: { type: 'string', enum: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] },
+            file: { type: 'string' },
+            line: { type: 'number' },
+            ruleId: { type: 'string' },
+            message: { type: 'string' },
+            suggestion: { type: 'string' },
+            autoFixable: { type: 'boolean' },
+          },
+          required: ['severity', 'file', 'line', 'message', 'suggestion'],
+          additionalProperties: true,
+        },
+      },
+    },
+    required: ['findings'],
+    additionalProperties: false,
+  },
+};
+
+const MAINTAINER_REPLY_DECISION_TOOL: ToolDefinition = {
+  name: 'maintainer_reply_decision',
+  description: '根据 discussion 历史决定下一步动作',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['fix', 'ask', 'ignore'] },
+      reason: { type: 'string' },
+      question: { type: 'string' },
+      fixDescription: { type: 'string' },
+      deleteFile: { type: 'boolean' },
+    },
+    required: ['action', 'reason'],
+    additionalProperties: false,
+  },
+};
+
+const ENV_PREP_DECISION_TOOL: ToolDefinition = {
+  name: 'env_prep_decision',
+  description: '根据 typecheck 失败输出决定是否需要运行某个 npm script 准备环境',
+  input_schema: {
+    type: 'object',
+    properties: {
+      script: { type: 'string' },
+      reason: { type: 'string' },
+    },
+    required: ['reason'],
+    additionalProperties: false,
+  },
+};
 
 /**
  * Maintainer 对单条 finding/discussion 可执行的最终动作
@@ -154,29 +214,48 @@ export class MaintainerBrain {
     });
 
     logMemorySnapshot('MaintainerBrain.decide 调用认知引擎前');
-    const decision = await engine.decide(
-      {
-        finding,
-        fileContent: this.buildFocusedFileContent(focusedContext),
-        originalComment: originalComment ?? '',
-        mrContext: mrContext ?? {
-          iid: mrIid,
-          title: '',
-          sourceBranch: '',
-          targetBranch: '',
-          description: '',
-          diffSummary: '',
-          changedFiles: [],
+    let decision: CognitiveDecision;
+    try {
+      decision = await engine.decide(
+        {
+          finding,
+          fileContent: this.buildFocusedFileContent(focusedContext),
+          originalComment: originalComment ?? '',
+          mrContext: mrContext ?? {
+            iid: mrIid,
+            title: '',
+            sourceBranch: '',
+            targetBranch: '',
+            description: '',
+            diffSummary: '',
+            changedFiles: [],
+          },
+          relatedFindings: relatedFindings ?? [],
+          recalledMemories,
+          fileOverview,
+          extraFileContexts: [],
+          projectContext: this.options.projectContext,
+          soulContent: this.options.soulContent,
         },
-        relatedFindings: relatedFindings ?? [],
-        recalledMemories,
-        fileOverview,
-        extraFileContexts: [],
-        projectContext: this.options.projectContext,
-        soulContent: this.options.soulContent,
-      },
-      this.options.cognitiveDepth ?? 'standard'
-    );
+        this.options.cognitiveDepth ?? 'standard'
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof LlmDecisionError) {
+        console.warn('[MaintainerBrain] 决策工具调用失败，保守询问:', message);
+        decision = {
+          action: 'ask',
+          reason: `决策工具调用失败：${message}`,
+          question: '我没有完全理解你的意思，能否再说得具体一些？',
+          analysis: '决策工具调用失败',
+          consideredOptions: [],
+          reasoning: '决策工具调用失败，保守询问',
+          confidence: 'low',
+        };
+      } else {
+        throw err;
+      }
+    }
     logMemorySnapshot('MaintainerBrain.decide 认知引擎返回后');
 
     if (this.options.memoryClient) {
@@ -205,22 +284,12 @@ export class MaintainerBrain {
     }
 
     const prompt = this.buildParseFindingsPrompt(input);
-    const response = await this.options.llmClient.completeJson(
+    const toolCall = await this.options.llmClient.completeDecision(
+      [PARSE_FINDINGS_TOOL],
       prompt,
-      '你是代码评审解析助手。请只输出 JSON。',
-      {
-        type: 'object',
-        properties: {
-          findings: {
-            type: 'array',
-            items: { type: 'object', additionalProperties: true },
-          },
-        },
-        required: ['findings'],
-        additionalProperties: true,
-      }
+      '你是代码评审解析助手，必须从 parse_findings 工具输出解析结果'
     );
-    return this.extractFindingsFromResponse(response, input.position);
+    return this.extractFindingsFromResponse(toolCall.input, input.position);
   }
 
   private async recallMemories(
@@ -311,8 +380,12 @@ export class MaintainerBrain {
       threadContext,
       params.maintainerName
     );
-    const raw = await this.options.llmClient.completeJson(prompt, this.systemPrompt());
-    return this.parseDecision(raw);
+    const toolCall = await this.options.llmClient.completeDecision(
+      [MAINTAINER_REPLY_DECISION_TOOL],
+      prompt,
+      this.systemPrompt()
+    );
+    return this.parseDecisionFromToolCall(toolCall);
   }
 
   /**
@@ -332,29 +405,23 @@ export class MaintainerBrain {
       context.validateOutput.slice(0, 4000),
       '```',
       '',
-      '## 输出要求',
-      '请输出 JSON：',
-      '{',
-      '  "script": "要执行的 script 名称，若认为不需要或无法处理则留空",',
-      '  "reason": "选择该脚本或不选择的理由"',
-      '}',
-      '',
-      '注意：只输出 JSON，不要附加解释。',
+      '请从 env_prep_decision 工具输出决策。',
     ].join('\n');
 
-    const raw = await this.options.llmClient.completeJson(
-      prompt,
-      '你是项目构建环境诊断助手，只输出 JSON。'
-    );
-
     try {
-      const text = this.extractJsonFromMarkdown(raw);
-      const parsed = JSON.parse(text) as { script?: string; reason?: string };
+      const toolCall = await this.options.llmClient.completeDecision(
+        [ENV_PREP_DECISION_TOOL],
+        prompt,
+        '你是项目构建环境诊断助手，必须从 env_prep_decision 工具输出决策'
+      );
+      const parsed = toolCall.input as { script?: string; reason?: string };
       if (typeof parsed.script === 'string' && context.availableScripts.includes(parsed.script)) {
         return { script: parsed.script, reason: parsed.reason ?? '已选择环境准备脚本' };
       }
       return { reason: parsed.reason ?? 'LLM 未选择可用脚本' };
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[MaintainerBrain] 环境准备决策工具调用失败:', message);
       return { reason: '无法解析 LLM 环境准备决策，保守跳过' };
     }
   }
@@ -405,21 +472,15 @@ ${positionHint}
   }
 
   private extractFindingsFromResponse(
-    raw: string,
+    input: Record<string, unknown>,
     position?: ParseFindingsInput['position']
   ): ReviewFinding[] {
-    const cleaned = this.extractJsonFromMarkdown(raw);
     let parsed: unknown[] = [];
-    try {
-      const maybe = JSON.parse(cleaned) as unknown;
-      if (Array.isArray(maybe)) {
-        parsed = maybe;
-      } else if (maybe && typeof maybe === 'object' && 'findings' in maybe && Array.isArray((maybe as Record<string, unknown>).findings)) {
-        parsed = (maybe as Record<string, unknown>).findings as unknown[];
-      } else {
-        return [];
-      }
-    } catch {
+    if (Array.isArray(input)) {
+      parsed = input;
+    } else if (input && typeof input === 'object' && 'findings' in input && Array.isArray(input.findings)) {
+      parsed = input.findings as unknown[];
+    } else {
       return [];
     }
 
@@ -610,10 +671,6 @@ ${positionHint}
     return valid.includes(upper as ReviewFinding['severity']) ? (upper as ReviewFinding['severity']) : 'MEDIUM';
   }
 
-  private extractJsonFromMarkdown(text: string): string {
-    return extractJsonText(text);
-  }
-
   private systemPrompt(): string {
     const soulSection = this.options.soulContent
       ? `\n\nAgent 个性与策略（SOUL.md）：\n${this.options.soulContent}`
@@ -673,51 +730,38 @@ ${positionHint}
     return lines.slice(0, maxLines).join('\n') + '\n...（内容已截断）';
   }
 
-  private parseDecision(raw: string): MaintainerDecision {
-    const text = raw.trim();
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    const jsonText = jsonMatch ? jsonMatch[1].trim() : text;
+  private parseDecisionFromToolCall(toolCall: { input: Record<string, unknown> }): MaintainerDecision {
+    const input = toolCall.input as {
+      action: string;
+      reason?: string;
+      question?: string;
+      fixDescription?: string;
+      deleteFile?: boolean;
+    };
 
-    try {
-      const parsed = JSON.parse(jsonText) as {
-        action: string;
-        reason?: string;
-        question?: string;
-        fixDescription?: string;
-        deleteFile?: boolean;
-      };
-
-      switch (parsed.action) {
-        case 'fix':
-          return {
-            action: 'fix',
-            reason: parsed.reason ?? '可以安全修复',
-            fixDescription: parsed.fixDescription,
-            deleteFile: parsed.deleteFile === true,
-          };
-        case 'ask':
-          return {
-            action: 'ask',
-            reason: parsed.reason ?? '需要澄清',
-            question: parsed.question ?? '能否补充一下期望的修改方式或范围？',
-          };
-        case 'ignore':
-          return {
-            action: 'ignore',
-            reason: parsed.reason ?? '无需处理',
-          };
-        default:
-          throw new Error(`未知的 action: ${parsed.action}`);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error('[MaintainerBrain] 解析 LLM 决策失败:', message, '原始响应:', raw);
-      // 解析失败时保守地选择继续询问
-      return {
-        action: 'ask',
-        reason: '无法解析 LLM 决策，需要 Reviewer 进一步说明',
-        question: '我没有完全理解你的意思，能否再说得具体一些？',
-      };
+    const reason = input.reason ?? '未说明理由';
+    switch (input.action) {
+      case 'fix':
+        return {
+          action: 'fix',
+          reason,
+          fixDescription: input.fixDescription,
+          deleteFile: input.deleteFile === true,
+        };
+      case 'ask':
+        return {
+          action: 'ask',
+          reason,
+          question: input.question ?? '能否补充一下期望的修改方式或范围？',
+        };
+      case 'ignore':
+        return { action: 'ignore', reason };
+      default:
+        return {
+          action: 'ask',
+          reason: `未知 action: ${input.action}，需要 Reviewer 确认`,
+          question: '我没有完全理解你的意思，能否再说得具体一些？',
+        };
     }
   }
 }
