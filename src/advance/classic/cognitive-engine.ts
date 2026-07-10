@@ -1,15 +1,95 @@
 import type { LlmClient } from '../llm/client.js';
+import type { ToolDefinition } from '../llm/tool-types.js';
 import type { RecallPlanner } from './memory/recall-planner.js';
 import type { IMemoryClient } from './memory/types.js';
 import type { WorktreeManager } from './worktree/worktree-manager.js';
 import { buildFindingCaseKey } from './memory/finding-case-key.js';
 import { logMemorySnapshot } from './utils/memory-snapshot.js';
-import { extractJsonText } from './utils/json-extraction.js';
 import type {
   CognitiveContext,
   CognitiveDecision,
   CognitiveDepth,
 } from './fix/cognitive-types.js';
+
+const INQUIRY_DECISION_TOOL: ToolDefinition = {
+  name: 'inquiry_decision',
+  description: '判断是否需要补充上下文以及需要查询哪些上下文',
+  input_schema: {
+    type: 'object',
+    properties: {
+      needsMoreContext: { type: 'boolean' },
+      queries: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string' },
+            target: { type: 'string' },
+          },
+          required: ['type', 'target'],
+          additionalProperties: false,
+        },
+      },
+      reason: { type: 'string' },
+    },
+    required: ['needsMoreContext', 'queries', 'reason'],
+    additionalProperties: false,
+  },
+};
+
+const OPTIONS_DECISION_TOOL: ToolDefinition = {
+  name: 'options_decision',
+  description: '为问题生成 2~3 个候选修复方案',
+  input_schema: {
+    type: 'object',
+    properties: {
+      options: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            description: { type: 'string' },
+            pros: { type: 'array', items: { type: 'string' } },
+            cons: { type: 'array', items: { type: 'string' } },
+            risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+          },
+          required: ['description', 'pros', 'cons', 'risk'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['options'],
+    additionalProperties: false,
+  },
+};
+
+const FINAL_DECISION_TOOL: ToolDefinition = {
+  name: 'final_decision',
+  description: '从候选方案中选择最终修复决策',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['fix', 'ask', 'ignore'] },
+      reason: { type: 'string' },
+      question: { type: 'string' },
+      fixDescription: { type: 'string' },
+      deleteFile: { type: 'boolean' },
+      scope: { type: 'string', enum: ['trivial', 'local', 'cross-file'] },
+      analysis: { type: 'string' },
+      consideredOptions: { type: 'array', items: { type: 'string' } },
+      reasoning: { type: 'string' },
+      confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+    },
+    required: ['action', 'reason'],
+    additionalProperties: false,
+  },
+};
+
+const FAST_DECISION_TOOL: ToolDefinition = {
+  name: 'fast_decision',
+  description: '快速判断对 finding 的下一步动作',
+  input_schema: FINAL_DECISION_TOOL.input_schema,
+};
 
 export interface CognitiveEngineOptions {
   llmClient: LlmClient;
@@ -97,13 +177,14 @@ export class CognitiveEngine {
   private async decideFast(context: CognitiveContext): Promise<CognitiveDecision> {
     const prompt = this.buildFastPrompt(context);
     console.log(`[CognitiveEngine] decideFast prompt 长度=${prompt.length}`);
-    const raw = await this.options.llmClient.completeJson(
+    const toolCall = await this.options.llmClient.completeDecision(
+      [FAST_DECISION_TOOL],
       prompt,
-      '你是谨慎的代码维护助手。请只输出 JSON。'
+      '你是谨慎的代码维护助手，必须从 fast_decision 工具输出决策'
     );
-    console.log(`[CognitiveEngine] decideFast response 长度=${raw.length}`);
+    console.log(`[CognitiveEngine] decideFast tool=${toolCall.name}`);
     logMemorySnapshot('CognitiveEngine.decideFast LLM 返回后');
-    return this.parseDecision(raw, context);
+    return this.parseDecision(toolCall.input, context);
   }
 
   private async decideStandard(context: CognitiveContext): Promise<CognitiveDecision> {
@@ -166,10 +247,14 @@ export class CognitiveEngine {
     ].join('\n');
 
     console.log(`[CognitiveEngine] runInquiry prompt 长度=${prompt.length}`);
-    const raw = await this.options.llmClient.completeJson(prompt, '你是上下文决策助手，只输出 JSON。');
-    console.log(`[CognitiveEngine] runInquiry response 长度=${raw.length}`);
+    const toolCall = await this.options.llmClient.completeDecision(
+      [INQUIRY_DECISION_TOOL],
+      prompt,
+      '你是上下文决策助手，必须从 inquiry_decision 工具输出决策'
+    );
+    console.log(`[CognitiveEngine] runInquiry tool=${toolCall.name}`);
     logMemorySnapshot('CognitiveEngine.runInquiry LLM 返回后');
-    return this.parseInquiry(raw);
+    return this.parseInquiry(toolCall.input);
   }
 
   private async enrichContext(
@@ -308,10 +393,14 @@ export class CognitiveEngine {
     ].join('\n');
 
     console.log(`[CognitiveEngine] generateOptions prompt 长度=${prompt.length}`);
-    const raw = await this.options.llmClient.completeJson(prompt, '你是代码方案设计助手，只输出 JSON。');
-    console.log(`[CognitiveEngine] generateOptions response 长度=${raw.length}`);
+    const toolCall = await this.options.llmClient.completeDecision(
+      [OPTIONS_DECISION_TOOL],
+      prompt,
+      '你是代码方案设计助手，必须从 options_decision 工具输出决策'
+    );
+    console.log(`[CognitiveEngine] generateOptions tool=${toolCall.name}`);
     logMemorySnapshot('CognitiveEngine.generateOptions LLM 返回后');
-    return this.parseOptions(raw);
+    return this.parseOptions(toolCall.input);
   }
 
   private async finalDecision(
@@ -359,10 +448,14 @@ export class CognitiveEngine {
     ].join('\n');
 
     console.log(`[CognitiveEngine] finalDecision prompt 长度=${prompt.length}`);
-    const raw = await this.options.llmClient.completeJson(prompt, '你是代码维护决策助手，只输出 JSON。');
-    console.log(`[CognitiveEngine] finalDecision response 长度=${raw.length}`);
+    const toolCall = await this.options.llmClient.completeDecision(
+      [FINAL_DECISION_TOOL],
+      prompt,
+      '你是代码维护决策助手，必须从 final_decision 工具输出决策'
+    );
+    console.log(`[CognitiveEngine] finalDecision tool=${toolCall.name}`);
     logMemorySnapshot('CognitiveEngine.finalDecision LLM 返回后');
-    return this.parseDecision(raw, context);
+    return this.parseDecision(toolCall.input, context);
   }
 
   private buildFastPrompt(context: CognitiveContext): string {
@@ -424,11 +517,9 @@ export class CognitiveEngine {
     return `## 补充上下文\n${contexts.join('\n\n')}\n\n`;
   }
 
-  private parseDecision(raw: string, context: CognitiveContext): CognitiveDecision {
-    const text = this.extractJson(raw);
-
+  private parseDecision(input: Record<string, unknown>, context: CognitiveContext): CognitiveDecision {
     try {
-      const parsed = JSON.parse(text) as {
+      const parsed = input as {
         action: string;
         reason?: string;
         question?: string;
@@ -453,7 +544,7 @@ export class CognitiveEngine {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error('[CognitiveEngine] 解析决策失败:', message, '原始响应:', raw);
+      console.error('[CognitiveEngine] 解析决策失败:', message, '输入:', input);
       return {
         action: 'ask',
         reason: '无法解析 LLM 决策，需要 Reviewer 进一步说明',
@@ -521,10 +612,9 @@ export class CognitiveEngine {
     return 'medium';
   }
 
-  private parseInquiry(raw: string): InquiryResult {
-    const text = this.extractJson(raw);
+  private parseInquiry(input: Record<string, unknown>): InquiryResult {
     try {
-      const parsed = JSON.parse(text) as {
+      const parsed = input as {
         needsMoreContext?: boolean;
         queries?: Array<{ type?: string; target?: string }>;
         reason?: string;
@@ -541,17 +631,12 @@ export class CognitiveEngine {
     }
   }
 
-  private parseOptions(raw: string): OptionItem[] {
-    const text = this.extractJson(raw);
+  private parseOptions(input: Record<string, unknown>): OptionItem[] {
     try {
-      const parsed = JSON.parse(text) as { options?: OptionItem[] };
+      const parsed = input as { options?: OptionItem[] };
       return (parsed.options ?? []).filter((o) => typeof o.description === 'string');
     } catch {
       return [];
     }
-  }
-
-  private extractJson(text: string): string {
-    return extractJsonText(text);
   }
 }

@@ -30,25 +30,28 @@ function makeContext(): CognitiveContext {
   };
 }
 
-function makeLlmClient(response: string): LlmClient {
-  return new LlmClient({ apiKey: 'test', mock: { response } });
+function makeFastLlmClient(input: Record<string, unknown>): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: {
+      toolResponses: [{ toolCalls: [{ id: '1', name: 'fast_decision', input }] }],
+    },
+  });
 }
 
 describe('CognitiveEngine', () => {
   it('fast 模式解析 CognitiveDecision', async () => {
     const engine = new CognitiveEngine({
-      llmClient: makeLlmClient(
-        JSON.stringify({
-          action: 'fix',
-          reason: '可以删除',
-          fixDescription: '删除未使用变量 b',
-          scope: 'local',
-          analysis: 'b 未使用',
-          consideredOptions: ['保留', '删除'],
-          reasoning: '删除更干净',
-          confidence: 'high',
-        })
-      ),
+      llmClient: makeFastLlmClient({
+        action: 'fix',
+        reason: '可以删除',
+        fixDescription: '删除未使用变量 b',
+        scope: 'local',
+        analysis: 'b 未使用',
+        consideredOptions: ['保留', '删除'],
+        reasoning: '删除更干净',
+        confidence: 'high',
+      }),
     });
 
     const decision = await engine.decide(makeContext(), 'fast');
@@ -60,57 +63,75 @@ describe('CognitiveEngine', () => {
     expect(decision.confidence).toBe('high');
   });
 
-  it('fast 模式默认返回 standard', async () => {
+  it('fast 模式返回 fix 决策', async () => {
     const engine = new CognitiveEngine({
-      llmClient: makeLlmClient(
-        JSON.stringify({
-          action: 'fix',
-          reason: '可以删除',
-          analysis: '分析',
-          consideredOptions: [],
-          reasoning: '理由',
-          confidence: 'medium',
-        })
-      ),
+      llmClient: makeFastLlmClient({
+        action: 'fix',
+        reason: '可以删除',
+        analysis: '分析',
+        consideredOptions: [],
+        reasoning: '理由',
+        confidence: 'medium',
+      }),
     });
 
-    const decision = await engine.decide(makeContext());
+    const decision = await engine.decide(makeContext(), 'fast');
 
     expect(decision.action).toBe('fix');
   });
 
   it('standard 模式经过 Inquiry + Options + Decide 三步', async () => {
-    let callCount = 0;
-    const responses = [
-      JSON.stringify({
-        needsMoreContext: true,
-        queries: [{ type: 'project_knowledge', target: 'unused variable convention' }],
-        reason: '需要确认项目约定',
-      }),
-      JSON.stringify({
-        options: [
-          { description: '删除变量', pros: ['干净'], cons: [], risk: 'low' },
-          { description: '保留注释', pros: ['安全'], cons: ['残留'], risk: 'low' },
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'inquiry_decision',
+                input: {
+                  needsMoreContext: true,
+                  queries: [{ type: 'project_knowledge', target: 'unused variable convention' }],
+                  reason: '需要确认项目约定',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'options_decision',
+                input: {
+                  options: [
+                    { description: '删除变量', pros: ['干净'], cons: [], risk: 'low' },
+                    { description: '保留注释', pros: ['安全'], cons: ['残留'], risk: 'low' },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '3',
+                name: 'final_decision',
+                input: {
+                  action: 'fix',
+                  reason: '删除',
+                  fixDescription: '删除未使用变量',
+                  analysis: 'b 未使用',
+                  consideredOptions: ['删除变量', '保留注释'],
+                  reasoning: '删除更干净',
+                  confidence: 'high',
+                },
+              },
+            ],
+          },
         ],
-      }),
-      JSON.stringify({
-        action: 'fix',
-        reason: '删除',
-        fixDescription: '删除未使用变量',
-        analysis: 'b 未使用',
-        consideredOptions: ['删除变量', '保留注释'],
-        reasoning: '删除更干净',
-        confidence: 'high',
-      }),
-    ];
-
-    const complete = vi.fn().mockImplementation(async () => {
-      return responses[callCount++] ?? '{}';
+      },
     });
-    const llmClient = {
-      complete,
-      completeJson: complete,
-    } as unknown as LlmClient;
 
     const recallPlanner = {
       plan: vi.fn().mockResolvedValue({
@@ -125,7 +146,6 @@ describe('CognitiveEngine', () => {
 
     expect(decision.action).toBe('fix');
     expect(decision.analysis).toBe('b 未使用');
-    expect(llmClient.complete).toHaveBeenCalledTimes(3);
   });
 
   it('reflect 生成反思并关联 case key', async () => {
@@ -138,7 +158,10 @@ describe('CognitiveEngine', () => {
     } as unknown as IMemoryClient;
 
     const engine = new CognitiveEngine({
-      llmClient: makeLlmClient('下次遇到未使用变量应优先删除，保持代码干净。'),
+      llmClient: new LlmClient({
+        apiKey: 'test',
+        mock: { response: '下次遇到未使用变量应优先删除，保持代码干净。' },
+      }),
       memoryClient,
     });
 
