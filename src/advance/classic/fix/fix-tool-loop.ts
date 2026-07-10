@@ -16,6 +16,8 @@ import { ToolRegistry } from './tools/tool-registry.js';
 import { ToolExecutor } from './tools/tool-executor.js';
 import type { FixAttemptResult } from './fix-result.js';
 import { logMemorySnapshot } from '../utils/memory-snapshot.js';
+import type { ValidationStrategy, ValidationResult } from './validation-strategy.js';
+import { WorkspaceValidationStrategy } from './validation-strategy.js';
 
 export interface FixToolLoopOptions {
   llmClient: LlmClient;
@@ -28,24 +30,30 @@ export interface FixToolLoopOptions {
   maxSteps?: number;
   /** 额外系统提示 */
   extraSystemPrompt?: string;
+  /** 验证策略，默认 WorkspaceValidationStrategy */
+  validationStrategy?: ValidationStrategy;
 }
 
 export class FixToolLoop {
   private readonly llmClient: LlmClient;
+  private readonly worktreeManager: WorktreeManager;
   private readonly finding: ReviewFinding;
   private readonly mr: MergeRequest;
   private readonly maxSteps: number;
   private readonly extraSystemPrompt: string;
   private readonly registry: ToolRegistry;
   private readonly executor: ToolExecutor;
+  private readonly validationStrategy: ValidationStrategy;
   private readonly messages: LlmMessage[] = [];
 
   private appliedFiles = new Set<string>();
   private deletedFiles = new Set<string>();
-  private validationPassed = false;
+  private baselineResult?: ValidationResult;
+  private lastValidationResult?: ValidationResult;
 
   constructor(options: FixToolLoopOptions) {
     this.llmClient = options.llmClient;
+    this.worktreeManager = options.worktreeManager;
     this.finding = options.finding;
     this.mr = options.mr;
     this.maxSteps = options.maxSteps ?? 20;
@@ -56,6 +64,7 @@ export class FixToolLoop {
       memoryClient: options.memoryClient,
       recallPlanner: options.recallPlanner,
     });
+    this.validationStrategy = options.validationStrategy ?? new WorkspaceValidationStrategy();
   }
 
   /**
@@ -66,6 +75,14 @@ export class FixToolLoop {
       role: 'user',
       content: this.buildTaskPrompt(),
     });
+
+    if (this.validationStrategy.needsBaseline) {
+      this.baselineResult = await this.validationStrategy.evaluate({
+        worktreeManager: this.worktreeManager,
+        appliedFiles: [],
+        deletedFiles: [],
+      });
+    }
 
     for (let step = 0; step < this.maxSteps; step++) {
       console.log(`[FixToolLoop] 第 ${step + 1}/${this.maxSteps} 步`);
@@ -98,6 +115,22 @@ export class FixToolLoop {
       }
 
       const toolResults = await this.executeToolCalls(result.toolCalls);
+
+      // 如果本轮包含 validate 工具，用策略评估当前验证状态
+      const validateCall = result.toolCalls.find((tc) => tc.name === 'validate');
+      if (validateCall) {
+        const validateResult = toolResults.find((tr) => tr.tool_use_id === validateCall.id);
+        if (validateResult) {
+          const raw = this.parseValidateResult(validateResult);
+          this.lastValidationResult = await this.validationStrategy.evaluate({
+            worktreeManager: this.worktreeManager,
+            appliedFiles: Array.from(this.appliedFiles),
+            deletedFiles: Array.from(this.deletedFiles),
+            rawResult: raw,
+            baseline: this.baselineResult,
+          });
+        }
+      }
 
       this.messages.push({
         role: 'user',
@@ -193,14 +226,29 @@ export class FixToolLoop {
       const relPath = String(toolCall.input.relPath ?? '');
       if (relPath) this.deletedFiles.add(relPath);
     }
-    if (toolCall.name === 'validate') {
-      try {
-        const parsed = JSON.parse(result.content) as { success?: boolean; data?: { lint?: boolean; typecheck?: boolean } };
-        this.validationPassed =
-          parsed.success === true && parsed.data?.lint === true && parsed.data?.typecheck === true;
-      } catch {
-        this.validationPassed = false;
-      }
+  }
+
+  private parseValidateResult(
+    result: ToolResult
+  ): { lint: boolean; typecheck: boolean; lintReason?: string; typecheckReason?: string } {
+    try {
+      const parsed = JSON.parse(result.content) as {
+        success?: boolean;
+        data?: {
+          lint?: boolean;
+          typecheck?: boolean;
+          lintReason?: string;
+          typecheckReason?: string;
+        };
+      };
+      return {
+        lint: parsed.data?.lint ?? false,
+        typecheck: parsed.data?.typecheck ?? false,
+        lintReason: parsed.data?.lintReason,
+        typecheckReason: parsed.data?.typecheckReason,
+      };
+    } catch {
+      return { lint: false, typecheck: false };
     }
   }
 
@@ -208,10 +256,10 @@ export class FixToolLoop {
     const success = finishCall.input.success === true;
     const reason = String(finishCall.input.reason ?? '');
 
-    if (success && !this.validationPassed) {
+    if (success && !this.lastValidationResult?.passed) {
       return {
         success: false,
-        reason: `LLM 认为修复成功，但尚未通过 validate。${reason}`,
+        reason: `LLM 认为修复成功，但尚未通过验证策略：${this.lastValidationResult?.reason ?? '未调用 validate'}`,
       };
     }
 

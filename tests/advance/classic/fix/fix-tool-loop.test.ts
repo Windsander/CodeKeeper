@@ -3,13 +3,19 @@ import { FixToolLoop } from '../../../../src/advance/classic/fix/fix-tool-loop.j
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type { ReviewFinding, MergeRequest } from '../../../../src/advance/classic/provider/types.js';
+import { ErrorDeltaValidationStrategy } from '../../../../src/advance/classic/fix/validation-strategy.js';
 
-function createMockWorktreeManager(): WorktreeManager {
+function createMockWorktreeManager(validateResult?: {
+  lint: boolean;
+  typecheck: boolean;
+  lintReason?: string;
+  typecheckReason?: string;
+}): WorktreeManager {
   return {
     resolveFilePath: async (p: string) => p,
     readFile: () => 'line1\nline2\n',
     writeFile: () => undefined,
-    validate: async () => ({ lint: true, typecheck: true }),
+    validate: async () => validateResult ?? { lint: true, typecheck: true },
     applyPatch: async () => true,
     runScript: async () => ({ success: true }),
     removeFile: async () => undefined,
@@ -57,9 +63,7 @@ describe('FixToolLoop', () => {
         { toolCalls: [{ id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
         { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
         {
-          toolCalls: [
-            { id: '4', name: 'finish', input: { success: true, reason: 'done' } },
-          ],
+          toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }],
         },
       ]),
       worktreeManager: createMockWorktreeManager(),
@@ -77,9 +81,7 @@ describe('FixToolLoop', () => {
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([
         {
-          toolCalls: [
-            { id: '1', name: 'finish', input: { success: true, reason: 'done' } },
-          ],
+          toolCalls: [{ id: '1', name: 'finish', input: { success: true, reason: 'done' } }],
         },
       ]),
       worktreeManager: createMockWorktreeManager(),
@@ -90,7 +92,7 @@ describe('FixToolLoop', () => {
     const result = await loop.run();
 
     expect(result.success).toBe(false);
-    expect(result.reason).toContain('尚未通过 validate');
+    expect(result.reason).toContain('尚未通过验证策略');
   });
 
   it('达到 maxSteps 返回失败', async () => {
@@ -108,5 +110,28 @@ describe('FixToolLoop', () => {
 
     expect(result.success).toBe(false);
     expect(result.reason).toContain('最大步数');
+  });
+
+  it('ErrorDelta 策略下 workspace 预存错误不导致误判失败', async () => {
+    const worktreeManager = createMockWorktreeManager({
+      lint: true,
+      typecheck: false,
+      typecheckReason: 'error TS123',
+    });
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { toolCalls: [{ id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        { toolCalls: [{ id: '2', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '3', name: 'finish', input: { success: true, reason: 'done' } }] },
+      ]),
+      worktreeManager,
+      finding: mockFinding,
+      mr: mockMR,
+      validationStrategy: new ErrorDeltaValidationStrategy(),
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(true);
   });
 });
