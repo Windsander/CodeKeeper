@@ -1,8 +1,34 @@
 import { logger } from '../../../core/logger.js';
 import type { LlmClient } from '../../llm/client.js';
+import type { ToolDefinition } from '../../llm/tool-types.js';
 import type { IMemoryClient } from './types.js';
 import { logMemorySnapshot } from '../utils/memory-snapshot.js';
-import { extractJsonText } from '../utils/json-extraction.js';
+const RECALL_DECISION_TOOL: ToolDefinition = {
+  name: 'recall_decision',
+  description: '判断当前任务是否需要查询历史记忆，以及需要查询哪些类型',
+  input_schema: {
+    type: 'object',
+    properties: {
+      needsRecall: { type: 'boolean' },
+      queries: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string' },
+            query: { type: 'string' },
+            userId: { type: 'string' },
+          },
+          required: ['type', 'query'],
+          additionalProperties: true,
+        },
+      },
+      reason: { type: 'string' },
+    },
+    required: ['needsRecall', 'queries', 'reason'],
+    additionalProperties: false,
+  },
+};
 
 /**
  * 可召回的记忆类型
@@ -92,11 +118,20 @@ export class RecallPlanner {
    */
   async plan(input: RecallDecisionInput): Promise<RecallPlan> {
     const prompt = this.buildPrompt(input);
-    const response = await this.llmClient.completeJson(
-      prompt,
-      '你是记忆查询决策助手，只输出 JSON。'
-    );
-    return this.parsePlan(response);
+    try {
+      const toolCall = await this.llmClient.completeDecision(
+        [RECALL_DECISION_TOOL],
+        prompt,
+        '你是记忆查询决策助手，必须从 recall_decision 工具输出决策'
+      );
+      return this.parsePlan(toolCall.input);
+    } catch (err) {
+      logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'RecallPlanner 决策工具调用失败，保守不查询'
+      );
+      return { needsRecall: false, queries: [], reason: '决策工具调用失败，保守不查询' };
+    }
   }
 
   /**
@@ -199,48 +234,35 @@ export class RecallPlanner {
 }`;
   }
 
-  private parsePlan(rawResponse: string): RecallPlan {
+  private parsePlan(input: Record<string, unknown>): RecallPlan {
     try {
-      const cleaned = this.extractJsonFromMarkdown(rawResponse);
-      const parsed = JSON.parse(cleaned) as {
-        needsRecall?: boolean;
-        queries?: unknown[];
-        reason?: string;
-      };
+      const rawQueries = Array.isArray(input.queries) ? input.queries : [];
+      const queries = rawQueries
+        .filter((q): q is Record<string, unknown> => typeof q === 'object' && q !== null)
+        .map((q) => ({
+          type: this.normalizeRecallType(String(q.type ?? '')),
+          query: String(q.query ?? ''),
+          userId: q.userId ? String(q.userId) : undefined,
+        }))
+        .filter((q) => q.type !== undefined && q.query.trim().length > 0) as RecallQuery[];
 
-      const queries = this.normalizeQueries(parsed.queries ?? []);
       return {
-        needsRecall: parsed.needsRecall === true && queries.length > 0,
+        needsRecall: input.needsRecall === true && queries.length > 0,
         queries,
-        reason: parsed.reason ?? '未提供理由',
+        reason: String(input.reason ?? '未提供理由'),
       };
     } catch (err) {
       logger.warn(
-        { rawResponse: rawResponse.slice(0, 500), err: err instanceof Error ? err.message : String(err) },
+        { input, err: err instanceof Error ? err.message : String(err) },
         'RecallPlanner 决策响应解析失败，fallback 到不查记忆'
       );
       return { needsRecall: false, queries: [], reason: '决策解析失败，保守不查' };
     }
   }
 
-  private normalizeQueries(rawQueries: unknown[]): RecallQuery[] {
-    return rawQueries
-      .filter((q): q is Record<string, unknown> => typeof q === 'object' && q !== null)
-      .map((q) => ({
-        type: this.normalizeRecallType(String(q.type ?? '')),
-        query: String(q.query ?? ''),
-        userId: q.userId ? String(q.userId) : undefined,
-      }))
-      .filter((q) => q.type !== undefined && q.query.trim().length > 0) as RecallQuery[];
-  }
-
   private normalizeRecallType(type: string): RecallType | undefined {
     const valid: RecallType[] = ['review', 'maintenance', 'project_knowledge', 'user_preferences'];
     const lower = type.toLowerCase().trim();
     return valid.find((v) => v === lower || v.replace(/_/g, '') === lower.replace(/_/g, ''));
-  }
-
-  private extractJsonFromMarkdown(text: string): string {
-    return extractJsonText(text);
   }
 }

@@ -1,11 +1,19 @@
 import { describe, it, expect, vi } from 'vitest';
+import { LlmClient } from '../../../../src/advance/llm/client.js';
 import { RecallPlanner } from '../../../../src/advance/classic/memory/recall-planner.js';
-import type { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
 
-function createMockLlm(response: string): LlmClient {
-  const complete = vi.fn().mockResolvedValue(response);
-  return { complete, completeJson: complete } as unknown as LlmClient;
+function createMockLlm(input: Record<string, unknown>): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: {
+      toolResponses: [
+        {
+          toolCalls: [{ id: '1', name: 'recall_decision', input }],
+        },
+      ],
+    },
+  });
 }
 
 function createMemoryClient(): IMemoryClient {
@@ -23,9 +31,7 @@ function createMemoryClient(): IMemoryClient {
 
 describe('RecallPlanner', () => {
   it('LLM 决定不查时返回空计划', async () => {
-    const llmClient = createMockLlm(
-      JSON.stringify({ needsRecall: false, queries: [], reason: '当前任务不需要记忆' })
-    );
+    const llmClient = createMockLlm({ needsRecall: false, queries: [], reason: '当前任务不需要记忆' });
     const memoryClient = createMemoryClient();
     const planner = new RecallPlanner({ llmClient, memoryClient });
 
@@ -42,13 +48,11 @@ describe('RecallPlanner', () => {
   });
 
   it('LLM 决定查 review 时生成正确 query 并路由到 recallForReview', async () => {
-    const llmClient = createMockLlm(
-      JSON.stringify({
-        needsRecall: true,
-        queries: [{ type: 'review', query: '历史评审经验' }],
-        reason: '需要参考历史评审',
-      })
-    );
+    const llmClient = createMockLlm({
+      needsRecall: true,
+      queries: [{ type: 'review', query: '历史评审经验' }],
+      reason: '需要参考历史评审',
+    });
     const memoryClient = createMemoryClient();
     const planner = new RecallPlanner({ llmClient, memoryClient });
 
@@ -67,17 +71,15 @@ describe('RecallPlanner', () => {
   });
 
   it('支持多类型查询并并行路由', async () => {
-    const llmClient = createMockLlm(
-      JSON.stringify({
-        needsRecall: true,
-        queries: [
-          { type: 'project_knowledge', query: '项目规范' },
-          { type: 'maintenance', query: '修复历史' },
-          { type: 'user_preferences', query: '用户习惯', userId: 'alice' },
-        ],
-        reason: '需要多方面记忆',
-      })
-    );
+    const llmClient = createMockLlm({
+      needsRecall: true,
+      queries: [
+        { type: 'project_knowledge', query: '项目规范' },
+        { type: 'maintenance', query: '修复历史' },
+        { type: 'user_preferences', query: '用户习惯', userId: 'alice' },
+      ],
+      reason: '需要多方面记忆',
+    });
     const memoryClient = createMemoryClient();
     const planner = new RecallPlanner({ llmClient, memoryClient });
 
@@ -95,16 +97,14 @@ describe('RecallPlanner', () => {
   });
 
   it('过滤 enabledTypes 之外的类型', async () => {
-    const llmClient = createMockLlm(
-      JSON.stringify({
-        needsRecall: true,
-        queries: [
-          { type: 'review', query: 'q1' },
-          { type: 'project_knowledge', query: 'q2' },
-        ],
-        reason: '',
-      })
-    );
+    const llmClient = createMockLlm({
+      needsRecall: true,
+      queries: [
+        { type: 'review', query: 'q1' },
+        { type: 'project_knowledge', query: 'q2' },
+      ],
+      reason: '',
+    });
     const memoryClient = createMemoryClient();
     const planner = new RecallPlanner({
       llmClient,
@@ -121,13 +121,11 @@ describe('RecallPlanner', () => {
   });
 
   it('user_preferences 缺少 userId 时被忽略', async () => {
-    const llmClient = createMockLlm(
-      JSON.stringify({
-        needsRecall: true,
-        queries: [{ type: 'user_preferences', query: '习惯' }],
-        reason: '',
-      })
-    );
+    const llmClient = createMockLlm({
+      needsRecall: true,
+      queries: [{ type: 'user_preferences', query: '习惯' }],
+      reason: '',
+    });
     const memoryClient = createMemoryClient();
     const planner = new RecallPlanner({ llmClient, memoryClient });
 
@@ -138,8 +136,8 @@ describe('RecallPlanner', () => {
     expect(memories).toHaveLength(0);
   });
 
-  it('LLM 输出非法 JSON 时 fallback 到不查', async () => {
-    const llmClient = createMockLlm('不是 JSON');
+  it('LLM 决策工具调用失败时 fallback 到不查', async () => {
+    const llmClient = new LlmClient({ apiKey: 'test', mock: { response: '不是 JSON' } });
     const memoryClient = createMemoryClient();
     const planner = new RecallPlanner({ llmClient, memoryClient });
 
@@ -153,13 +151,11 @@ describe('RecallPlanner', () => {
     const memoryClient = createMemoryClient();
     memoryClient.recallForReview = vi.fn().mockRejectedValue(new Error('网络错误'));
 
-    const llmClient = createMockLlm(
-      JSON.stringify({
-        needsRecall: true,
-        queries: [{ type: 'review', query: 'q1' }],
-        reason: '',
-      })
-    );
+    const llmClient = createMockLlm({
+      needsRecall: true,
+      queries: [{ type: 'review', query: 'q1' }],
+      reason: '',
+    });
     const planner = new RecallPlanner({ llmClient, memoryClient });
 
     const plan = await planner.plan({ role: 'reviewer', taskType: 'review', taskSummary: '' });
