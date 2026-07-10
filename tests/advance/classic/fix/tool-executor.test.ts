@@ -113,7 +113,23 @@ describe('ToolExecutor', () => {
 
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
+    expect(parsed.data.unchanged).toBe(false);
     expect(worktree.writeFile).toHaveBeenCalledWith('src/index.ts', 'new');
+  });
+
+  it('write_file 检测到无变更时返回 unchanged=true', async () => {
+    const worktree = createMockWorktreeManager();
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({
+      id: '1',
+      name: 'write_file',
+      input: { relPath: 'src/index.ts', content: 'content' },
+    });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.unchanged).toBe(true);
   });
 
   it('run_script 白名单外返回错误', async () => {

@@ -167,10 +167,12 @@ export class FixToolLoop {
       '3. run_script 只能调用 package.json 中白名单内的 npm scripts（lint、typecheck、build、test、compile:packages）。',
       '4. 修改前若不确定，先 read_file 查看文件内容；跨文件修改需分别读写相关文件。',
       '5. 你可以使用 apply_patch 应用 unified diff，也可以直接用 write_file 重写整个文件（仅限小文件）。',
-      '6. 完成修改后，必须调用 validate 确认 lint 和 typecheck 通过。',
-      '7. 若修复成功并通过验证，调用 finish({ success: true, reason: "..." })。',
-      '8. 若无法修复、验证失败或需要 Reviewer 澄清，调用 finish({ success: false, reason: "..." })。',
-      '9. 不能直接提交或推送代码，提交由框架在循环外统一处理。',
+      `6. 你必须把修复应用到 finding 指出的目标文件（${this.finding.file}）。如果修改涉及导出/导入，可同步修改相关文件，但核心改动必须在目标文件上。`,
+      '7. 调用 write_file 后，如果返回 unchanged=true，说明写入内容和原文件完全一致，没有产生任何变更；此时你必须检查是否写错了文件，并重新修改正确的文件。',
+      '8. 完成修改后，必须调用 validate 确认 lint 和 typecheck 通过。',
+      '9. 若修复成功并通过验证，调用 finish({ success: true, reason: "..." })。',
+      '10. 若无法修复、验证失败或需要 Reviewer 澄清，调用 finish({ success: false, reason: "..." })。',
+      '11. 不能直接提交或推送代码，提交由框架在循环外统一处理。',
       this.extraSystemPrompt,
     ]
       .filter(Boolean)
@@ -181,7 +183,7 @@ export class FixToolLoop {
     return [
       '请修复以下代码问题。',
       '',
-      `文件: ${this.finding.file}`,
+      `目标文件: ${this.finding.file}`,
       `行号: ${this.finding.line}`,
       `问题: ${this.finding.message}`,
       `建议: ${this.finding.suggestion ?? '无'}`,
@@ -191,7 +193,7 @@ export class FixToolLoop {
       `源分支: ${this.mr.sourceBranch}`,
       `目标分支: ${this.mr.targetBranch}`,
       '',
-      '请按工作原则使用工具完成修复。',
+      `请重点修改 ${this.finding.file}，按工作原则使用工具完成修复。`,
     ].join('\n');
   }
 

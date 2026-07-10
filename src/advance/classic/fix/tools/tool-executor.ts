@@ -137,15 +137,17 @@ export class ToolExecutor {
     return this.worktreeManager.searchInFile(resolved, keyword);
   }
 
-  private async writeFile(input: Record<string, unknown>): Promise<{ written: true }> {
+  private async writeFile(input: Record<string, unknown>): Promise<{ written: true; unchanged: boolean }> {
     const relPath = this.requireString(input, 'relPath');
     const content = this.requireString(input, 'content');
     const resolved = await this.worktreeManager.resolveFilePath(relPath);
     if (!resolved) {
       throw new Error(`无法解析文件路径: ${relPath}`);
     }
+    const existing = this.worktreeManager.readFile(resolved);
+    const unchanged = existing === content;
     this.worktreeManager.writeFile(resolved, content);
-    return { written: true };
+    return { written: true, unchanged };
   }
 
   private async deleteFile(input: Record<string, unknown>): Promise<{ deleted: true }> {
