@@ -41,7 +41,7 @@ export interface WorktreeManagerOptions {
   /** 用于测试注入的 SimpleGit 实例 */
   git?: SimpleGit;
   /** 用于测试注入的脚本运行器 */
-  runScript?: (script: string, cwd: string) => Promise<RunScriptResult>;
+  runScript?: (script: string, cwd: string, args?: string[]) => Promise<RunScriptResult>;
   /** 用于测试注入的依赖安装器 */
   install?: (cwd: string) => Promise<RunScriptResult>;
   /** 用于测试注入的 setup 命令运行器 */
@@ -52,10 +52,11 @@ export interface WorktreeManagerOptions {
   gitUserEmail?: string;
 }
 
-async function defaultRunScript(script: string, cwd: string): Promise<RunScriptResult> {
+async function defaultRunScript(script: string, cwd: string, args?: string[]): Promise<RunScriptResult> {
   try {
     // Windows 上 npm 是 .cmd 脚本，execFile 直接执行需要 shell 支持
-    await execFileAsync('npm', ['run', script], {
+    const npmArgs = args && args.length > 0 ? ['run', script, '--', ...args] : ['run', script];
+    await execFileAsync('npm', npmArgs, {
       cwd,
       shell: process.platform === 'win32',
     });
@@ -504,9 +505,9 @@ export class WorktreeManager {
   /**
    * 在 worktree 中运行任意 npm script
    */
-  async runScript(script: string): Promise<RunScriptResult> {
+  async runScript(script: string, args?: string[]): Promise<RunScriptResult> {
     const runner = this.options.runScript ?? defaultRunScript;
-    return runner(script, this.worktreePath);
+    return args ? runner(script, this.worktreePath, args) : runner(script, this.worktreePath);
   }
 
   /**

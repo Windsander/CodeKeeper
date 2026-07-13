@@ -66,13 +66,18 @@ export const APPLY_PATCH_TOOL: ToolDefinition = {
 export const RUN_SCRIPT_TOOL: ToolDefinition = {
   name: 'run_script',
   description:
-    '在 worktree 中运行 package.json 里定义的 npm script。只允许白名单脚本（如 lint、typecheck、build、test、compile:packages）。',
+    '在 worktree 中运行 package.json 里定义的 npm script。只允许白名单脚本（如 lint、typecheck、build、test、compile:packages）。可通过 args 传入额外参数，例如运行指定测试文件。',
   input_schema: {
     type: 'object',
     properties: {
       script: {
         type: 'string',
         description: 'npm script 名称，如 lint / typecheck / build / test',
+      },
+      args: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '可选的额外参数，会附加在 npm script 之后，例如 ["packages/foo/src/bar.test.ts"]',
       },
     },
     required: ['script'],

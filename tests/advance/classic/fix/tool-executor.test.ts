@@ -196,6 +196,21 @@ describe('ToolExecutor', () => {
     expect(parsed.error).toContain('安全策略');
   });
 
+  it('run_script 支持传入 args 参数', async () => {
+    const worktree = createMockWorktreeManager();
+    const executor = new ToolExecutor({ worktreeManager: worktree, allowedScripts: ['test'] });
+
+    const result = await executor.execute({
+      id: '1',
+      name: 'run_script',
+      input: { script: 'test', args: ['packages/foo/src/bar.test.ts'] },
+    });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(worktree.runScript).toHaveBeenCalledWith('test', ['packages/foo/src/bar.test.ts']);
+  });
+
   it('validate 返回校验结果', async () => {
     const worktree = createMockWorktreeManager();
     const executor = new ToolExecutor({ worktreeManager: worktree });

@@ -190,7 +190,8 @@ export class ToolExecutor {
     if (!this.allowedScripts.has(script)) {
       throw new Error(`脚本 ${script} 不在白名单内，只允许: ${Array.from(this.allowedScripts).join(', ')}`);
     }
-    return this.worktreeManager.runScript(script);
+    const args = this.optionalStringArray(input, 'args');
+    return args ? this.worktreeManager.runScript(script, args) : this.worktreeManager.runScript(script);
   }
 
   private async validate(): Promise<{
@@ -245,6 +246,15 @@ export class ToolExecutor {
   private optionalString(input: Record<string, unknown>, key: string): string | undefined {
     const value = input[key];
     return typeof value === 'string' ? value : undefined;
+  }
+
+  private optionalStringArray(input: Record<string, unknown>, key: string): string[] | undefined {
+    const value = input[key];
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+    const strings = value.filter((item): item is string => typeof item === 'string');
+    return strings.length > 0 ? strings : undefined;
   }
 
   private optionalNumber(input: Record<string, unknown>, key: string): number | undefined {

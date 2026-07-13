@@ -283,4 +283,19 @@ describe('WorktreeManager', () => {
     expect(install).toHaveBeenCalledOnce();
     expect(runScript).toHaveBeenCalledWith('compile:packages', manager.getWorktreePath());
   });
+
+  it('runScript 应透传 args 参数', async () => {
+    mkdirSync(join(tmp, '.codekeeper-worktree', 'p1'), { recursive: true });
+    const runScript = vi.fn().mockResolvedValue({ success: true });
+    const manager = new WorktreeManager({
+      projectId: 'p1',
+      rootPath,
+      remoteUrl,
+      runScript,
+    });
+
+    await manager.runScript('test', ['packages/foo/src/bar.test.ts']);
+
+    expect(runScript).toHaveBeenCalledWith('test', manager.getWorktreePath(), ['packages/foo/src/bar.test.ts']);
+  });
 });
