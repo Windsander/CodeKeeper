@@ -112,26 +112,26 @@ describe('FixToolLoop', () => {
     expect(result.reason).toContain('最大步数');
   });
 
-  it('ErrorDelta 策略下 workspace 预存错误不导致误判失败', async () => {
-    const worktreeManager = createMockWorktreeManager({
-      lint: true,
-      typecheck: false,
-      typecheckReason: 'error TS123',
-    });
+  it('content 包含工具调用 JSON 时兜底解析并执行', async () => {
     const loop = new FixToolLoop({
-      llmClient: createMockLlmClient([
-        { toolCalls: [{ id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
-        { toolCalls: [{ id: '2', name: 'validate', input: {} }] },
-        { toolCalls: [{ id: '3', name: 'finish', input: { success: true, reason: 'done' } }] },
-      ]),
-      worktreeManager,
+      llmClient: new LlmClient({
+        apiKey: 'test',
+        mock: {
+          toolResponses: [
+            { content: '{"name":"write_file","input":{"relPath":"src/index.ts","content":"fixed"}}', toolCalls: [] },
+            { content: '{"name":"validate","input":{}}', toolCalls: [] },
+            { content: '{"name":"finish","input":{"success":true,"reason":"done"}}', toolCalls: [] },
+          ],
+        },
+      }),
+      worktreeManager: createMockWorktreeManager(),
       finding: mockFinding,
       mr: mockMR,
-      validationStrategy: new ErrorDeltaValidationStrategy(),
     });
 
     const result = await loop.run();
 
     expect(result.success).toBe(true);
+    expect(loop.getAppliedFiles()).toContain('src/index.ts');
   });
 });

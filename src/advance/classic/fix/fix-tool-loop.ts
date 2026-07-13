@@ -16,6 +16,7 @@ import { ToolRegistry } from './tools/tool-registry.js';
 import { ToolExecutor } from './tools/tool-executor.js';
 import type { FixAttemptResult } from './fix-result.js';
 import { logMemorySnapshot } from '../utils/memory-snapshot.js';
+import { extractJsonText } from '../utils/json-extraction.js';
 import type { ValidationStrategy, ValidationResult } from './validation-strategy.js';
 import { WorkspaceValidationStrategy } from './validation-strategy.js';
 
@@ -50,6 +51,7 @@ export class FixToolLoop {
   private deletedFiles = new Set<string>();
   private baselineResult?: ValidationResult;
   private lastValidationResult?: ValidationResult;
+  private fallbackId = 0;
 
   constructor(options: FixToolLoopOptions) {
     this.llmClient = options.llmClient;
@@ -92,32 +94,41 @@ export class FixToolLoop {
       const result = await this.llmClient.completeWithTools(
         this.messages,
         this.registry.list(),
-        { system: this.buildSystemPrompt() }
+        { system: this.buildSystemPrompt(), toolChoice: { type: 'any' } }
       );
 
       console.log(
         `[FixToolLoop] LLM 停止原因=${result.stopReason}, toolCalls=${result.toolCalls.length}`
       );
 
+      let toolCalls = result.toolCalls;
+      if (toolCalls.length === 0 && result.content.trim()) {
+        const parsed = this.tryParseToolCallsFromContent(result.content);
+        if (parsed.length > 0) {
+          console.log(`[FixToolLoop] 从 content 兜底解析出 ${parsed.length} 个工具调用`);
+          toolCalls = parsed;
+        }
+      }
+
       this.messages.push({
         role: 'assistant',
         content: [
           ...(result.content ? [{ type: 'text' as const, text: result.content }] : []),
-          ...result.toolCalls.map((tc: ToolCall) => ({ type: 'tool_use' as const, ...tc })),
+          ...toolCalls.map((tc: ToolCall) => ({ type: 'tool_use' as const, ...tc })),
         ],
       });
 
-      if (result.toolCalls.length === 0) {
+      if (toolCalls.length === 0) {
         return {
           success: false,
           reason: `LLM 未调用任何工具即结束（stopReason=${result.stopReason}）`,
         };
       }
 
-      const toolResults = await this.executeToolCalls(result.toolCalls);
+      const toolResults = await this.executeToolCalls(toolCalls);
 
       // 如果本轮包含 validate 工具，用策略评估当前验证状态
-      const validateCall = result.toolCalls.find((tc) => tc.name === 'validate');
+      const validateCall = toolCalls.find((tc) => tc.name === 'validate');
       if (validateCall) {
         const validateResult = toolResults.find((tr) => tr.tool_use_id === validateCall.id);
         if (validateResult) {
@@ -137,7 +148,7 @@ export class FixToolLoop {
         content: toolResults.map((tr) => ({ type: 'tool_result' as const, ...tr })),
       });
 
-      const finishCall = result.toolCalls.find((tc: ToolCall) => tc.name === 'finish');
+      const finishCall = toolCalls.find((tc: ToolCall) => tc.name === 'finish');
       if (finishCall) {
         return this.handleFinish(finishCall);
       }
@@ -227,6 +238,36 @@ export class FixToolLoop {
     if (toolCall.name === 'delete_file') {
       const relPath = String(toolCall.input.relPath ?? '');
       if (relPath) this.deletedFiles.add(relPath);
+    }
+  }
+
+  private tryParseToolCallsFromContent(content: string): ToolCall[] {
+    try {
+      const extracted = extractJsonText(content);
+      const parsed = JSON.parse(extracted) as unknown;
+      const candidates: Array<{ name?: unknown; input?: unknown }> = [];
+      if (Array.isArray(parsed)) {
+        candidates.push(...parsed);
+      } else if (parsed && typeof parsed === 'object') {
+        candidates.push(parsed as Record<string, unknown>);
+      }
+
+      const calls: ToolCall[] = [];
+      for (const c of candidates) {
+        const name = typeof c.name === 'string' ? c.name : '';
+        if (!this.registry.has(name)) continue;
+        const input = c.input && typeof c.input === 'object' && !Array.isArray(c.input)
+          ? (c.input as Record<string, unknown>)
+          : (c as Record<string, unknown>);
+        calls.push({
+          id: `fallback-${this.fallbackId++}`,
+          name,
+          input,
+        });
+      }
+      return calls;
+    } catch {
+      return [];
     }
   }
 

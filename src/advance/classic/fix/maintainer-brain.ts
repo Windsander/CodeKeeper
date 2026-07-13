@@ -50,7 +50,8 @@ const PARSE_FINDINGS_TOOL: ToolDefinition = {
 
 const MAINTAINER_REPLY_DECISION_TOOL: ToolDefinition = {
   name: 'maintainer_reply_decision',
-  description: '根据 discussion 历史决定下一步动作',
+  description:
+    '根据 discussion 历史决定下一步动作。action 必须是 "fix"（按建议修改代码）、"ask"（需要 Reviewer 澄清）或 "ignore"（无需修改）三者之一，禁止返回其他值。',
   input_schema: {
     type: 'object',
     properties: {
@@ -739,8 +740,13 @@ ${positionHint}
       deleteFile?: boolean;
     };
 
+    const normalizedAction = this.normalizeDecisionAction(input.action);
+    if (normalizedAction !== input.action) {
+      console.log(`[MaintainerBrain] 将模型返回的 action "${input.action}" 归一化为 "${normalizedAction}"`);
+    }
+
     const reason = input.reason ?? '未说明理由';
-    switch (input.action) {
+    switch (normalizedAction) {
       case 'fix':
         return {
           action: 'fix',
@@ -757,11 +763,21 @@ ${positionHint}
       case 'ignore':
         return { action: 'ignore', reason };
       default:
+        console.warn('[MaintainerBrain] 模型返回未知 action:', input.action, '输入:', JSON.stringify(input));
         return {
           action: 'ask',
           reason: `未知 action: ${input.action}，需要 Reviewer 确认`,
           question: '我没有完全理解你的意思，能否再说得具体一些？',
         };
     }
+  }
+
+  private normalizeDecisionAction(action: string | undefined): MaintainerAction | 'unknown' {
+    if (typeof action !== 'string') return 'unknown';
+    const lower = action.toLowerCase().trim();
+    if (['fix', 'modify', 'update', 'change', 'edit', 'resolve'].includes(lower)) return 'fix';
+    if (['ask', 'question', 'clarify', 'confirm'].includes(lower)) return 'ask';
+    if (['ignore', 'skip', 'pass', 'none', 'no-op', 'noop'].includes(lower)) return 'ignore';
+    return 'unknown';
   }
 }

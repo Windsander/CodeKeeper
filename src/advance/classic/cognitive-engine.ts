@@ -65,7 +65,8 @@ const OPTIONS_DECISION_TOOL: ToolDefinition = {
 
 const FINAL_DECISION_TOOL: ToolDefinition = {
   name: 'final_decision',
-  description: '从候选方案中选择最终修复决策',
+  description:
+    '从候选方案中选择最终修复决策。action 必须是 "fix"（你确信可以按建议修改代码）、"ask"（信息不足需要 Reviewer 澄清）或 "ignore"（无需修改）三者之一。',
   input_schema: {
     type: 'object',
     properties: {
@@ -87,7 +88,8 @@ const FINAL_DECISION_TOOL: ToolDefinition = {
 
 const FAST_DECISION_TOOL: ToolDefinition = {
   name: 'fast_decision',
-  description: '快速判断对 finding 的下一步动作',
+  description:
+    '快速判断对 finding 的下一步动作。action 必须是 "fix"、"ask" 或 "ignore" 之一，禁止返回其他值。',
   input_schema: FINAL_DECISION_TOOL.input_schema,
 };
 

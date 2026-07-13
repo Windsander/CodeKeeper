@@ -70,6 +70,7 @@ export class LlmClient {
   private mockCallIndex = 0;
   private minRequestInterval: number;
   private lastRequestTime = 0;
+  private fallbackId = 0;
 
   constructor(options: LlmClientOptions) {
     this.apiKey = options.apiKey;
@@ -158,10 +159,20 @@ export class LlmClient {
         if (valid.length === 1) {
           return valid[0];
         }
+        // mock 未返回有效 tool calls 时，尝试从 content 兜底解析（模拟 OpenAI 兼容端点行为）
+        if (valid.length === 0 && r.content?.trim()) {
+          const fallback = this.tryParseDecisionFromContent(tools, r.content);
+          if (fallback) return fallback;
+        }
         if (valid.length === 0) {
           throw new LlmDecisionError('mock 未返回允许的决策工具', 'no_tool_calls');
         }
         throw new LlmDecisionError(`mock 返回了 ${valid.length} 个允许工具，期望 1 个`, 'multiple_tool_calls');
+      }
+      // 支持 mock.response 直接模拟 content 兜底
+      if (this.mock.response?.trim()) {
+        const fallback = this.tryParseDecisionFromContent(tools, this.mock.response);
+        if (fallback) return fallback;
       }
       throw new LlmDecisionError('mock 模式下 completeDecision 需要配置 mock.toolResponses', 'no_tool_calls');
     }
@@ -171,6 +182,12 @@ export class LlmClient {
       tools,
       { system, toolChoice: { type: 'any' }, maxTokens: this.maxTokens }
     );
+
+    // 兜底：部分 OpenAI 兼容端点不严格遵循 tool_choice=required，把 JSON 放到了 content 里
+    if (result.toolCalls.length === 0 && result.content.trim()) {
+      const fallback = this.tryParseDecisionFromContent(tools, result.content);
+      if (fallback) return fallback;
+    }
 
     if (result.toolCalls.length === 0) {
       throw new LlmDecisionError('LLM 未返回任何工具调用', 'no_tool_calls');
@@ -412,6 +429,36 @@ export class LlmClient {
       default:
         return 'auto';
     }
+  }
+
+  private tryParseDecisionFromContent(tools: ToolDefinition[], content: string): ToolCall | null {
+    const extracted = extractJsonText(content);
+    const parsed = this.safeParseJson(extracted);
+    if (Object.keys(parsed).length === 0) {
+      return null;
+    }
+    if (tools.length === 1) {
+      console.log(`[LlmClient] completeDecision 从 content 兜底解析为 ${tools[0].name}`);
+      return {
+        id: `fallback-${this.fallbackId++}`,
+        name: tools[0].name,
+        input: parsed,
+      };
+    }
+    // 多工具场景：尝试识别 { name, input } 格式
+    const parsedName = parsed.name;
+    if (typeof parsedName === 'string' && tools.some((t) => t.name === parsedName)) {
+      const input = parsed.input && typeof parsed.input === 'object' && !Array.isArray(parsed.input)
+        ? (parsed.input as Record<string, unknown>)
+        : parsed;
+      console.log(`[LlmClient] completeDecision 从 content 兜底解析为 ${parsedName}`);
+      return {
+        id: `fallback-${this.fallbackId++}`,
+        name: parsedName,
+        input,
+      };
+    }
+    return null;
   }
 
   private safeParseJson(text: string): Record<string, unknown> {

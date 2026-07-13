@@ -54,13 +54,33 @@ describe('LlmClient.completeDecision', () => {
     await expect(client.completeDecision([recallTool], 'p')).rejects.toThrow(LlmDecisionError);
   });
 
-  it('白名单外工具抛 unexpected_tool_name', async () => {
+  it('无 tool calls 但 content 是合法 JSON 时兜底解析为唯一工具', async () => {
     const client = new LlmClient({
       apiKey: 'test',
-      mock: {
-        toolResponses: [{ toolCalls: [{ id: '1', name: 'other', input: {} }] }],
-      },
+      mock: { response: '{"needsRecall":true,"queries":[{"type":"review","query":"x"}],"reason":"需要"}' },
     });
+    const result = await client.completeDecision([recallTool], 'p');
+    expect(result.name).toBe('recall_decision');
+    expect(result.input.needsRecall).toBe(true);
+  });
+
+  it('无 tool calls 且 content 无法解析时仍抛 no_tool_calls', async () => {
+    const client = new LlmClient({ apiKey: 'test', mock: { response: '只是普通文本' } });
     await expect(client.completeDecision([recallTool], 'p')).rejects.toThrow(LlmDecisionError);
+  });
+
+  it('多工具时从 content 的 name/input 格式兜底解析', async () => {
+    const toolB: ToolDefinition = {
+      name: 'tool_b',
+      description: 'B',
+      input_schema: { type: 'object', properties: {}, additionalProperties: true },
+    };
+    const client = new LlmClient({
+      apiKey: 'test',
+      mock: { response: '{"name":"tool_b","input":{"ok":true}}' },
+    });
+    const result = await client.completeDecision([recallTool, toolB], 'p');
+    expect(result.name).toBe('tool_b');
+    expect(result.input.ok).toBe(true);
   });
 });
