@@ -477,6 +477,14 @@ export class WorktreeManager {
   }
 
   /**
+   * 在 worktree 中运行任意 npm script
+   */
+  async runScript(script: string): Promise<RunScriptResult> {
+    const runner = this.options.runScript ?? defaultRunScript;
+    return runner(script, this.worktreePath);
+  }
+
+  /**
    * 在 worktree 中运行一次环境准备命令
    */
   async runSetupCommand(command: string, cwd?: string): Promise<RunScriptResult> {
