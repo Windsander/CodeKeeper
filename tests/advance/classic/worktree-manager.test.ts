@@ -261,4 +261,26 @@ describe('WorktreeManager', () => {
 
     await expect(manager.prepareEnvironment()).rejects.toThrow(WorktreeError);
   });
+
+  it('prepareEnvironment 存在 compile:packages 脚本时应编译 workspace 包', async () => {
+    mkdirSync(join(tmp, '.codekeeper-worktree', 'p1'), { recursive: true });
+    writeFileSync(
+      join(tmp, '.codekeeper-worktree', 'p1', 'package.json'),
+      JSON.stringify({ scripts: { 'compile:packages': 'npm run build -w pkg' } })
+    );
+    const install = vi.fn().mockResolvedValue({ success: true });
+    const runScript = vi.fn().mockResolvedValue({ success: true });
+    const manager = new WorktreeManager({
+      projectId: 'p1',
+      rootPath,
+      remoteUrl,
+      install,
+      runScript,
+    });
+
+    await manager.prepareEnvironment();
+
+    expect(install).toHaveBeenCalledOnce();
+    expect(runScript).toHaveBeenCalledWith('compile:packages', manager.getWorktreePath());
+  });
 });

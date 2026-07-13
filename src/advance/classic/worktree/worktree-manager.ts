@@ -201,6 +201,9 @@ export class WorktreeManager {
 
   /**
    * 准备运行环境：安装 node_modules 等依赖
+   *
+   * 对于 monorepo，若 package.json 中定义了 compile:packages 脚本，
+   * 会在安装依赖后额外执行编译，确保 workspace 包可被 typecheck 解析。
    */
   async prepareEnvironment(): Promise<void> {
     const packageJsonPath = join(this.worktreePath, 'package.json');
@@ -209,20 +212,42 @@ export class WorktreeManager {
       logger.info({ worktreePath: this.worktreePath }, 'worktree 无 package.json，跳过环境准备');
       return;
     }
+
+    let needInstall = true;
     if (existsSync(nodeModulesPath)) {
       const nodeModulesStat = statSync(nodeModulesPath);
       const packageJsonStat = statSync(packageJsonPath);
       if (nodeModulesStat.mtime >= packageJsonStat.mtime) {
         logger.info({ worktreePath: this.worktreePath }, 'worktree 依赖已是最新，跳过安装');
-        return;
+        needInstall = false;
       }
     }
 
-    logger.info({ worktreePath: this.worktreePath }, 'worktree 准备运行环境');
-    const installer = this.options.install ?? defaultInstall;
-    const result = await installer(this.worktreePath);
-    if (!result.success) {
-      throw new WorktreeError('install', result.reason ?? '安装依赖失败');
+    if (needInstall) {
+      logger.info({ worktreePath: this.worktreePath }, 'worktree 准备运行环境');
+      const installer = this.options.install ?? defaultInstall;
+      const result = await installer(this.worktreePath);
+      if (!result.success) {
+        throw new WorktreeError('install', result.reason ?? '安装依赖失败');
+      }
+    }
+
+    // monorepo workspace 包需要额外编译才能被 typecheck 解析
+    try {
+      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { scripts?: Record<string, string> };
+      if (pkg.scripts?.['compile:packages']) {
+        logger.info({ worktreePath: this.worktreePath }, 'worktree 编译 workspace 包');
+        const runner = this.options.runScript ?? defaultRunScript;
+        const compileResult = await runner('compile:packages', this.worktreePath);
+        if (!compileResult.success) {
+          throw new WorktreeError('compile:packages', compileResult.reason ?? '编译 workspace 包失败');
+        }
+      }
+    } catch (err) {
+      if (err instanceof WorktreeError) {
+        throw err;
+      }
+      logger.warn({ err, worktreePath: this.worktreePath }, '读取 package.json 或编译 workspace 包失败');
     }
   }
 
