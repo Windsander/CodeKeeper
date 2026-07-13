@@ -180,10 +180,11 @@ export class FixToolLoop {
       '5. 你可以使用 apply_patch 应用 unified diff，也可以直接用 write_file 重写整个文件（仅限小文件）。',
       `6. 你必须把修复应用到 finding 指出的目标文件（${this.finding.file}）。如果修改涉及导出/导入，可同步修改相关文件，但核心改动必须在目标文件上。`,
       '7. 调用 write_file 后，如果返回 unchanged=true，说明写入内容和原文件完全一致，没有产生任何变更；此时你必须检查是否写错了文件，并重新修改正确的文件。',
-      '8. 完成修改后，必须调用 validate 确认 lint 和 typecheck 通过。',
-      '9. 若修复成功并通过验证，调用 finish({ success: true, reason: "..." })。',
-      '10. 若无法修复、验证失败或需要 Reviewer 澄清，调用 finish({ success: false, reason: "..." })。',
-      '11. 不能直接提交或推送代码，提交由框架在循环外统一处理。',
+      '8. 如果 worktree 的运行环境尚未准备好（例如缺少 node_modules、workspace 包未编译、Rust/Python/Go 依赖未安装），你可以先使用 run_setup_command 安装或构建，再读取和修改文件。',
+      '9. 完成修改后，必须调用 validate 确认 lint 和 typecheck 通过。',
+      '10. 若修复成功并通过验证，调用 finish({ success: true, reason: "..." })。',
+      '11. 若无法修复、验证失败或需要 Reviewer 澄清，调用 finish({ success: false, reason: "..." })。',
+      '12. 不能直接提交或推送代码，提交由框架在循环外统一处理。',
       this.extraSystemPrompt,
     ]
       .filter(Boolean)
