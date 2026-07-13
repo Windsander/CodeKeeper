@@ -44,6 +44,8 @@ export interface WorktreeManagerOptions {
   runScript?: (script: string, cwd: string) => Promise<RunScriptResult>;
   /** 用于测试注入的依赖安装器 */
   install?: (cwd: string) => Promise<RunScriptResult>;
+  /** 用于测试注入的 setup 命令运行器 */
+  runSetupCommand?: (command: string, cwd: string) => Promise<RunScriptResult>;
   /** 提交使用的 git 用户名 */
   gitUserName?: string;
   /** 提交使用的 git 邮箱 */
@@ -77,6 +79,23 @@ async function defaultInstall(cwd: string): Promise<RunScriptResult> {
   } catch (err) {
     logger.warn({ err }, 'worktree 安装依赖失败');
     const reason = err instanceof Error ? err.message : String(err);
+    return { success: false, reason };
+  }
+}
+
+async function defaultRunSetupCommand(command: string, cwd: string): Promise<RunScriptResult> {
+  try {
+    logger.info({ command, cwd }, 'worktree 执行 setup 命令');
+    const [cmd, ...args] = command.trim().split(/\s+/);
+    await execFileAsync(cmd, args, {
+      cwd,
+      shell: process.platform === 'win32',
+    });
+    return { success: true };
+  } catch (err) {
+    logger.warn({ err, command }, 'worktree setup 命令失败');
+    const execErr = err as Error & { stdout?: string; stderr?: string };
+    const reason = [execErr.message, execErr.stdout ?? '', execErr.stderr ?? ''].filter(Boolean).join('\n');
     return { success: false, reason };
   }
 }
@@ -458,10 +477,11 @@ export class WorktreeManager {
   }
 
   /**
-   * 在 worktree 中运行任意 npm script
+   * 在 worktree 中运行一次环境准备命令
    */
-  async runScript(script: string): Promise<RunScriptResult> {
-    const runner = this.options.runScript ?? defaultRunScript;
-    return runner(script, this.worktreePath);
+  async runSetupCommand(command: string, cwd?: string): Promise<RunScriptResult> {
+    const runner = this.options.runSetupCommand ?? defaultRunSetupCommand;
+    const targetCwd = cwd ? join(this.worktreePath, cwd) : this.worktreePath;
+    return runner(command, targetCwd);
   }
 }
