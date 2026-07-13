@@ -18,7 +18,7 @@ import type { FixAttemptResult } from './fix-result.js';
 import { logMemorySnapshot } from '../utils/memory-snapshot.js';
 import { extractJsonText } from '../utils/json-extraction.js';
 import type { ValidationStrategy, ValidationResult } from './validation-strategy.js';
-import { WorkspaceValidationStrategy } from './validation-strategy.js';
+import { ErrorDeltaValidationStrategy } from './validation-strategy.js';
 
 export interface FixToolLoopOptions {
   llmClient: LlmClient;
@@ -66,7 +66,7 @@ export class FixToolLoop {
       memoryClient: options.memoryClient,
       recallPlanner: options.recallPlanner,
     });
-    this.validationStrategy = options.validationStrategy ?? new WorkspaceValidationStrategy();
+    this.validationStrategy = options.validationStrategy ?? new ErrorDeltaValidationStrategy();
   }
 
   /**
