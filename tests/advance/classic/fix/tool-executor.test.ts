@@ -21,6 +21,7 @@ function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): Wo
     writeFile: vi.fn().mockReturnValue(undefined),
     removeFile: vi.fn().mockResolvedValue(undefined),
     applyPatch: vi.fn().mockResolvedValue(true),
+    runSetupCommand: vi.fn().mockResolvedValue({ success: true }),
     runScript: vi.fn().mockResolvedValue({ success: true }),
     validate: vi.fn().mockResolvedValue({ lint: true, typecheck: true }),
     ...overrides,
@@ -160,6 +161,39 @@ describe('ToolExecutor', () => {
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
     expect(worktree.runScript).toHaveBeenCalledWith('lint');
+  });
+
+  it('run_setup_command 执行被允许的命令', async () => {
+    const worktree = createMockWorktreeManager({
+      runSetupCommand: vi.fn().mockResolvedValue({ success: true }),
+    });
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({
+      id: '1',
+      name: 'run_setup_command',
+      input: { command: 'npm install' },
+    });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.success).toBe(true);
+    expect(worktree.runSetupCommand).toHaveBeenCalledWith('npm install', undefined);
+  });
+
+  it('run_setup_command 拦截危险命令', async () => {
+    const worktree = createMockWorktreeManager();
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({
+      id: '1',
+      name: 'run_setup_command',
+      input: { command: 'rm -rf /' },
+    });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toContain('安全策略');
   });
 
   it('validate 返回校验结果', async () => {

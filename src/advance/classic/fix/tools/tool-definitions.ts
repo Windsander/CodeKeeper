@@ -136,6 +136,27 @@ export const SEARCH_IN_FILE_TOOL: ToolDefinition = {
   },
 };
 
+export const RUN_SETUP_COMMAND_TOOL: ToolDefinition = {
+  name: 'run_setup_command',
+  description:
+    '在 worktree 中执行一次环境准备命令（如安装依赖、构建项目）。只能使用安装/构建类命令，例如 npm install、npm run build、cargo build、poetry install、go mod download。',
+  input_schema: {
+    type: 'object',
+    properties: {
+      command: {
+        type: 'string',
+        description: '要执行的命令，例如 "npm install" 或 "cargo build"',
+      },
+      cwd: {
+        type: 'string',
+        description: '可选的相对 worktree 根目录的工作目录',
+      },
+    },
+    required: ['command'],
+    additionalProperties: false,
+  },
+};
+
 export const FINISH_TOOL: ToolDefinition = {
   name: 'finish',
   description:
@@ -163,6 +184,7 @@ export const FIX_TOOLS: ToolDefinition[] = [
   WRITE_FILE_TOOL,
   DELETE_FILE_TOOL,
   APPLY_PATCH_TOOL,
+  RUN_SETUP_COMMAND_TOOL,
   RUN_SCRIPT_TOOL,
   VALIDATE_TOOL,
   RECALL_MEMORY_TOOL,

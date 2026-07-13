@@ -10,6 +10,7 @@ import type { WorktreeManager } from '../../worktree/worktree-manager.js';
 import type { IMemoryClient } from '../../memory/types.js';
 import type { RecallPlanner } from '../../memory/recall-planner.js';
 import { focusedContextToString } from '../focused-context-streamer.js';
+import { SetupCommandSafetyFilter } from './setup-command-safety-filter.js';
 
 export interface ToolExecutorOptions {
   worktreeManager: WorktreeManager;
@@ -24,6 +25,7 @@ export class ToolExecutor {
   private readonly memoryClient?: IMemoryClient;
   private readonly recallPlanner?: RecallPlanner;
   private readonly allowedScripts: Set<string>;
+  private readonly setupCommandFilter = new SetupCommandSafetyFilter();
 
   constructor(options: ToolExecutorOptions) {
     this.worktreeManager = options.worktreeManager;
@@ -62,6 +64,8 @@ export class ToolExecutor {
         return this.deleteFile(input);
       case 'apply_patch':
         return this.applyPatch(input);
+      case 'run_setup_command':
+        return this.runSetupCommand(input);
       case 'run_script':
         return this.runScript(input);
       case 'validate':
@@ -167,6 +171,18 @@ export class ToolExecutor {
       throw new Error('patch 应用失败');
     }
     return { applied: true };
+  }
+
+  private async runSetupCommand(input: Record<string, unknown>): Promise<{ success: boolean; reason?: string }> {
+    const command = this.requireString(input, 'command');
+    const cwd = this.optionalString(input, 'cwd');
+
+    const filterResult = this.setupCommandFilter.check(command);
+    if (!filterResult.allowed) {
+      throw new Error(`命令被安全策略拦截: ${filterResult.reason}`);
+    }
+
+    return this.worktreeManager.runSetupCommand(command, cwd);
   }
 
   private async runScript(input: Record<string, unknown>): Promise<{ success: boolean; reason?: string }> {
