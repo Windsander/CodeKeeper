@@ -139,13 +139,13 @@ export const SEARCH_IN_FILE_TOOL: ToolDefinition = {
 export const RUN_SETUP_COMMAND_TOOL: ToolDefinition = {
   name: 'run_setup_command',
   description:
-    '在 worktree 中执行一次环境准备命令（如安装依赖、构建项目）。只能使用安装/构建类命令，例如 npm install、npm run build、cargo build、poetry install、go mod download。',
+    '在 worktree 中执行一次环境准备命令，仅用于安装依赖或构建项目。允许示例：npm install、npm run build、cargo build、poetry install、go mod download。禁止用于 git、find、grep、ls、cat 等查询或探索命令。',
   input_schema: {
     type: 'object',
     properties: {
       command: {
         type: 'string',
-        description: '要执行的命令，例如 "npm install" 或 "cargo build"',
+        description: '要执行的安装/构建命令，例如 "npm install" 或 "cargo build"',
       },
       cwd: {
         type: 'string',
