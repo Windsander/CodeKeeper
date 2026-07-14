@@ -12,6 +12,7 @@ function createMockWorktreeManager(validateResult?: {
   typecheckReason?: string;
 }): WorktreeManager {
   return {
+    getWorktreePath: () => '/tmp/fix-tool-loop-test-worktree',
     resolveFilePath: async (p: string) => p,
     readFile: () => 'line1\nline2\n',
     writeFile: () => undefined,
@@ -135,7 +136,7 @@ describe('FixToolLoop', () => {
     expect(loop.getAppliedFiles()).toContain('src/index.ts');
   });
 
-  it('finish 成功但未实际修改任何文件时返回失败', async () => {
+  it('finish 成功但未实际修改任何文件且重试禁用时返回失败', async () => {
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([
         { toolCalls: [{ id: '1', name: 'validate', input: {} }] },
@@ -146,6 +147,7 @@ describe('FixToolLoop', () => {
       worktreeManager: createMockWorktreeManager(),
       finding: mockFinding,
       mr: mockMR,
+      maxUnchangedFinishRetries: 0,
     });
 
     const result = await loop.run();
@@ -253,6 +255,7 @@ describe('FixToolLoop', () => {
       worktreeManager: createMockWorktreeManager(),
       finding: mockFinding,
       mr: mockMR,
+      maxUnchangedFinishRetries: 0,
     });
 
     const result = await loop.run();
@@ -260,5 +263,57 @@ describe('FixToolLoop', () => {
     expect(result.success).toBe(false);
     expect(result.reason).toContain('未实际修改或删除任何文件');
     expect(loop.getAppliedFiles()).not.toContain('src/index.ts');
+  });
+
+  it('finish 成功但未实际修改任何文件时触发重试，重试后实际修改可成功', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { toolCalls: [{ id: '1', name: 'validate', input: {} }] },
+        {
+          toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }],
+        },
+        { toolCalls: [{ id: '3', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+        { toolCalls: [{ id: '4', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        { toolCalls: [{ id: '5', name: 'validate', input: {} }] },
+        {
+          toolCalls: [{ id: '6', name: 'finish', input: { success: true, reason: 'done' } }],
+        },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(true);
+    expect(loop.getAppliedFiles()).toContain('src/index.ts');
+  });
+
+  it('finish 成功但未实际修改任何文件超过重试上限后返回失败', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { toolCalls: [{ id: '1', name: 'validate', input: {} }] },
+        {
+          toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }],
+        },
+        {
+          toolCalls: [{ id: '3', name: 'finish', input: { success: true, reason: 'done' } }],
+        },
+        {
+          toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }],
+        },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxUnchangedFinishRetries: 2,
+      maxSteps: 10,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('未实际修改或删除任何文件');
   });
 });

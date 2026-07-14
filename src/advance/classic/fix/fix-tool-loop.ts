@@ -35,6 +35,8 @@ export interface FixToolLoopOptions {
   maxTruncationRetries?: number;
   /** LLM 未调用任何工具时的最大连续重试次数，默认 2 */
   maxNoToolCallRetries?: number;
+  /** finish 成功但未实际修改文件时的最大连续重试次数，默认 2 */
+  maxUnchangedFinishRetries?: number;
   /** 额外系统提示 */
   extraSystemPrompt?: string;
   /** 验证策略，默认 WorkspaceValidationStrategy */
@@ -55,6 +57,7 @@ export class FixToolLoop {
   private readonly maxTokens: number;
   private readonly maxTruncationRetries: number;
   private readonly maxNoToolCallRetries: number;
+  private readonly maxUnchangedFinishRetries: number;
   private readonly extraSystemPrompt: string;
   private readonly registry: ToolRegistry;
   private readonly executor: ToolExecutor;
@@ -68,6 +71,7 @@ export class FixToolLoop {
   private fallbackId = 0;
   private truncationRetries = 0;
   private noToolCallRetries = 0;
+  private unchangedFinishRetries = 0;
 
   constructor(options: FixToolLoopOptions) {
     this.llmClient = options.llmClient;
@@ -78,6 +82,7 @@ export class FixToolLoop {
     this.maxTokens = options.maxTokens ?? 8192;
     this.maxTruncationRetries = options.maxTruncationRetries ?? 3;
     this.maxNoToolCallRetries = options.maxNoToolCallRetries ?? 2;
+    this.maxUnchangedFinishRetries = options.maxUnchangedFinishRetries ?? 2;
     this.extraSystemPrompt = options.extraSystemPrompt ?? '';
     this.registry = new ToolRegistry(FIX_TOOLS);
     this.executor = new ToolExecutor({
@@ -213,7 +218,27 @@ export class FixToolLoop {
 
       const finishCall = toolCalls.find((tc: ToolCall) => tc.name === 'finish');
       if (finishCall) {
-        return this.handleFinish(finishCall);
+        const finishResult = this.handleFinish(finishCall);
+        // LLM 可能 hallucinate：声称成功但实际没有修改任何文件。给它一次（或多次）重新实际修改的机会。
+        if (
+          !finishResult.success &&
+          this.unchangedFinishRetries < this.maxUnchangedFinishRetries &&
+          finishResult.reason.includes('未实际修改或删除任何文件')
+        ) {
+          this.unchangedFinishRetries++;
+          console.log(
+            `[FixToolLoop] finish 成功但未产生文件变更，要求 LLM 重新实际修改（${this.unchangedFinishRetries}/${this.maxUnchangedFinishRetries}）`
+          );
+          this.messages.push({
+            role: 'user',
+            content:
+              '你刚才调用 finish 表示修复成功，但我没有检测到任何文件被实际修改或删除。' +
+              '请重新 read_file 确认现状，然后通过 write_file、apply_patch 或 delete_file 实际应用修改；' +
+              '如果你认为确实无法修复，请调用 finish({ success: false, reason: "..." }) 说明原因。',
+          });
+          continue;
+        }
+        return finishResult;
       }
     }
 
@@ -279,6 +304,8 @@ export class FixToolLoop {
       '13. 回复要简洁，直接调用工具，不要输出长篇解释；如果输出被截断，优先保证工具调用完整。',
       '14. 不能直接提交或推送代码，提交由框架在循环外统一处理。',
       '15. 如果 run_script、run_setup_command、validate 或 read_file 的返回中包含 outputFile，说明完整输出已写入 worktree 临时文件；需要查看完整内容或尾部关键信息时，调用 read_output_file({ outputFile: "...", tailLines?: N })。',
+      '16. 在调用 finish({ success: true, ... }) 之前，必须已经通过 write_file、apply_patch 或 delete_file 实际修改或删除了至少一个文件；如果你尚未做任何文件变更，不要调用 finish，否则我会要求你重新修改。',
+      '17. Reviewer 的修改建议仅供参考。你应先理解问题根因，再决定最合适的修复方式；如果建议本身不合理、无法直接实施，或存在更简洁/更安全的替代方案，你可以选择自己的方案，并在 finish reason 中简要说明为什么这样做。',
       this.extraSystemPrompt,
     ]
       .filter(Boolean)
@@ -300,7 +327,10 @@ export class FixToolLoop {
       `目标分支: ${this.mr.targetBranch}`,
       '',
       `请重点修改 ${this.finding.file}，按工作原则使用工具完成修复。`,
-    ].join('\n');
+      this.finding.suggestion
+        ? 'Reviewer 已给出参考建议，但请不要盲目照搬；请先结合代码理解问题根因，再选择最合适的修复方案。如果建议需要调整（例如符号未导入/未导出、或存在更优雅的改法），可同步修改相关文件。'
+        : '',
+    ].filter(Boolean).join('\n');
   }
 
   private async executeToolCalls(toolCalls: ToolCall[]): Promise<ToolResult[]> {
