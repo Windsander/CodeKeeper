@@ -235,14 +235,25 @@ export class FixToolLoop {
     return results;
   }
 
-  private trackFileChange(toolCall: ToolCall, _result: ToolResult): void {
-    if (toolCall.name === 'write_file' || toolCall.name === 'apply_patch') {
-      const relPath = String(toolCall.input.relPath ?? '');
-      if (relPath) this.appliedFiles.add(relPath);
-    }
-    if (toolCall.name === 'delete_file') {
-      const relPath = String(toolCall.input.relPath ?? '');
-      if (relPath) this.deletedFiles.add(relPath);
+  private trackFileChange(toolCall: ToolCall, result: ToolResult): void {
+    try {
+      const parsed = JSON.parse(result.content) as { success?: boolean; data?: { unchanged?: boolean } };
+      if (!parsed.success) {
+        return;
+      }
+      if (toolCall.name === 'write_file' || toolCall.name === 'apply_patch') {
+        if (parsed.data?.unchanged === true) {
+          return;
+        }
+        const relPath = String(toolCall.input.relPath ?? '');
+        if (relPath) this.appliedFiles.add(relPath);
+      }
+      if (toolCall.name === 'delete_file') {
+        const relPath = String(toolCall.input.relPath ?? '');
+        if (relPath) this.deletedFiles.add(relPath);
+      }
+    } catch {
+      // 解析失败时保守处理，不记录文件变更
     }
   }
 
@@ -308,6 +319,13 @@ export class FixToolLoop {
       return {
         success: false,
         reason: `LLM 认为修复成功，但尚未通过验证策略：${this.lastValidationResult?.reason ?? '未调用 validate'}`,
+      };
+    }
+
+    if (success && this.appliedFiles.size === 0 && this.deletedFiles.size === 0) {
+      return {
+        success: false,
+        reason: 'LLM 认为修复成功，但未实际修改或删除任何文件',
       };
     }
 
