@@ -20,6 +20,109 @@ export interface ToolExecutorOptions {
   allowedScripts?: string[];
 }
 
+const MAX_OUTPUT_LENGTH = 2000;
+const MAX_FILE_CONTENT_LENGTH = 20000;
+
+/** 截断文本，mode=head 保留头部，mode=tail 保留尾部 */
+function truncateText(text: string, maxLen: number, mode: 'head' | 'tail' = 'tail'): string {
+  if (text.length <= maxLen) {
+    return text;
+  }
+  if (mode === 'tail') {
+    return `...（省略前 ${text.length - maxLen} 字符）\n${text.slice(-maxLen)}`;
+  }
+  return `${text.slice(0, maxLen)}\n...（后省略 ${text.length - maxLen} 字符）`;
+}
+
+interface RunResult {
+  success: boolean;
+  reason?: string;
+}
+
+function isRunResult(value: unknown): value is RunResult {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'success' in value &&
+    typeof (value as RunResult).success === 'boolean'
+  );
+}
+
+/** 对脚本/setup 命令的输出做摘要，避免把完整 stdout 塞进 tool_result */
+function summarizeRunResult(result: RunResult): RunResult {
+  if (!result.reason) {
+    return result;
+  }
+  if (result.success) {
+    // 成功时只需简要信息；若输出很长，保留第一行并提示总长度
+    if (result.reason.length <= MAX_OUTPUT_LENGTH) {
+      return result;
+    }
+    const firstLine = result.reason.split('\n')[0] ?? '';
+    return {
+      success: true,
+      reason: `${firstLine}\n...（输出已截断，原始长度 ${result.reason.length} 字符）`,
+    };
+  }
+  return { success: false, reason: truncateText(result.reason, MAX_OUTPUT_LENGTH, 'tail') };
+}
+
+interface ValidateResult {
+  lint: boolean;
+  typecheck: boolean;
+  lintReason?: string;
+  typecheckReason?: string;
+}
+
+function isValidateResult(value: unknown): value is ValidateResult {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'lint' in value &&
+    typeof (value as ValidateResult).lint === 'boolean' &&
+    'typecheck' in value &&
+    typeof (value as ValidateResult).typecheck === 'boolean'
+  );
+}
+
+/** 对 validate 输出做摘要：成功时尽量简短，失败时保留尾部关键信息 */
+function summarizeValidateResult(result: ValidateResult): ValidateResult {
+  return {
+    lint: result.lint,
+    typecheck: result.typecheck,
+    lintReason: result.lint
+      ? summarizeRunResult({ success: true, reason: result.lintReason }).reason
+      : truncateText(result.lintReason ?? '', MAX_OUTPUT_LENGTH, 'tail'),
+    typecheckReason: result.typecheck
+      ? summarizeRunResult({ success: true, reason: result.typecheckReason }).reason
+      : truncateText(result.typecheckReason ?? '', MAX_OUTPUT_LENGTH, 'tail'),
+  };
+}
+
+/** 按工具类型对结果做截断/摘要，防止超长输出进入 LLM 上下文 */
+function sanitizeToolResult(toolName: string, result: unknown): unknown {
+  if (toolName === 'validate' && isValidateResult(result)) {
+    return summarizeValidateResult(result);
+  }
+  if ((toolName === 'run_script' || toolName === 'run_setup_command') && isRunResult(result)) {
+    return summarizeRunResult(result);
+  }
+  if (toolName === 'read_file' && typeof result === 'object' && result !== null) {
+    const obj = result as Record<string, unknown>;
+    if (typeof obj.content === 'string' && obj.content.length > MAX_FILE_CONTENT_LENGTH) {
+      return {
+        ...obj,
+        content: truncateText(obj.content, MAX_FILE_CONTENT_LENGTH, 'head'),
+        truncated: true,
+      };
+    }
+  }
+  if (toolName === 'read_file' && typeof result === 'string' && result.length > MAX_FILE_CONTENT_LENGTH) {
+    return truncateText(result, MAX_FILE_CONTENT_LENGTH, 'head');
+  }
+  return result;
+}
+
 export class ToolExecutor {
   private readonly worktreeManager: WorktreeManager;
   private readonly memoryClient?: IMemoryClient;
@@ -42,7 +145,7 @@ export class ToolExecutor {
       const result = await this.executeTool(toolCall.name, toolCall.input);
       return {
         tool_use_id: toolCall.id,
-        content: JSON.stringify({ success: true, data: result }),
+        content: JSON.stringify({ success: true, data: sanitizeToolResult(toolCall.name, result) }),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

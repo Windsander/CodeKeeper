@@ -253,4 +253,66 @@ describe('ToolExecutor', () => {
     expect(parsed.success).toBe(true);
     expect(parsed.data).toEqual({ lint: true, typecheck: true });
   });
+
+  it('validate 成功时长输出被截断', async () => {
+    const longReason = 'warning line\n'.repeat(500);
+    const worktree = createMockWorktreeManager({
+      validate: vi.fn().mockResolvedValue({ lint: true, typecheck: true, lintReason: longReason }),
+    });
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({ id: '1', name: 'validate', input: {} });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.lintReason).toContain('输出已截断');
+    expect(parsed.data.lintReason.length).toBeLessThan(longReason.length);
+  });
+
+  it('validate 失败时保留尾部关键错误信息', async () => {
+    const errorReason = '前面很多行\n'.repeat(400) + '最后的 lint 错误';
+    const worktree = createMockWorktreeManager({
+      validate: vi.fn().mockResolvedValue({ lint: false, typecheck: true, lintReason: errorReason }),
+    });
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({ id: '1', name: 'validate', input: {} });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.lintReason).toContain('最后的 lint 错误');
+    expect(parsed.data.lintReason).toContain('省略');
+  });
+
+  it('run_script 成功时长输出被截断', async () => {
+    const longOutput = 'info\n'.repeat(1000);
+    const worktree = createMockWorktreeManager({
+      runScript: vi.fn().mockResolvedValue({ success: true, reason: longOutput }),
+    });
+    const executor = new ToolExecutor({ worktreeManager: worktree, allowedScripts: ['build'] });
+
+    const result = await executor.execute({ id: '1', name: 'run_script', input: { script: 'build' } });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.reason).toContain('输出已截断');
+  });
+
+  it('run_setup_command 失败时保留尾部错误', async () => {
+    const errorOutput = '前置日志\n'.repeat(50) + 'npm install 失败: 缺少权限';
+    const worktree = createMockWorktreeManager({
+      runSetupCommand: vi.fn().mockResolvedValue({ success: false, reason: errorOutput }),
+    });
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({
+      id: '1',
+      name: 'run_setup_command',
+      input: { command: 'npm install' },
+    });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.reason).toContain('npm install 失败');
+  });
 });
