@@ -414,7 +414,14 @@ export class MaintainerActor {
           '该项目要求 git commit message 遵循以下规范：',
           convention,
           '',
-          '请为以下代码修改生成一条符合该规范的完整 commit message（可包含 body，不要输出其他解释）：',
+          '请为以下代码修改生成一条符合该规范的完整 commit message（可包含 body）。',
+          '要求：',
+          '1. message 字段必须直接以 <type> 或 <type>(<scope>): 开头，例如 fix: 描述、fix(core): 描述。',
+          '2. 不要添加解释文字、签名或 [CodeKeeper] 等额外标记。',
+          '3. 优先从修改内容本身推断 type；如果确实只是测试，可用 test:；如果只是 chore，可用 chore:。',
+          '',
+          '可使用的 type（优先从规范中选择）：feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert。',
+          '',
           changeDescription,
           '',
           '输出 JSON: { "message": "..." }',
@@ -427,9 +434,19 @@ export class MaintainerActor {
         }
       );
       const parsed = JSON.parse(json) as { message?: string };
-      if (parsed.message?.trim()) {
-        return parsed.message.trim();
+      let message = parsed.message?.trim();
+      if (!message) {
+        return buildDefaultMessage();
       }
+      // 兜底校验：若 LLM 仍未生成 type 前缀，按 fix: 处理
+      if (
+        !/^(revert:\s*)?(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([^)]+\))?:\s*.+/i.test(
+          message
+        )
+      ) {
+        message = `fix: ${message}`;
+      }
+      return message;
     } catch (err) {
       console.warn(
         `[MaintainerActor] 按规范生成提交信息失败，回退默认: ${err instanceof Error ? err.message : String(err)}`
@@ -452,7 +469,9 @@ export class MaintainerActor {
       const recalled = await memory.recallProjectKnowledge(
         'commit message 提交信息规范 convention git 提交格式'
       );
-      this.commitConvention = recalled.find((item) => /commit|提交/i.test(item));
+      this.commitConvention = recalled.find(
+        (item) => typeof item === 'string' && /commit|提交/i.test(item)
+      );
     } catch (err) {
       console.warn(
         `[MaintainerActor] 召回提交规范记忆失败: ${err instanceof Error ? err.message : String(err)}`
@@ -464,16 +483,20 @@ export class MaintainerActor {
   /** 从 commit 失败的 hook 输出中提取项目提交规范，并写入项目级记忆 */
   private async learnCommitConvention(errorOutput: string): Promise<string | undefined> {
     try {
+      const clean = stripAnsiCodes(errorOutput);
+      const section = extractCommitRejectionSection(clean);
+
       const json = await this.options.llmClient.completeJson(
         [
-          '以下是 git commit 被项目 hook 拒绝时的输出。请判断拒绝原因是否与 commit message 格式规范有关。',
+          '以下是 git commit 被项目 hook 拒绝时的输出（已过滤，仅保留与提交信息规范最相关的部分）。',
+          '请判断拒绝原因是否与 commit message 格式规范有关。',
           '如果是，提取该项目要求的提交信息规范（格式说明、类型列表、示例等），用一到两句话概括；',
           '如果不是格式问题（例如 lint 或测试未通过），convention 输出空字符串。',
           '',
           '输出 JSON: { "convention": "..." }',
           '',
           '--- hook 输出 ---',
-          errorOutput.slice(0, 4000),
+          section.slice(0, 4000),
         ].join('\n'),
         undefined,
         {
@@ -513,6 +536,39 @@ export class MaintainerActor {
   }
 }
 
+/** 去除 ANSI 转义码，避免 hook 输出中的颜色控制字符干扰规范提取 */
+export function stripAnsiCodes(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+}
+
+/** 从冗长的 hook 输出中定位与 commit message 规范相关的片段 */
+export function extractCommitRejectionSection(text: string): string {
+  const markers = [
+    'commit message',
+    'commit-message',
+    'commit-msg',
+    '提交信息',
+    'Conventional Commits',
+    'Conventional Commit',
+    '不符合',
+    '格式:',
+    '格式：',
+  ];
+  const lower = text.toLowerCase();
+  let idx = -1;
+  for (const marker of markers) {
+    const i = lower.indexOf(marker.toLowerCase());
+    if (i !== -1 && (idx === -1 || i < idx)) {
+      idx = i;
+    }
+  }
+  if (idx === -1) {
+    return text.slice(0, 4000);
+  }
+  return text.slice(idx, idx + 4000);
+}
+
 /**
  * 清理提交信息主题：压缩为单行并截断，避免异常长的 subject。
  */
@@ -532,8 +588,6 @@ function buildDefaultFixMessage(finding: ReviewFinding): string {
     '',
     `规则: ${finding.ruleId ?? 'N/A'}`,
     `文件: ${finding.file}:${finding.line}`,
-    '',
-    '[CodeKeeper]',
   ].join('\n');
 }
 
@@ -547,6 +601,5 @@ function buildDefaultBatchMessage(appliedFiles: string[], deletedFiles: string[]
   if (deletedFiles.length > 0) {
     lines.push('删除文件：', ...deletedFiles.map((f) => `- ${f}`), '');
   }
-  lines.push('[CodeKeeper]');
   return lines.join('\n');
 }

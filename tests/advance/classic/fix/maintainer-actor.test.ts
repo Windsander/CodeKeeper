@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MaintainerActor } from '../../../../src/advance/classic/fix/maintainer-actor.js';
+import {
+  MaintainerActor,
+  stripAnsiCodes,
+  extractCommitRejectionSection,
+} from '../../../../src/advance/classic/fix/maintainer-actor.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { MergeRequest, ReviewFinding, Discussion } from '../../../../src/advance/classic/provider/types.js';
 import type { MaintainerBrain, CognitiveDecision } from '../../../../src/advance/classic/fix/maintainer-brain.js';
@@ -270,6 +274,62 @@ describe('MaintainerActor', () => {
     expect(commitAndPush).toHaveBeenCalledTimes(1);
   });
 
+  it('hook 输出被无关内容和 ANSI 转义码淹没时仍能学习规范并重试', async () => {
+    const provider = createMockProvider();
+    const noise = Array.from({ length: 50 }, (_, i) => `第 ${i} 行无关输出...`).join('\n');
+    const ansiNoise = '[33m[1m警告[22m[39m';
+    const commitError = `Worktree commit 失败: ${noise}\n${ansiNoise}\n❌ Commit message 不符合 Conventional Commits 规范。\n格式: <type>(<scope>): <description>\ntypes: feat | fix | docs`;
+    const commitAndPush = vi.fn().mockRejectedValueOnce(new Error(commitError)).mockResolvedValueOnce(undefined);
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain();
+
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+          { toolCalls: [{ id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'const used = 1;' } }] },
+          { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+          { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
+        ],
+        responses: [
+          '{"convention": "Conventional Commits 格式：<type>(<scope>): <description>"}',
+          // LLM 生成不带 type 前缀的描述，应由兜底逻辑补为 fix:
+          '{"message": "删除未使用变量"}',
+        ],
+      },
+    });
+
+    const memoryClient = {
+      context: { appId: 'a', projectId: 'p1', agentId: 'm', userId: 'u', sessionId: 's' },
+      recallProjectKnowledge: vi.fn().mockResolvedValue([]),
+      recordProjectKnowledge: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IMemoryClient;
+
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'CodeKeeper Maintainer',
+      memoryClient,
+    });
+
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '可以修复',
+      fixDescription: '删除未使用变量',
+      confidence: 'high',
+    };
+
+    const ok = await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
+
+    expect(ok).toBe(true);
+    expect(commitAndPush).toHaveBeenCalledTimes(2);
+    expect(commitAndPush.mock.calls[1][1]).toBe('fix: 删除未使用变量');
+    expect(memoryClient.recordProjectKnowledge).toHaveBeenCalled();
+  });
+
   it('fix 工具循环失败时转为 ask，不提交', async () => {
     const provider = createMockProvider();
     const worktreeManager = createMockWorktreeManager();
@@ -358,5 +418,26 @@ describe('MaintainerActor', () => {
       mockDiscussion.id,
       expect.stringContaining('未成功')
     );
+  });
+});
+
+describe('提交信息输出预处理', () => {
+  it('stripAnsiCodes 移除 ANSI 转义码', () => {
+    expect(stripAnsiCodes('[33m[1m警告[22m[39m')).toBe('警告');
+    expect(stripAnsiCodes('无转义字符')).toBe('无转义字符');
+  });
+
+  it('extractCommitRejectionSection 从冗长输出中提取 commit 规范片段', () => {
+    const noise = 'lint 警告...\n'.repeat(30);
+    const section = '❌ Commit message 不符合 Conventional Commits 规范。\n格式: <type>(<scope>): <description>';
+    const extracted = extractCommitRejectionSection(`${noise}${section}`);
+    expect(extracted).toContain('Commit message');
+    expect(extracted).toContain('Conventional Commits');
+    expect(extracted.length).toBeLessThan(noise.length + section.length);
+  });
+
+  it('extractCommitRejectionSection 无相关标记时返回原始前缀', () => {
+    const text = '完全无关的日志内容'.repeat(10);
+    expect(extractCommitRejectionSection(text)).toContain('完全无关的日志内容');
   });
 });
