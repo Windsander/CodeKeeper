@@ -33,6 +33,8 @@ export interface FixToolLoopOptions {
   maxTokens?: number;
   /** 输出被长度截断时的最大连续重试次数，默认 3 */
   maxTruncationRetries?: number;
+  /** LLM 未调用任何工具时的最大连续重试次数，默认 2 */
+  maxNoToolCallRetries?: number;
   /** 额外系统提示 */
   extraSystemPrompt?: string;
   /** 验证策略，默认 WorkspaceValidationStrategy */
@@ -52,6 +54,7 @@ export class FixToolLoop {
   private readonly maxSteps: number;
   private readonly maxTokens: number;
   private readonly maxTruncationRetries: number;
+  private readonly maxNoToolCallRetries: number;
   private readonly extraSystemPrompt: string;
   private readonly registry: ToolRegistry;
   private readonly executor: ToolExecutor;
@@ -64,6 +67,7 @@ export class FixToolLoop {
   private lastValidationResult?: ValidationResult;
   private fallbackId = 0;
   private truncationRetries = 0;
+  private noToolCallRetries = 0;
 
   constructor(options: FixToolLoopOptions) {
     this.llmClient = options.llmClient;
@@ -73,6 +77,7 @@ export class FixToolLoop {
     this.maxSteps = options.maxSteps ?? 20;
     this.maxTokens = options.maxTokens ?? 8192;
     this.maxTruncationRetries = options.maxTruncationRetries ?? 3;
+    this.maxNoToolCallRetries = options.maxNoToolCallRetries ?? 2;
     this.extraSystemPrompt = options.extraSystemPrompt ?? '';
     this.registry = new ToolRegistry(FIX_TOOLS);
     this.executor = new ToolExecutor({
@@ -160,11 +165,28 @@ export class FixToolLoop {
       });
 
       if (toolCalls.length === 0) {
-        return {
-          success: false,
-          reason: `LLM 未调用任何工具即结束（stopReason=${result.stopReason}）`,
-        };
+        this.noToolCallRetries++;
+        if (this.noToolCallRetries > this.maxNoToolCallRetries) {
+          const preview = result.content.trim().slice(0, 300);
+          return {
+            success: false,
+            reason:
+              `LLM 连续 ${this.noToolCallRetries} 轮未调用任何工具（stopReason=${result.stopReason}）` +
+              (preview ? `，最后回复：${preview}` : ''),
+          };
+        }
+        console.log(
+          `[FixToolLoop] LLM 未调用工具（stopReason=${result.stopReason}），提示必须调用工具并重试（${this.noToolCallRetries}/${this.maxNoToolCallRetries}）`
+        );
+        this.messages.push({
+          role: 'user',
+          content:
+            '你上一条回复没有调用任何工具。请必须使用提供的工具（read_file、apply_patch、write_file、validate、finish 等）来推进修复，' +
+            '不要只用文字描述。如果确实无法确定如何修改，调用 finish({ success: false, reason: "需要 Reviewer 澄清具体修改方式" })。',
+        });
+        continue;
       }
+      this.noToolCallRetries = 0;
 
       const toolResults = await this.executeToolCalls(toolCalls);
 

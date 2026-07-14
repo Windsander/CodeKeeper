@@ -197,6 +197,46 @@ describe('FixToolLoop', () => {
     expect(result.reason).toContain('截断');
   });
 
+  it('LLM 纯文字回复未调用工具（stopReason=stop）时提示重试，后续可修复成功', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        // 第一轮：模型只用文字回复，没有工具调用
+        { content: '我认为应该删除未使用的变量。', toolCalls: [], stopReason: 'stop' },
+        // 重试后正常完成
+        { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+        { toolCalls: [{ id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(true);
+    expect(loop.getAppliedFiles()).toContain('src/index.ts');
+  });
+
+  it('连续未调用工具超过重试上限时返回失败并带回复预览', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { content: '我只是随便聊聊不打算干活', toolCalls: [], stopReason: 'stop' },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 10,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('未调用任何工具');
+    expect(result.reason).toContain('我只是随便聊聊不打算干活');
+  });
+
   it('write_file unchanged=true 时不视为有效修改', async () => {
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([

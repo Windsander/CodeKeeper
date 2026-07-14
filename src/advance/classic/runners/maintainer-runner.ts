@@ -48,6 +48,33 @@ export function buildMaintainerMrSessionId(projectId: string, mrIid: number): st
 }
 
 /**
+ * 批量修复结果分类：把 batch 结果映射为每个 finding 的 fixed/failed。
+ *
+ * 必须 batch 整体成功才算 ✅：executeBatchFix 在某个 finding 失败时会提前返回，
+ * 此时 commitAndPush 没有执行，appliedFiles 中的文件并未真正推送，
+ * 不能因为出现在 appliedFiles 中就标记为已修复。
+ */
+export function classifyBatchFixItems(
+  items: Array<{ file: string; line: number; deleteFile?: boolean }>,
+  batchResult: { success: boolean; reason: string; appliedFiles: string[]; deletedFiles: string[] }
+): { fixedItems: string[]; failedItems: string[] } {
+  const fixedItems: string[] = [];
+  const failedItems: string[] = [];
+  for (const item of items) {
+    const key = `${item.file}:${item.line}`;
+    const fixed = item.deleteFile
+      ? batchResult.success
+      : batchResult.success && batchResult.appliedFiles.includes(item.file);
+    if (fixed) {
+      fixedItems.push(key);
+    } else {
+      failedItems.push(`${key} — ${batchResult.reason || '修复失败'}`);
+    }
+  }
+  return { fixedItems, failedItems };
+}
+
+/**
  * MaintainerRunner 构造选项
  */
 export interface MaintainerRunnerOptions {
@@ -538,22 +565,16 @@ export class MaintainerRunner extends BaseRoleRunner {
         }
       }
 
-      for (const item of fixableItems) {
-        const key = `${item.finding.file}:${item.finding.line}`;
-        if (item.deleteFile) {
-          if (batchResult.success || batchResult.deletedFiles.length > 0) {
-            fixedItems.push(key);
-          } else {
-            failedItems.push(`${key} — ${batchResult.reason}`);
-          }
-          continue;
-        }
-        if (batchResult.appliedFiles.includes(item.finding.file)) {
-          fixedItems.push(key);
-        } else {
-          failedItems.push(`${key} — ${batchResult.reason || '修复失败'}`);
-        }
-      }
+      const classified = classifyBatchFixItems(
+        fixableItems.map((item) => ({
+          file: item.finding.file,
+          line: item.finding.line,
+          deleteFile: item.deleteFile,
+        })),
+        batchResult
+      );
+      fixedItems.push(...classified.fixedItems);
+      failedItems.push(...classified.failedItems);
     }
 
     await actor.postSummary(

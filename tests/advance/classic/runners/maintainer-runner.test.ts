@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MaintainerRunner } from '../../../../src/advance/classic/runners/maintainer-runner.js';
+import { MaintainerRunner, classifyBatchFixItems } from '../../../../src/advance/classic/runners/maintainer-runner.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { MergeRequest, Discussion, ReviewFinding } from '../../../../src/advance/classic/provider/types.js';
 import type { MaintainerBrain } from '../../../../src/advance/classic/fix/maintainer-brain.js';
@@ -120,5 +120,46 @@ describe('MaintainerRunner', () => {
       })
     );
     expect(provider.getMRDiff).toHaveBeenCalledWith(mockMR.iid);
+  });
+});
+
+describe('classifyBatchFixItems', () => {
+  it('batch 整体成功时按 appliedFiles 标记 fixed', () => {
+    const { fixedItems, failedItems } = classifyBatchFixItems(
+      [
+        { file: 'src/a.ts', line: 1 },
+        { file: 'src/b.ts', line: 2 },
+      ],
+      { success: true, reason: 'ok', appliedFiles: ['src/a.ts'], deletedFiles: [] }
+    );
+
+    expect(fixedItems).toEqual(['src/a.ts:1']);
+    expect(failedItems).toHaveLength(1);
+    expect(failedItems[0]).toContain('src/b.ts:2');
+  });
+
+  it('batch 失败时即使文件在 appliedFiles 中也不算 fixed（未推送）', () => {
+    const { fixedItems, failedItems } = classifyBatchFixItems(
+      [
+        { file: 'src/a.ts', line: 1 },
+        { file: 'src/b.ts', line: 2 },
+      ],
+      { success: false, reason: '后续 finding 修复失败', appliedFiles: ['src/a.ts'], deletedFiles: [] }
+    );
+
+    expect(fixedItems).toEqual([]);
+    expect(failedItems).toHaveLength(2);
+    expect(failedItems[0]).toContain('src/a.ts:1');
+    expect(failedItems[0]).toContain('后续 finding 修复失败');
+  });
+
+  it('deleteFile 项也必须 batch 成功才算 fixed', () => {
+    const { fixedItems, failedItems } = classifyBatchFixItems(
+      [{ file: 'src/dead.ts', line: 1, deleteFile: true }],
+      { success: false, reason: '另一项失败', appliedFiles: [], deletedFiles: ['src/dead.ts'] }
+    );
+
+    expect(fixedItems).toEqual([]);
+    expect(failedItems[0]).toContain('src/dead.ts:1');
   });
 });
