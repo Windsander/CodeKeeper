@@ -5,6 +5,7 @@ import type { MergeRequest, ReviewFinding, Discussion } from '../../../../src/ad
 import type { MaintainerBrain, CognitiveDecision } from '../../../../src/advance/classic/fix/maintainer-brain.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type { MrAgentState } from '../../../../src/advance/classic/runners/shared/state-utils.js';
+import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
 
 function createMockBrain(overrides: Partial<MaintainerBrain> = {}) {
   return {
@@ -136,7 +137,7 @@ describe('MaintainerActor', () => {
 
     expect(worktreeManager.commitAndPush).toHaveBeenCalledWith(
       'feature/test',
-      expect.stringContaining('[CodeKeeper] fix'),
+      expect.stringContaining('变量未使用'),
       { setUpstream: false }
     );
     expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
@@ -150,6 +151,123 @@ describe('MaintainerActor', () => {
       mockDiscussion.id,
       expect.stringContaining('删除更干净')
     );
+  });
+
+  it('commit 被 hook 拒绝时学习提交规范、写入项目记忆并重试', async () => {
+    const provider = createMockProvider();
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Worktree commit 失败: ❌ Commit message 不符合 Conventional Commits 规范。格式: <type>(<scope>): <description>'
+        )
+      )
+      .mockResolvedValueOnce(undefined);
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain();
+
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+          {
+            toolCalls: [
+              { id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'const used = 1;' } },
+            ],
+          },
+          { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+          { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
+        ],
+        responses: [
+          '{"convention": "Conventional Commits 格式：<type>(<scope>): <description>"}',
+          '{"message": "fix: 删除未使用变量"}',
+        ],
+      },
+    });
+
+    const memoryClient = {
+      context: { appId: 'a', projectId: 'p1', agentId: 'm', userId: 'u', sessionId: 's' },
+      recallProjectKnowledge: vi.fn().mockResolvedValue([]),
+      recordProjectKnowledge: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IMemoryClient;
+
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'CodeKeeper Maintainer',
+      memoryClient,
+    });
+
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '可以修复',
+      fixDescription: '删除未使用变量',
+      confidence: 'high',
+    };
+
+    const ok = await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
+
+    expect(ok).toBe(true);
+    expect(commitAndPush).toHaveBeenCalledTimes(2);
+    // 第一次用朴素默认信息，第二次用按规范生成的信息
+    expect(commitAndPush.mock.calls[0][1]).toContain('变量未使用');
+    expect(commitAndPush.mock.calls[1][1]).toBe('fix: 删除未使用变量');
+    // 规范被写入项目级记忆
+    expect(memoryClient.recordProjectKnowledge).toHaveBeenCalledWith([
+      expect.objectContaining({
+        category: 'convention',
+        confidence: 'high',
+        content: expect.stringContaining('Conventional Commits'),
+      }),
+    ]);
+  });
+
+  it('commit 被拒绝且与格式无关时不重试', async () => {
+    const provider = createMockProvider();
+    const commitAndPush = vi.fn().mockRejectedValue(new Error('Worktree commit 失败: pre-commit lint 未通过'));
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain();
+
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+          {
+            toolCalls: [
+              { id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'const used = 1;' } },
+            ],
+          },
+          { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+          { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
+        ],
+        // LLM 判断不是格式问题
+        responses: ['{"convention": ""}'],
+      },
+    });
+
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'CodeKeeper Maintainer',
+    });
+
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '可以修复',
+      fixDescription: '删除未使用变量',
+      confidence: 'high',
+    };
+
+    const ok = await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
+
+    expect(ok).toBe(false);
+    expect(commitAndPush).toHaveBeenCalledTimes(1);
   });
 
   it('fix 工具循环失败时转为 ask，不提交', async () => {

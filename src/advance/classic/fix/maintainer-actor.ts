@@ -38,6 +38,10 @@ export interface MaintainerActorOptions {
  * 所有 worktree 修改/执行/验证都在本类内协调完成。
  */
 export class MaintainerActor {
+  /** 项目提交信息规范缓存（实例级，避免每次提交都召回记忆） */
+  private commitConvention?: string;
+  private commitConventionLoaded = false;
+
   constructor(private readonly options: MaintainerActorOptions) {}
 
   /**
@@ -211,11 +215,20 @@ export class MaintainerActor {
         };
       }
 
-      const message = `[CodeKeeper] fix: 批量修复\n\n${
-        appliedFiles.size > 0 ? `修改文件：\n${Array.from(appliedFiles).map((f) => `- ${f}`).join('\n')}\n\n` : ''
-      }${deletedFiles.size > 0 ? `删除文件：\n${Array.from(deletedFiles).map((f) => `- ${f}`).join('\n')}\n\n` : ''}`;
+      const changeDescription = [
+        appliedFiles.size > 0
+          ? `修改文件：\n${Array.from(appliedFiles).map((f) => `- ${f}`).join('\n')}`
+          : '',
+        deletedFiles.size > 0
+          ? `删除文件：\n${Array.from(deletedFiles).map((f) => `- ${f}`).join('\n')}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
       console.log(`[MaintainerActor] 阶段=commit-push 批量提交到分支: ${mr.sourceBranch}`);
-      await this.options.worktreeManager.commitAndPush(mr.sourceBranch, message, { setUpstream: false });
+      await this.commitWithConventionRetry(mr.sourceBranch, changeDescription, () =>
+        buildDefaultBatchMessage(Array.from(appliedFiles), Array.from(deletedFiles))
+      );
 
       return {
         success: true,
@@ -272,11 +285,12 @@ export class MaintainerActor {
         return false;
       }
 
-      const message = `[CodeKeeper] fix: ${finding.message}\n\n规则: ${finding.ruleId ?? 'N/A'}\n文件: ${finding.file}:${finding.line}`;
       console.log(`[MaintainerActor] 阶段=commit-push 提交并推送修复到分支: ${mr.sourceBranch}`);
-      await this.options.worktreeManager.commitAndPush(mr.sourceBranch, message, {
-        setUpstream: false,
-      });
+      await this.commitWithConventionRetry(
+        mr.sourceBranch,
+        `问题: ${finding.message}\n规则: ${finding.ruleId ?? 'N/A'}\n文件: ${finding.file}:${finding.line}`,
+        () => buildDefaultFixMessage(finding)
+      );
 
       try {
         await this.options.provider.resolveDiscussion(mr.iid, discussion.id);
@@ -355,4 +369,184 @@ export class MaintainerActor {
       filePath,
     };
   }
+
+  /**
+   * 提交并推送；若被项目 hook 以提交信息规范为由拒绝，
+   * 让 LLM 从 hook 输出中提取规范、写入项目记忆，并按规范重新生成 message 重试一次。
+   */
+  private async commitWithConventionRetry(
+    branch: string,
+    changeDescription: string,
+    buildDefaultMessage: () => string
+  ): Promise<void> {
+    const wm = this.options.worktreeManager;
+    const message = await this.buildCommitMessage(changeDescription, buildDefaultMessage);
+    try {
+      await wm.commitAndPush(branch, message, { setUpstream: false });
+      return;
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[MaintainerActor] commit 被拒绝，尝试从 hook 输出学习提交规范: ${errorText.slice(0, 500)}`
+      );
+      const convention = await this.learnCommitConvention(errorText);
+      if (!convention) {
+        // 拒绝原因与提交信息格式无关（如 lint/测试失败），不重试
+        throw err;
+      }
+      const retryMessage = await this.buildCommitMessage(changeDescription, buildDefaultMessage);
+      await wm.commitAndPush(branch, retryMessage, { setUpstream: false });
+    }
+  }
+
+  /** 按已记忆的项目规范生成提交信息；无规范时使用朴素默认 */
+  private async buildCommitMessage(
+    changeDescription: string,
+    buildDefaultMessage: () => string
+  ): Promise<string> {
+    const convention = await this.getCommitConvention();
+    if (!convention) {
+      return buildDefaultMessage();
+    }
+    try {
+      const json = await this.options.llmClient.completeJson(
+        [
+          '该项目要求 git commit message 遵循以下规范：',
+          convention,
+          '',
+          '请为以下代码修改生成一条符合该规范的完整 commit message（可包含 body，不要输出其他解释）：',
+          changeDescription,
+          '',
+          '输出 JSON: { "message": "..." }',
+        ].join('\n'),
+        undefined,
+        {
+          type: 'object',
+          properties: { message: { type: 'string' } },
+          required: ['message'],
+        }
+      );
+      const parsed = JSON.parse(json) as { message?: string };
+      if (parsed.message?.trim()) {
+        return parsed.message.trim();
+      }
+    } catch (err) {
+      console.warn(
+        `[MaintainerActor] 按规范生成提交信息失败，回退默认: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    return buildDefaultMessage();
+  }
+
+  /** 从项目记忆召回提交信息规范（实例级缓存） */
+  private async getCommitConvention(): Promise<string | undefined> {
+    if (this.commitConventionLoaded) {
+      return this.commitConvention;
+    }
+    this.commitConventionLoaded = true;
+    const memory = this.options.memoryClient;
+    if (!memory) {
+      return undefined;
+    }
+    try {
+      const recalled = await memory.recallProjectKnowledge(
+        'commit message 提交信息规范 convention git 提交格式'
+      );
+      this.commitConvention = recalled.find((item) => /commit|提交/i.test(item));
+    } catch (err) {
+      console.warn(
+        `[MaintainerActor] 召回提交规范记忆失败: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+    return this.commitConvention;
+  }
+
+  /** 从 commit 失败的 hook 输出中提取项目提交规范，并写入项目级记忆 */
+  private async learnCommitConvention(errorOutput: string): Promise<string | undefined> {
+    try {
+      const json = await this.options.llmClient.completeJson(
+        [
+          '以下是 git commit 被项目 hook 拒绝时的输出。请判断拒绝原因是否与 commit message 格式规范有关。',
+          '如果是，提取该项目要求的提交信息规范（格式说明、类型列表、示例等），用一到两句话概括；',
+          '如果不是格式问题（例如 lint 或测试未通过），convention 输出空字符串。',
+          '',
+          '输出 JSON: { "convention": "..." }',
+          '',
+          '--- hook 输出 ---',
+          errorOutput.slice(0, 4000),
+        ].join('\n'),
+        undefined,
+        {
+          type: 'object',
+          properties: { convention: { type: 'string' } },
+          required: ['convention'],
+        }
+      );
+      const parsed = JSON.parse(json) as { convention?: string };
+      const convention = parsed.convention?.trim();
+      if (!convention) {
+        return undefined;
+      }
+      this.commitConvention = convention;
+      this.commitConventionLoaded = true;
+      const memory = this.options.memoryClient;
+      if (memory) {
+        await memory.recordProjectKnowledge([
+          {
+            id: `commit-convention-${memory.context.projectId}`,
+            category: 'convention',
+            sourceFiles: [],
+            content: `提交信息（commit message）规范：${convention}`,
+            confidence: 'high',
+            createdAt: new Date().toISOString(),
+          },
+        ]);
+        console.log(`[MaintainerActor] 已学习并记忆该项目提交规范: ${convention}`);
+      }
+      return convention;
+    } catch (err) {
+      console.warn(
+        `[MaintainerActor] 提取提交规范失败: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return undefined;
+    }
+  }
+}
+
+/**
+ * 清理提交信息主题：压缩为单行并截断，避免异常长的 subject。
+ */
+function sanitizeCommitSubject(message: string): string {
+  const oneLine = message.replace(/\s+/g, ' ').trim();
+  const truncated = oneLine.length > 60 ? `${oneLine.slice(0, 57)}...` : oneLine;
+  return truncated || '修复 Reviewer 提出的问题';
+}
+
+/**
+ * 朴素默认提交信息：不预设任何项目格式。
+ * 若目标项目 hook 拒绝，会触发提交规范学习并重试。
+ */
+function buildDefaultFixMessage(finding: ReviewFinding): string {
+  return [
+    sanitizeCommitSubject(finding.message),
+    '',
+    `规则: ${finding.ruleId ?? 'N/A'}`,
+    `文件: ${finding.file}:${finding.line}`,
+    '',
+    '[CodeKeeper]',
+  ].join('\n');
+}
+
+/** 朴素默认批量提交信息 */
+function buildDefaultBatchMessage(appliedFiles: string[], deletedFiles: string[]): string {
+  const total = appliedFiles.length + deletedFiles.length;
+  const lines = [`批量修复 ${total} 个 Reviewer 问题`, ''];
+  if (appliedFiles.length > 0) {
+    lines.push('修改文件：', ...appliedFiles.map((f) => `- ${f}`), '');
+  }
+  if (deletedFiles.length > 0) {
+    lines.push('删除文件：', ...deletedFiles.map((f) => `- ${f}`), '');
+  }
+  lines.push('[CodeKeeper]');
+  return lines.join('\n');
 }

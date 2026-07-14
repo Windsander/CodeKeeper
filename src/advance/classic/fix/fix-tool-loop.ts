@@ -111,7 +111,7 @@ export class FixToolLoop {
     for (let step = 0; step < this.maxSteps; step++) {
       console.log(`[FixToolLoop] 第 ${step + 1}/${this.maxSteps} 步`);
       logMemorySnapshot(`FixToolLoop 第 ${step + 1} 步开始`);
-      console.log(`[FixToolLoop] messages 数量=${this.messages.length}, 总字符=${this.messages.reduce((sum, m) => sum + (typeof m.content === 'string' ? m.content.length : m.content.reduce((s, p) => s + (('text' in p && p.text) ? p.text.length : 0), 0)), 0)}`);
+      console.log(`[FixToolLoop] messages 数量=${this.messages.length}, 总字符=${this.estimateMessagesChars()}`);
 
       const result = await this.llmClient.completeWithTools(
         this.messages,
@@ -225,6 +225,34 @@ export class FixToolLoop {
 
   getAppliedFiles(): string[] {
     return Array.from(this.appliedFiles);
+  }
+
+  /**
+   * 估算消息历史的总字符数，用于诊断上下文膨胀。
+   * 需覆盖所有部分类型：text、tool_result.content、tool_use.input。
+   */
+  private estimateMessagesChars(): number {
+    return this.messages.reduce((sum, m) => {
+      if (typeof m.content === 'string') {
+        return sum + m.content.length;
+      }
+      return (
+        sum +
+        m.content.reduce((s, part) => {
+          const p = part as Record<string, unknown>;
+          if (typeof p.text === 'string') return s + p.text.length;
+          if (typeof p.content === 'string') return s + p.content.length;
+          if (p.input !== undefined) {
+            try {
+              return s + JSON.stringify(p.input).length;
+            } catch {
+              return s;
+            }
+          }
+          return s;
+        }, 0)
+      );
+    }, 0);
   }
 
   getDeletedFiles(): string[] {
