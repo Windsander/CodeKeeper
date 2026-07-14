@@ -127,6 +127,25 @@ describe('WorktreeManager', () => {
     expect(manager.readFile('src/fix.ts')).toBe('// fixed');
   });
 
+  it('writeFile mode=append 应追加到文件末尾', () => {
+    const worktreePath = join(tmp, '.codekeeper-worktree', 'p1');
+    mkdirSync(worktreePath, { recursive: true });
+    const manager = new WorktreeManager({
+      projectId: 'p1',
+      rootPath,
+      remoteUrl,
+    });
+
+    manager.writeFile('src/big.ts', 'part1\n');
+    manager.writeFile('src/big.ts', 'part2\n', 'append');
+    manager.writeFile('src/big.ts', 'part3\n', 'append');
+    expect(manager.readFile('src/big.ts')).toBe('part1\npart2\npart3\n');
+
+    // overwrite 应重新覆盖
+    manager.writeFile('src/big.ts', 'reset\n');
+    expect(manager.readFile('src/big.ts')).toBe('reset\n');
+  });
+
   it('commitAndPush 有变更时应 add/commit/push', async () => {
     mockStatus.mockResolvedValueOnce({ files: [{ path: 'src/fix.ts' }] });
     const manager = new WorktreeManager({

@@ -24,12 +24,20 @@ export const READ_FILE_TOOL: ToolDefinition = {
 
 export const WRITE_FILE_TOOL: ToolDefinition = {
   name: 'write_file',
-  description: '将内容写入 worktree 中的相对路径文件，会自动创建父目录。',
+  description:
+    '将内容写入 worktree 中的相对路径文件，会自动创建父目录。' +
+    'mode=overwrite（默认）整文件覆盖，仅适用于小文件（约 100 行以内）；' +
+    '写入大文件时必须分段：第一段 overwrite，后续段 append，每段控制在约 100 行以内，避免单轮输出过长被截断。',
   input_schema: {
     type: 'object',
     properties: {
       relPath: { type: 'string', description: '文件相对路径' },
-      content: { type: 'string', description: '要写入的完整文件内容' },
+      content: { type: 'string', description: '本段要写入的内容（overwrite 为完整内容，append 为追加片段）' },
+      mode: {
+        type: 'string',
+        enum: ['overwrite', 'append'],
+        description: '写入模式：overwrite 覆盖整文件（默认）；append 追加到文件末尾，用于分段写大文件',
+      },
     },
     required: ['relPath', 'content'],
     additionalProperties: false,

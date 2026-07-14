@@ -301,13 +301,28 @@ export class LlmClient {
 
     const message = data.choices?.[0]?.message;
     const content = message?.content ?? message?.reasoning_content ?? '';
-    const toolCalls: ToolCall[] = (message?.tool_calls ?? [])
-      .filter((tc) => tc.type === 'function')
-      .map((tc) => ({
+    const finishReason = data.choices?.[0]?.finish_reason ?? 'end_turn';
+    const toolCalls: ToolCall[] = [];
+    for (const tc of message?.tool_calls ?? []) {
+      if (tc.type !== 'function') continue;
+      const rawArgs = tc.function?.arguments ?? '{}';
+      let input: Record<string, unknown>;
+      try {
+        input = JSON.parse(rawArgs) as Record<string, unknown>;
+      } catch {
+        // arguments JSON 残缺，通常是输出被 length 截断导致；该调用不可执行，丢弃，
+        // 由上层（如 FixToolLoop）根据 stopReason=length 走截断恢复逻辑
+        console.log(
+          `[LlmClient] 工具调用 ${tc.function?.name ?? 'unknown'} 参数 JSON 解析失败（可能输出被截断），丢弃。原始片段: ${rawArgs.slice(0, 200)}`
+        );
+        continue;
+      }
+      toolCalls.push({
         id: tc.id ?? '',
         name: tc.function?.name ?? '',
-        input: this.safeParseJson(tc.function?.arguments ?? '{}'),
-      }));
+        input,
+      });
+    }
 
     logger.debug(
       { status: response.status, model: this.model, contentLength: content.length, toolCalls: toolCalls.length },
@@ -318,7 +333,7 @@ export class LlmClient {
     return {
       content: String(content),
       toolCalls,
-      stopReason: data.choices?.[0]?.finish_reason ?? 'end_turn',
+      stopReason: finishReason,
     };
   }
 

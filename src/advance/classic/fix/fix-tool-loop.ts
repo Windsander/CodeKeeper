@@ -29,10 +29,19 @@ export interface FixToolLoopOptions {
   recallPlanner?: RecallPlanner;
   /** 最大循环步数，默认 20 */
   maxSteps?: number;
+  /** 单轮 LLM 回复的最大 token 数（输出约束，非整个会话），默认 8192 */
+  maxTokens?: number;
+  /** 输出被长度截断时的最大连续重试次数，默认 3 */
+  maxTruncationRetries?: number;
   /** 额外系统提示 */
   extraSystemPrompt?: string;
   /** 验证策略，默认 WorkspaceValidationStrategy */
   validationStrategy?: ValidationStrategy;
+}
+
+/** 判断 stopReason 是否表示输出被长度截断 */
+function isTruncatedStopReason(stopReason: string): boolean {
+  return stopReason === 'length' || stopReason === 'max_tokens';
 }
 
 export class FixToolLoop {
@@ -41,6 +50,8 @@ export class FixToolLoop {
   private readonly finding: ReviewFinding;
   private readonly mr: MergeRequest;
   private readonly maxSteps: number;
+  private readonly maxTokens: number;
+  private readonly maxTruncationRetries: number;
   private readonly extraSystemPrompt: string;
   private readonly registry: ToolRegistry;
   private readonly executor: ToolExecutor;
@@ -52,6 +63,7 @@ export class FixToolLoop {
   private baselineResult?: ValidationResult;
   private lastValidationResult?: ValidationResult;
   private fallbackId = 0;
+  private truncationRetries = 0;
 
   constructor(options: FixToolLoopOptions) {
     this.llmClient = options.llmClient;
@@ -59,6 +71,8 @@ export class FixToolLoop {
     this.finding = options.finding;
     this.mr = options.mr;
     this.maxSteps = options.maxSteps ?? 20;
+    this.maxTokens = options.maxTokens ?? 8192;
+    this.maxTruncationRetries = options.maxTruncationRetries ?? 3;
     this.extraSystemPrompt = options.extraSystemPrompt ?? '';
     this.registry = new ToolRegistry(FIX_TOOLS);
     this.executor = new ToolExecutor({
@@ -97,7 +111,7 @@ export class FixToolLoop {
       const result = await this.llmClient.completeWithTools(
         this.messages,
         this.registry.list(),
-        { system: this.buildSystemPrompt(), toolChoice: { type: 'any' } }
+        { system: this.buildSystemPrompt(), toolChoice: { type: 'any' }, maxTokens: this.maxTokens }
       );
 
       console.log(
@@ -112,6 +126,30 @@ export class FixToolLoop {
           toolCalls = parsed;
         }
       }
+
+      // 输出被长度截断：回复中的工具调用 JSON 可能残缺，不可信，全部丢弃；
+      // 截断内容不入历史，直接提示模型用更小的块重试（像正常 Agent harness 一样续接）
+      if (isTruncatedStopReason(result.stopReason)) {
+        this.truncationRetries++;
+        if (this.truncationRetries > this.maxTruncationRetries) {
+          return {
+            success: false,
+            reason: `LLM 输出连续 ${this.truncationRetries} 次被长度截断（stopReason=${result.stopReason}），修复未收敛`,
+          };
+        }
+        console.log(
+          `[FixToolLoop] 输出被长度截断，丢弃 ${toolCalls.length} 个可能残缺的工具调用并请求重试（${this.truncationRetries}/${this.maxTruncationRetries}）`
+        );
+        this.messages.push({
+          role: 'user',
+          content:
+            '你上一条回复因长度限制被截断，未被执行。请直接调用工具、不要输出解释文字；' +
+            '如需写入大文件，用 write_file 分段写入（第一段 overwrite，后续 append，每段约 100 行以内），' +
+            '或改用 apply_patch 局部修改。',
+        });
+        continue;
+      }
+      this.truncationRetries = 0;
 
       this.messages.push({
         role: 'assistant',
@@ -179,8 +217,8 @@ export class FixToolLoop {
       '1. 所有修改必须在 worktree 内进行，不能影响主仓库。',
       '2. 你只能使用提供的工具操作 worktree；不能运行任意 shell 命令。',
       '3. run_script 只能调用 package.json 中白名单内的 npm scripts（lint、typecheck、build、test、compile:packages）。',
-      '4. 修改前若不确定，先 read_file 查看文件内容；跨文件修改需分别读写相关文件。',
-      '5. 你可以使用 apply_patch 应用 unified diff，也可以直接用 write_file 重写整个文件（仅限小文件）。',
+      '4. 修改前必须先 read_file 查看目标文件的当前内容，确认现状后再改；禁止不读文件凭猜测修改。跨文件修改需分别读写相关文件。',
+      '5. 写入协议：局部修改优先用 apply_patch；write_file 整文件覆盖仅限小文件（约 100 行以内）；写入更大的文件必须分段（第一段 overwrite，后续 append，每段约 100 行以内）。',
       `6. 你必须把修复应用到 finding 指出的目标文件（${this.finding.file}）。如果修改涉及导出/导入，可同步修改相关文件，但核心改动必须在目标文件上。`,
       '7. 调用 write_file 后，如果返回 unchanged=true，说明写入内容和原文件完全一致，没有产生任何变更；此时你必须检查是否写错了文件，并重新修改正确的文件。',
       '8. 如果 worktree 的运行环境尚未准备好（例如缺少 node_modules、workspace 包未编译、Rust/Python/Go 依赖未安装），你可以先使用 run_setup_command 安装或构建，再读取和修改文件。run_setup_command 仅用于安装/构建，禁止用于 git、find、grep 等查询命令。',

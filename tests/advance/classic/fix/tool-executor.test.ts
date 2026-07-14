@@ -133,6 +133,38 @@ describe('ToolExecutor', () => {
     expect(parsed.data.unchanged).toBe(true);
   });
 
+  it('write_file mode=append 以追加模式写入', async () => {
+    const worktree = createMockWorktreeManager();
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({
+      id: '1',
+      name: 'write_file',
+      input: { relPath: 'src/index.ts', content: 'part2', mode: 'append' },
+    });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.appended).toBe(true);
+    expect(parsed.data.unchanged).toBe(false);
+    expect(worktree.writeFile).toHaveBeenCalledWith('src/index.ts', 'part2', 'append');
+  });
+
+  it('write_file mode=append 追加空内容时返回 unchanged=true', async () => {
+    const worktree = createMockWorktreeManager();
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({
+      id: '1',
+      name: 'write_file',
+      input: { relPath: 'src/index.ts', content: '', mode: 'append' },
+    });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.unchanged).toBe(true);
+  });
+
   it('run_script 白名单外返回错误', async () => {
     const worktree = createMockWorktreeManager();
     const executor = new ToolExecutor({ worktreeManager: worktree, allowedScripts: ['lint'] });

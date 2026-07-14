@@ -1,5 +1,5 @@
 import simpleGit, { type SimpleGit, CleanOptions } from 'simple-git';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, unlinkSync, createReadStream } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, statSync, unlinkSync, createReadStream } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -334,10 +334,14 @@ export class WorktreeManager {
     return ranges;
   }
 
-  /** 写入工作区内的相对路径文件 */
-  writeFile(relPath: string, content: string): void {
+  /** 写入工作区内的相对路径文件；mode=append 时追加到文件末尾，用于分段写入大文件 */
+  writeFile(relPath: string, content: string, mode: 'overwrite' | 'append' = 'overwrite'): void {
     const targetPath = join(this.worktreePath, relPath);
     mkdirSync(dirname(targetPath), { recursive: true });
+    if (mode === 'append') {
+      appendFileSync(targetPath, content, 'utf-8');
+      return;
+    }
     writeFileSync(targetPath, content, 'utf-8');
   }
 

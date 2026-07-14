@@ -154,6 +154,49 @@ describe('FixToolLoop', () => {
     expect(result.reason).toContain('未实际修改或删除任何文件');
   });
 
+  it('输出被截断（stopReason=length）时丢弃残缺调用并重试，后续可修复成功', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        // 第一轮：输出被截断，带一个残缺的工具调用
+        {
+          content: '我先分析一下这个问题然后写入整个文件……（被截断）',
+          toolCalls: [{ id: 't1', name: 'write_file', input: {} }],
+          stopReason: 'length',
+        },
+        // 重试后正常完成
+        { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+        { toolCalls: [{ id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(true);
+    expect(loop.getAppliedFiles()).toContain('src/index.ts');
+  });
+
+  it('连续截断超过重试上限时返回失败', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { content: '（每次都被截断）', toolCalls: [], stopReason: 'length' },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 10,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('截断');
+  });
+
   it('write_file unchanged=true 时不视为有效修改', async () => {
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([

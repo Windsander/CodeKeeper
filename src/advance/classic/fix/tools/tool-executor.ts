@@ -141,17 +141,38 @@ export class ToolExecutor {
     return this.worktreeManager.searchInFile(resolved, keyword);
   }
 
-  private async writeFile(input: Record<string, unknown>): Promise<{ written: true; unchanged: boolean }> {
+  private async writeFile(input: Record<string, unknown>): Promise<{ written: true; unchanged: boolean; appended: boolean }> {
     const relPath = this.requireString(input, 'relPath');
-    const content = this.requireString(input, 'content');
+    // content 允许为空字符串：清空文件是合法的修复操作
+    const content = this.requireContent(input);
+    const mode = this.optionalWriteMode(input);
     const resolved = await this.worktreeManager.resolveFilePath(relPath);
     if (!resolved) {
       throw new Error(`无法解析文件路径: ${relPath}`);
     }
+    if (mode === 'append') {
+      this.worktreeManager.writeFile(resolved, content, 'append');
+      // append 总是产生变更（除非追加空内容）
+      return { written: true, unchanged: content.length === 0, appended: true };
+    }
     const existing = this.worktreeManager.readFile(resolved);
     const unchanged = existing === content;
     this.worktreeManager.writeFile(resolved, content);
-    return { written: true, unchanged };
+    return { written: true, unchanged, appended: false };
+  }
+
+  private optionalWriteMode(input: Record<string, unknown>): 'overwrite' | 'append' {
+    const value = input.mode;
+    return value === 'append' ? 'append' : 'overwrite';
+  }
+
+  /** content 参数校验：必须是字符串，但允许为空（清空文件） */
+  private requireContent(input: Record<string, unknown>): string {
+    const value = input.content;
+    if (typeof value !== 'string') {
+      throw new Error('参数 content 必须是字符串');
+    }
+    return value;
   }
 
   private async deleteFile(input: Record<string, unknown>): Promise<{ deleted: true }> {
