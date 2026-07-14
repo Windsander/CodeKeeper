@@ -1,9 +1,23 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ToolExecutor } from '../../../../src/advance/classic/fix/tools/tool-executor.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
+import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+let tempDir: string;
+
+beforeEach(() => {
+  tempDir = mkdtempSync(join(tmpdir(), 'tool-executor-test-'));
+});
+
+afterEach(() => {
+  rmSync(tempDir, { recursive: true, force: true });
+});
 
 function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): WorktreeManager {
   return {
+    getWorktreePath: vi.fn().mockReturnValue(tempDir),
     resolveFilePath: vi.fn().mockImplementation(async (p: string) => p),
     readFile: vi.fn().mockReturnValue('content'),
     readFileWindow: vi.fn().mockResolvedValue({
@@ -254,8 +268,8 @@ describe('ToolExecutor', () => {
     expect(parsed.data).toEqual({ lint: true, typecheck: true });
   });
 
-  it('validate 成功时长输出被截断', async () => {
-    const longReason = 'warning line\n'.repeat(500);
+  it('validate 成功时中等长度输出做内联摘要', async () => {
+    const longReason = 'warning line\n'.repeat(200);
     const worktree = createMockWorktreeManager({
       validate: vi.fn().mockResolvedValue({ lint: true, typecheck: true, lintReason: longReason }),
     });
@@ -266,11 +280,29 @@ describe('ToolExecutor', () => {
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
     expect(parsed.data.lintReason).toContain('输出已截断');
-    expect(parsed.data.lintReason.length).toBeLessThan(longReason.length);
+    expect(parsed.data.outputFile).toBeUndefined();
   });
 
-  it('validate 失败时保留尾部关键错误信息', async () => {
-    const errorReason = '前面很多行\n'.repeat(400) + '最后的 lint 错误';
+  it('validate 成功时超长输出落盘并返回摘要', async () => {
+    const longReason = 'warning line\n'.repeat(500);
+    const worktree = createMockWorktreeManager({
+      validate: vi.fn().mockResolvedValue({ lint: true, typecheck: true, lintReason: longReason }),
+    });
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({ id: '1', name: 'validate', input: {} });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.outputFile).toContain('.codekeeper-tool-outputs');
+    expect(parsed.data.lintSummary).toBeDefined();
+    expect(parsed.data.truncated).toBe(true);
+    const full = readFileSync(join(tempDir, parsed.data.outputFile), 'utf-8');
+    expect(full).toContain('warning line');
+  });
+
+  it('validate 失败时超长输出落盘并保留尾部摘要', async () => {
+    const errorReason = '前面很多行\n'.repeat(700) + '最后的 lint 错误';
     const worktree = createMockWorktreeManager({
       validate: vi.fn().mockResolvedValue({ lint: false, typecheck: true, lintReason: errorReason }),
     });
@@ -280,11 +312,11 @@ describe('ToolExecutor', () => {
 
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
-    expect(parsed.data.lintReason).toContain('最后的 lint 错误');
-    expect(parsed.data.lintReason).toContain('省略');
+    expect(parsed.data.outputFile).toContain('.codekeeper-tool-outputs');
+    expect(parsed.data.lintSummary).toContain('最后的 lint 错误');
   });
 
-  it('run_script 成功时长输出被截断', async () => {
+  it('run_script 超长输出落盘', async () => {
     const longOutput = 'info\n'.repeat(1000);
     const worktree = createMockWorktreeManager({
       runScript: vi.fn().mockResolvedValue({ success: true, reason: longOutput }),
@@ -295,11 +327,12 @@ describe('ToolExecutor', () => {
 
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
-    expect(parsed.data.reason).toContain('输出已截断');
+    expect(parsed.data.outputFile).toContain('.codekeeper-tool-outputs');
+    expect(parsed.data.summary).toBeDefined();
   });
 
-  it('run_setup_command 失败时保留尾部错误', async () => {
-    const errorOutput = '前置日志\n'.repeat(50) + 'npm install 失败: 缺少权限';
+  it('run_setup_command 失败时超长输出落盘', async () => {
+    const errorOutput = '前置日志\n'.repeat(800) + 'npm install 失败: 缺少权限';
     const worktree = createMockWorktreeManager({
       runSetupCommand: vi.fn().mockResolvedValue({ success: false, reason: errorOutput }),
     });
@@ -313,6 +346,51 @@ describe('ToolExecutor', () => {
 
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
-    expect(parsed.data.reason).toContain('npm install 失败');
+    expect(parsed.data.outputFile).toContain('.codekeeper-tool-outputs');
+    expect(parsed.data.summary).toContain('npm install 失败');
+  });
+
+  it('read_output_file 可读取落盘输出', async () => {
+    const longOutput = 'detail\n'.repeat(1000);
+    const worktree = createMockWorktreeManager({
+      runScript: vi.fn().mockResolvedValue({ success: true, reason: longOutput }),
+    });
+    const executor = new ToolExecutor({ worktreeManager: worktree, allowedScripts: ['build'] });
+
+    const runResult = await executor.execute({ id: '1', name: 'run_script', input: { script: 'build' } });
+    const runParsed = JSON.parse(runResult.content);
+    const outputFile = runParsed.data.outputFile;
+
+    const readResult = await executor.execute({
+      id: '2',
+      name: 'read_output_file',
+      input: { outputFile },
+    });
+    const readParsed = JSON.parse(readResult.content);
+    expect(readParsed.success).toBe(true);
+    expect(readParsed.data.content).toContain('detail');
+  });
+
+  it('read_output_file tailLines 只返回尾部', async () => {
+    const longOutput = Array.from({ length: 1000 }, (_, i) => `line-${i}`).join('\n');
+    const worktree = createMockWorktreeManager({
+      runScript: vi.fn().mockResolvedValue({ success: true, reason: longOutput }),
+    });
+    const executor = new ToolExecutor({ worktreeManager: worktree, allowedScripts: ['build'] });
+
+    const runResult = await executor.execute({ id: '1', name: 'run_script', input: { script: 'build' } });
+    const runParsed = JSON.parse(runResult.content);
+    const outputFile = runParsed.data.outputFile;
+
+    const readResult = await executor.execute({
+      id: '2',
+      name: 'read_output_file',
+      input: { outputFile, tailLines: 5 },
+    });
+    const readParsed = JSON.parse(readResult.content);
+    expect(readParsed.success).toBe(true);
+    expect(readParsed.data.content).toContain('line-999');
+    expect(readParsed.data.content).not.toContain('line-0');
+    expect(readParsed.data.tailLines).toBe(5);
   });
 });

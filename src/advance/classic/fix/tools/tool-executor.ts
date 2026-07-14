@@ -20,8 +20,16 @@ export interface ToolExecutorOptions {
   allowedScripts?: string[];
 }
 
+import { writeFileSync, mkdirSync, existsSync, createReadStream, statSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline';
+
 const MAX_OUTPUT_LENGTH = 2000;
 const MAX_FILE_CONTENT_LENGTH = 20000;
+const OUTPUT_FILE_THRESHOLD = 4000;
+const MAX_OUTPUT_PREVIEW_LENGTH = 800;
+const MAX_READ_OUTPUT_FILE_SIZE = 512 * 1024;
+const TOOL_OUTPUT_DIR = '.codekeeper-tool-outputs';
 
 /** 截断文本，mode=head 保留头部，mode=tail 保留尾部 */
 function truncateText(text: string, maxLen: number, mode: 'head' | 'tail' = 'tail'): string {
@@ -32,6 +40,52 @@ function truncateText(text: string, maxLen: number, mode: 'head' | 'tail' = 'tai
     return `...（省略前 ${text.length - maxLen} 字符）\n${text.slice(-maxLen)}`;
   }
   return `${text.slice(0, maxLen)}\n...（后省略 ${text.length - maxLen} 字符）`;
+}
+
+/** 把超长工具输出写入 worktree 临时文件，返回相对路径 */
+function writeToolOutputFile(worktreePath: string, toolCallId: string, text: string): string {
+  const safeId = toolCallId.replace(/[^a-zA-Z0-9-]/g, '_');
+  const relPath = `${TOOL_OUTPUT_DIR}/${safeId}.log`;
+  const fullPath = join(worktreePath, relPath);
+  mkdirSync(dirname(fullPath), { recursive: true });
+  writeFileSync(fullPath, text, 'utf-8');
+  return relPath;
+}
+
+/** 读取输出文件；指定 tailLines 时只返回最后 N 行 */
+async function readOutputFile(
+  worktreePath: string,
+  relPath: string,
+  tailLines?: number
+): Promise<string> {
+  const fullPath = join(worktreePath, relPath);
+  if (!existsSync(fullPath)) {
+    throw new Error(`输出文件不存在: ${relPath}`);
+  }
+  const stats = statSync(fullPath);
+  if (stats.size > MAX_READ_OUTPUT_FILE_SIZE && tailLines === undefined) {
+    throw new Error(
+      `输出文件过大（${stats.size} bytes），请使用 tailLines 参数读取尾部关键内容`
+    );
+  }
+
+  if (tailLines === undefined || tailLines <= 0) {
+    return readFileSync(fullPath, 'utf-8');
+  }
+
+  // 流式读取最后 N 行，避免加载大文件
+  const lines: string[] = [];
+  const rl = createInterface({
+    input: createReadStream(fullPath, { encoding: 'utf-8' }),
+    crlfDelay: Infinity,
+  });
+  for await (const line of rl) {
+    lines.push(line);
+    if (lines.length > tailLines) {
+      lines.shift();
+    }
+  }
+  return lines.join('\n');
 }
 
 interface RunResult {
@@ -46,6 +100,24 @@ function isRunResult(value: unknown): value is RunResult {
     'success' in value &&
     typeof (value as RunResult).success === 'boolean'
   );
+}
+
+/** 对脚本/setup 命令的输出做摘要，超长时落盘 */
+function formatRunResult(
+  result: RunResult,
+  worktreePath: string,
+  toolCallId: string
+): RunResult | { success: boolean; outputFile: string; summary: string; truncated: true } {
+  if (!result.reason || result.reason.length <= OUTPUT_FILE_THRESHOLD) {
+    return summarizeRunResult(result);
+  }
+  const outputFile = writeToolOutputFile(worktreePath, toolCallId, result.reason);
+  const summary = truncateText(
+    result.reason,
+    MAX_OUTPUT_PREVIEW_LENGTH,
+    result.success ? 'head' : 'tail'
+  );
+  return { success: result.success, outputFile, summary, truncated: true };
 }
 
 /** 对脚本/setup 命令的输出做摘要，避免把完整 stdout 塞进 tool_result */
@@ -85,6 +157,54 @@ function isValidateResult(value: unknown): value is ValidateResult {
   );
 }
 
+/** 对 validate 输出做摘要/落盘 */
+function formatValidateResult(
+  result: ValidateResult,
+  worktreePath: string,
+  toolCallId: string
+):
+  | ValidateResult
+  | (Omit<ValidateResult, 'lintReason' | 'typecheckReason'> & {
+      lintSummary?: string;
+      typecheckSummary?: string;
+      outputFile?: string;
+      truncated?: boolean;
+    }) {
+  const lintLong = (result.lintReason?.length ?? 0) > OUTPUT_FILE_THRESHOLD;
+  const typecheckLong = (result.typecheckReason?.length ?? 0) > OUTPUT_FILE_THRESHOLD;
+
+  if (!lintLong && !typecheckLong) {
+    return summarizeValidateResult(result);
+  }
+
+  // 把过长的部分组合写入一个文件
+  const sections: string[] = [];
+  if (lintLong) {
+    sections.push(`=== lint ===\n${result.lintReason}`);
+  }
+  if (typecheckLong) {
+    sections.push(`=== typecheck ===\n${result.typecheckReason}`);
+  }
+  const outputFile = writeToolOutputFile(worktreePath, toolCallId, sections.join('\n\n'));
+
+  return {
+    lint: result.lint,
+    typecheck: result.typecheck,
+    lintSummary: lintLong
+      ? truncateText(result.lintReason ?? '', MAX_OUTPUT_PREVIEW_LENGTH, result.lint ? 'head' : 'tail')
+      : result.lintReason,
+    typecheckSummary: typecheckLong
+      ? truncateText(
+          result.typecheckReason ?? '',
+          MAX_OUTPUT_PREVIEW_LENGTH,
+          result.typecheck ? 'head' : 'tail'
+        )
+      : result.typecheckReason,
+    outputFile,
+    truncated: true,
+  };
+}
+
 /** 对 validate 输出做摘要：成功时尽量简短，失败时保留尾部关键信息 */
 function summarizeValidateResult(result: ValidateResult): ValidateResult {
   return {
@@ -99,26 +219,38 @@ function summarizeValidateResult(result: ValidateResult): ValidateResult {
   };
 }
 
-/** 按工具类型对结果做截断/摘要，防止超长输出进入 LLM 上下文 */
-function sanitizeToolResult(toolName: string, result: unknown): unknown {
+/** 按工具类型对结果做截断/摘要/落盘，防止超长输出进入 LLM 上下文 */
+function formatToolResult(
+  toolName: string,
+  toolCallId: string,
+  worktreePath: string,
+  result: unknown
+): unknown {
   if (toolName === 'validate' && isValidateResult(result)) {
-    return summarizeValidateResult(result);
+    return formatValidateResult(result, worktreePath, toolCallId);
   }
   if ((toolName === 'run_script' || toolName === 'run_setup_command') && isRunResult(result)) {
-    return summarizeRunResult(result);
+    return formatRunResult(result, worktreePath, toolCallId);
   }
   if (toolName === 'read_file' && typeof result === 'object' && result !== null) {
     const obj = result as Record<string, unknown>;
     if (typeof obj.content === 'string' && obj.content.length > MAX_FILE_CONTENT_LENGTH) {
+      const outputFile = writeToolOutputFile(worktreePath, toolCallId, obj.content);
       return {
         ...obj,
         content: truncateText(obj.content, MAX_FILE_CONTENT_LENGTH, 'head'),
+        outputFile,
         truncated: true,
       };
     }
   }
   if (toolName === 'read_file' && typeof result === 'string' && result.length > MAX_FILE_CONTENT_LENGTH) {
-    return truncateText(result, MAX_FILE_CONTENT_LENGTH, 'head');
+    const outputFile = writeToolOutputFile(worktreePath, toolCallId, result);
+    return {
+      content: truncateText(result, MAX_FILE_CONTENT_LENGTH, 'head'),
+      outputFile,
+      truncated: true,
+    };
   }
   return result;
 }
@@ -143,9 +275,11 @@ export class ToolExecutor {
   async execute(toolCall: ToolCall): Promise<ToolResult> {
     try {
       const result = await this.executeTool(toolCall.name, toolCall.input);
+      const worktreePath = this.worktreeManager.getWorktreePath();
+      const formatted = formatToolResult(toolCall.name, toolCall.id, worktreePath, result);
       return {
         tool_use_id: toolCall.id,
-        content: JSON.stringify({ success: true, data: sanitizeToolResult(toolCall.name, result) }),
+        content: JSON.stringify({ success: true, data: formatted }),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -173,6 +307,8 @@ export class ToolExecutor {
         return this.runScript(input);
       case 'validate':
         return this.validate();
+      case 'read_output_file':
+        return this.readOutputFile(input);
       case 'recall_memory':
         return this.recallMemory(input);
       case 'get_file_overview':
@@ -184,6 +320,14 @@ export class ToolExecutor {
       default:
         throw new Error(`未知工具: ${name}`);
     }
+  }
+
+  private async readOutputFile(input: Record<string, unknown>): Promise<{ content: string; tailLines?: number }> {
+    const outputFile = this.requireString(input, 'outputFile');
+    const tailLines = this.optionalNumber(input, 'tailLines');
+    const worktreePath = this.worktreeManager.getWorktreePath();
+    const content = await readOutputFile(worktreePath, outputFile, tailLines);
+    return { content, tailLines };
   }
 
   private async readFile(input: Record<string, unknown>): Promise<unknown> {

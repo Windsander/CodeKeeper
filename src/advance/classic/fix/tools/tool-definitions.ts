@@ -170,6 +170,28 @@ export const RUN_SETUP_COMMAND_TOOL: ToolDefinition = {
   },
 };
 
+export const READ_OUTPUT_FILE_TOOL: ToolDefinition = {
+  name: 'read_output_file',
+  description:
+    '读取由 run_script、run_setup_command、validate 或 read_file 等大输出工具生成的临时输出文件。' +
+    '当工具结果中包含 outputFile 且你需要查看完整输出或尾部关键内容时调用。',
+  input_schema: {
+    type: 'object',
+    properties: {
+      outputFile: {
+        type: 'string',
+        description: '工具返回的 outputFile 相对路径，例如 .codekeeper-tool-outputs/xxx.log',
+      },
+      tailLines: {
+        type: 'number',
+        description: '可选，只读取文件最后 N 行，适合查看错误日志尾部',
+      },
+    },
+    required: ['outputFile'],
+    additionalProperties: false,
+  },
+};
+
 export const FINISH_TOOL: ToolDefinition = {
   name: 'finish',
   description:
@@ -200,6 +222,7 @@ export const FIX_TOOLS: ToolDefinition[] = [
   RUN_SETUP_COMMAND_TOOL,
   RUN_SCRIPT_TOOL,
   VALIDATE_TOOL,
+  READ_OUTPUT_FILE_TOOL,
   RECALL_MEMORY_TOOL,
   GET_FILE_OVERVIEW_TOOL,
   SEARCH_IN_FILE_TOOL,

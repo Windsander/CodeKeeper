@@ -278,6 +278,7 @@ export class FixToolLoop {
       '12. 若无法修复、验证失败或需要 Reviewer 澄清，调用 finish({ success: false, reason: "..." })。',
       '13. 回复要简洁，直接调用工具，不要输出长篇解释；如果输出被截断，优先保证工具调用完整。',
       '14. 不能直接提交或推送代码，提交由框架在循环外统一处理。',
+      '15. 如果 run_script、run_setup_command、validate 或 read_file 的返回中包含 outputFile，说明完整输出已写入 worktree 临时文件；需要查看完整内容或尾部关键信息时，调用 read_output_file({ outputFile: "...", tailLines?: N })。',
       this.extraSystemPrompt,
     ]
       .filter(Boolean)
