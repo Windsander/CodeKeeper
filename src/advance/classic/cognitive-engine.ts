@@ -434,6 +434,11 @@ export class CognitiveEngine {
         ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
         : '',
       '',
+      '## 决策原则',
+      '1. 在决定 fix 之前，请先确认代码中是否真的存在 finding 描述的问题。如果问题已经被修复、建议的字段/改动已经存在、或代码已经符合 Reviewer 的期望，应选择 ignore，并说明“该问题在当前代码中已不存在/已修复”。',
+      '2. 如果 Reviewer 指出某个文件（尤其是 docs/、.claude/ 等设计文档或本地私有文件）不应该被上传，且该文件确实出现在 MR 中，应选择 fix 并将 deleteFile 设为 true。',
+      '3. 如果评论缺少明确的文件路径、行号或具体修改方式，导致无法安全修改，应选择 ask。',
+      '',
       '请输出 JSON：',
       '{',
       '  "action": "fix" | "ask" | "ignore",',
@@ -488,6 +493,11 @@ export class CognitiveEngine {
       context.recalledMemories.length > 0
         ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
         : '',
+      '',
+      '## 决策原则',
+      '1. 在决定 fix 之前，请先确认“相关代码”中是否真的存在 finding 描述的问题。如果问题已经被修复、建议的字段/改动已经存在、或代码已经符合 Reviewer 的期望，应选择 ignore，并说明“该问题在当前代码中已不存在/已修复”。',
+      '2. 如果 Reviewer 指出某个文件（尤其是 docs/、.claude/ 等设计文档或本地私有文件）不应该被上传，且该文件确实出现在 MR 中，应选择 fix 并将 deleteFile 设为 true。',
+      '3. 如果评论缺少明确的文件路径、行号或具体修改方式，导致无法安全修改，应选择 ask。',
       '',
       '请输出 JSON：',
       '{',

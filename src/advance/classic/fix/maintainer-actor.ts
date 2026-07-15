@@ -9,6 +9,7 @@ import type { IMemoryClient } from '../memory/types.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
 import { FixToolLoop } from './fix-tool-loop.js';
 import { formatAgentFooter, MAINTAINER_ROLE_LABEL } from '../runners/shared/review-utils.js';
+import { basename } from 'node:path';
 
 export interface MaintainerActorOptions {
   /** GitLab API 提供者 */
@@ -56,6 +57,14 @@ export class MaintainerActor {
   ): Promise<boolean> {
     switch (decision.action) {
       case 'fix': {
+        if (decision.deleteFile) {
+          const success = await this.executeDeleteFileFix(mr, discussion, finding, decision);
+          if (!success) {
+            const question = `我尝试自动删除文件 ${finding.file}，但未成功。请 Reviewer 确认是否应从 MR 中移除该文件。`;
+            await this.ask(mr, discussion, question, finding.file, state);
+          }
+          return success;
+        }
         const success = await this.executeFix(mr, discussion, finding, decision);
         if (!success) {
           const question = `我尝试自动修复 ${finding.file}:${finding.line}，但未成功。请 Reviewer 补充期望的修改方式或范围，我会再试一次。`;
@@ -315,6 +324,72 @@ export class MaintainerActor {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[MaintainerActor] 修复异常: ${reason}`);
+      return false;
+    }
+  }
+
+  /**
+   * 执行文件删除修复：Reviewer 指出某文件不应出现在 MR 中时，
+   * 在 worktree 中删除该文件并提交推送。
+   */
+  private async executeDeleteFileFix(
+    mr: MergeRequest,
+    discussion: Discussion,
+    finding: ReviewFinding,
+    decision: MaintainerDecision
+  ): Promise<boolean> {
+    console.log(`[MaintainerActor] 执行删除文件修复: ${finding.file}`);
+
+    try {
+      console.log(`[MaintainerActor] 阶段=worktree 准备/更新 worktree`);
+      await this.options.worktreeManager.ensureWorktree();
+
+      console.log(`[MaintainerActor] 阶段=checkout 切换到 source branch: ${mr.sourceBranch}`);
+      await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
+
+      console.log(`[MaintainerActor] 阶段=prepare 准备运行环境`);
+      await this.options.worktreeManager.prepareEnvironment();
+
+      const resolvedPath = await this.options.worktreeManager.resolveFilePath(finding.file);
+      if (!resolvedPath) {
+        console.warn(`[MaintainerActor] 无法解析文件路径: ${finding.file}`);
+        return false;
+      }
+
+      console.log(`[MaintainerActor] 阶段=delete 删除文件: ${resolvedPath}`);
+      await this.options.worktreeManager.removeFile(resolvedPath);
+
+      const changeDescription = `Reviewer 指出文件 ${finding.file} 不应上传，已从 MR 中删除。`;
+      console.log(`[MaintainerActor] 阶段=commit-push 提交删除到分支: ${mr.sourceBranch}`);
+      await this.commitWithConventionRetry(
+        mr.sourceBranch,
+        changeDescription,
+        () => `chore: 移除不应上传的文件 ${basename(finding.file)}`
+      );
+
+      try {
+        await this.options.provider.resolveDiscussion(mr.iid, discussion.id);
+
+        const cognitive = decision as CognitiveDecision;
+        const reasoningSection = cognitive.reasoning
+          ? `\n\n**问题分析**\n${cognitive.analysis ?? '未提供'}\n\n**考虑过的方案**\n${cognitive.consideredOptions?.map((o: string) => `- ${o}`).join('\n') ?? '无'}\n\n**最终决策**\n${cognitive.reasoning}`
+          : '';
+
+        await this.options.provider.addDiscussionNote(
+          mr.iid,
+          discussion.id,
+          `✅ ${this.options.maintainerName} 已根据 Reviewer 的意见删除文件 \`${finding.file}\` 并推送至本分支。${reasoningSection}\n\n请 Reviewer 复核变更。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`
+        );
+        console.log(`[MaintainerActor] 已删除文件并 resolve discussion ${discussion.id}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[MaintainerActor] resolve discussion ${discussion.id} 失败: ${message}`);
+      }
+
+      return true;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[MaintainerActor] 删除文件修复异常: ${reason}`);
       return false;
     }
   }

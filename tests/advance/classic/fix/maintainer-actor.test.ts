@@ -331,6 +331,53 @@ describe('MaintainerActor', () => {
     expect(memoryClient.recordProjectKnowledge).toHaveBeenCalled();
   });
 
+  it('fix 且 deleteFile=true 时删除文件、提交并 resolve discussion', async () => {
+    const provider = createMockProvider();
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain();
+
+    const actor = new MaintainerActor({
+      provider,
+      llmClient: createMockLlmClient([]),
+      worktreeManager,
+      brain,
+      maintainerName: 'CodeKeeper Maintainer',
+    });
+
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: 'Reviewer 指出该设计文档不应上传',
+      fixDescription: '删除不应上传的设计文档',
+      analysis: 'docs/ 下的设计文档不应进入 git',
+      consideredOptions: ['删除文件', '保留文件'],
+      reasoning: '按项目规范，docs/ 设计文档不提交，应删除',
+      confidence: 'high',
+      deleteFile: true,
+    };
+
+    const finding: ReviewFinding = {
+      ...mockFinding,
+      file: 'docs/design/telemetry-plan.md',
+      line: 1,
+    };
+
+    const ok = await actor.applyDecision(mockMR, mockDiscussion, finding, decision, createState());
+
+    expect(ok).toBe(true);
+    expect(worktreeManager.removeFile).toHaveBeenCalledWith(finding.file);
+    expect(worktreeManager.commitAndPush).toHaveBeenCalledWith(
+      'feature/test',
+      expect.stringContaining('移除不应上传的文件'),
+      { setUpstream: false }
+    );
+    expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
+    expect(provider.addDiscussionNote).toHaveBeenCalledWith(
+      mockMR.iid,
+      mockDiscussion.id,
+      expect.stringContaining('删除文件')
+    );
+  });
+
   it('fix 工具循环失败时转为 ask，不提交', async () => {
     const provider = createMockProvider();
     const worktreeManager = createMockWorktreeManager();
