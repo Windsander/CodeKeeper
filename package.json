@@ -8,7 +8,8 @@
   },
   "scripts": {
     "copy-schema": "node -e \"const fs=require('fs');const src='src/advance/store/schema.sql';const dest='dist/advance/store/schema.sql';fs.mkdirSync('dist/advance/store',{recursive:true});fs.writeFileSync(dest, fs.readFileSync(src));\"",
-    "build": "node node_modules/typescript/bin/tsc && npm run copy-schema",
+    "copy-prompts": "node scripts/copy-prompts.mjs",
+    "build": "node node_modules/typescript/bin/tsc && npm run copy-schema && npm run copy-prompts",
     "dev": "node node_modules/tsx/dist/cli.mjs src/advance/cli-entry.ts",
     "start": "node --max-old-space-size=8192 dist/advance/cli-entry.js start",
     "test": "node scripts/test.mjs",

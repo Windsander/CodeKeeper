@@ -9,6 +9,7 @@ import type { LlmClient } from '../../llm/client.js';
 import type { ReviewFinding } from '../provider/types.js';
 import type { FocusedContext } from './focused-context-builder.js';
 import { extractJsonText } from '../utils/json-extraction.js';
+import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 
 export type IssueScope = 'trivial' | 'local' | 'cross-file' | 'needs-clarification';
 
@@ -22,12 +23,18 @@ export interface ScopeClassifierOptions {
   llmClient?: LlmClient;
   /** 是否启用 LLM 二次确认；默认 false，避免每个 finding 都调用 LLM */
   enableLlmConfirm?: boolean;
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 const CONTROL_FLOW_KEYWORDS = /\b(if|else|for|while|switch|case|try|catch|finally|return|throw|async|await|function|class|interface|type)\b/;
 
 export class IssueScopeClassifier {
-  constructor(private readonly options: ScopeClassifierOptions = {}) {}
+  private readonly promptLoader: PromptLoader;
+
+  constructor(private readonly options: ScopeClassifierOptions = {}) {
+    this.promptLoader = options.promptLoader ?? defaultPromptLoader;
+  }
 
   async classify(finding: ReviewFinding, context: FocusedContext): Promise<ScopeClassification> {
     const heuristic = this.classifyByRules(finding);
@@ -132,31 +139,17 @@ export class IssueScopeClassifier {
       return { scope: 'local', reason: 'LLM 客户端未配置，按局部修改处理' };
     }
 
-    const prompt = `请判断以下代码评审问题的修改范围，只输出 JSON。
-
-文件：${finding.file}
-行号：${finding.line}
-问题描述：${finding.message}
-修改建议：${finding.suggestion}
-相关代码片段（行 ${context.snippetStartLine}-${context.snippetEndLine}）：
-${context.snippet}
-
-请从以下范围中选一个，并给出理由：
-- trivial：只需改一行/一个字段/一条注释，无风险。
-- local：需要在一个函数或文件内做局部重构，但不出当前文件。
-- cross-file：涉及类型定义、接口变更、函数签名变化，需要同时修改多个文件或调用点。
-- needs-clarification：描述不清或需要 Reviewer 确认设计方向。
-
-输出格式：
-{
-  "scope": "trivial|local|cross-file|needs-clarification",
-  "reason": "一句话说明"
-}`;
-
-    const raw = await llmClient.completeJson(
-      prompt,
-      '你是代码修改范围判断助手，只输出 JSON。'
-    );
+    const prompt = this.promptLoader.load('issue-scope-confirm', {
+      findingFile: finding.file,
+      findingLine: String(finding.line),
+      findingMessage: finding.message,
+      findingSuggestion: finding.suggestion,
+      snippetStartLine: String(context.snippetStartLine),
+      snippetEndLine: String(context.snippetEndLine),
+      snippet: context.snippet,
+    });
+    const system = `你是代码修改范围判断助手。${this.promptLoader.load('shared/json-only-constraint')}`;
+    const raw = await llmClient.completeJson(prompt, system);
 
     try {
       const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);

@@ -148,6 +148,27 @@ describe('CognitiveEngine', () => {
     expect(decision.analysis).toBe('b 未使用');
   });
 
+  it('fast 模式返回 alreadyFixed ignore 决策', async () => {
+    const engine = new CognitiveEngine({
+      llmClient: makeFastLlmClient({
+        action: 'ignore',
+        reason: '变量 b 已被删除',
+        analysis: '当前代码中 b 已不存在',
+        consideredOptions: [],
+        reasoning: '问题已修复',
+        confidence: 'high',
+        alreadyFixed: true,
+        replyBody: '该未使用变量已在之前的提交中删除，当前代码无需再改。',
+      }),
+    });
+
+    const decision = await engine.decide(makeContext(), 'fast');
+
+    expect(decision.action).toBe('ignore');
+    expect(decision.alreadyFixed).toBe(true);
+    expect(decision.replyBody).toContain('删除');
+  });
+
   it('reflect 生成反思并关联 case key', async () => {
     const recorded: Array<{ caseKey: string; reflection: string; outcome: 'success' | 'failure' }> = [];
     const memoryClient = {

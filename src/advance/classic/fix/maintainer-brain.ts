@@ -18,6 +18,7 @@ import {
   type ThreadContext,
 } from '../utils/context-window.js';
 import { logMemorySnapshot } from '../utils/memory-snapshot.js';
+import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 
 const PARSE_FINDINGS_TOOL: ToolDefinition = {
   name: 'parse_findings',
@@ -101,6 +102,10 @@ export interface MaintainerDecision {
   scope?: IssueScope;
   /** 当 action 为 fix 且 Reviewer 要求从 MR 中移除某个文件时标记为 true */
   deleteFile?: boolean;
+  /** 当 action 为 ignore 且问题其实已经修复时标记为 true，此时应提供 replyBody */
+  alreadyFixed?: boolean;
+  /** 当 alreadyFixed=true 时，向 Reviewer 解释问题已修复的回复正文 */
+  replyBody?: string;
 }
 
 export interface MaintainerBrainOptions {
@@ -120,6 +125,8 @@ export interface MaintainerBrainOptions {
   cognitiveDepth?: 'fast' | 'standard' | 'deep';
   /** 可选的 worktree 管理器，用于获取文件概览和扩展读取 */
   worktreeManager?: WorktreeManager;
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 export interface ParseFindingsInput {
@@ -139,9 +146,11 @@ export interface ParseFindingsInput {
  */
 export class MaintainerBrain {
   private readonly allowedRiskLevels: string[];
+  private readonly promptLoader: PromptLoader;
 
   constructor(private readonly options: MaintainerBrainOptions) {
     this.allowedRiskLevels = options.allowedRiskLevels ?? ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+    this.promptLoader = options.promptLoader ?? defaultPromptLoader;
   }
 
   /**
@@ -393,21 +402,13 @@ export class MaintainerBrain {
    * 当校验因 workspace 包未编译等环境问题失败时，由 LLM 决定执行哪个 npm script 修复环境
    */
   async decideEnvironmentPrep(context: EnvironmentPrepContext): Promise<EnvironmentPrepDecision> {
-    const prompt = [
-      '修复 patch 已应用，但 typecheck 失败。请根据以下信息判断是否需要先运行某个 npm script 来准备环境。',
-      '',
-      '## 可用的 npm scripts',
-      context.availableScripts.length > 0
-        ? context.availableScripts.map((s) => `- ${s}`).join('\n')
-        : '（未能读取到 package.json scripts）',
-      '',
-      '## typecheck 原始输出（节选）',
-      '```',
-      context.validateOutput.slice(0, 4000),
-      '```',
-      '',
-      '请从 env_prep_decision 工具输出决策。',
-    ].join('\n');
+    const prompt = this.promptLoader.load('env-prep-task', {
+      availableScripts:
+        context.availableScripts.length > 0
+          ? context.availableScripts.map((s) => `- ${s}`).join('\n')
+          : '（未能读取到 package.json scripts）',
+      validateOutput: context.validateOutput.slice(0, 4000),
+    });
 
     try {
       const toolCall = await this.options.llmClient.completeDecision(
@@ -432,44 +433,10 @@ export class MaintainerBrain {
       ? `该评论所在文件：${input.position.newPath}，行号：${input.position.newLine ?? '未知'}`
       : '评论中没有文件定位信息。';
 
-    return `请从以下代码评审评论中提取所有可修复的代码问题，输出 JSON 对象。
-
-评论内容：
-${input.body}
-
-${positionHint}
-
-评论可能是以下格式之一：
-1. Markdown 列表：
-   - \`src/a.ts:10\` · 规则 \`no-any\` 类型不安全
-     **修改建议**：使用具体类型
-   - \`src/b.ts:25\` · 规则 \`unused\` 变量未使用
-     **修改建议**：删除变量
-2. 普通文本段落：
-   "src/a.ts 第 10 行的 any 建议改成具体类型；另外 src/b.ts 第 25 行的变量未使用，建议删除。"
-3. 对文件的描述性说明（可能包含多个具体问题）。
-
-输出格式：
-{
-  "findings": [
-    {
-      "severity": "CRITICAL|HIGH|MEDIUM|LOW",
-      "file": "文件路径",
-      "line": 123,
-      "ruleId": "可选的规则编号",
-      "message": "问题描述",
-      "suggestion": "修改建议",
-      "autoFixable": true
-    }
-  ]
-}
-
-注意：
-- 一条评论中可能包含多个问题，请全部提取。
-- 如果评论里没有需要修复的代码问题，findings 为空数组。
-- 如果评论是机器人签名、系统提示或 Maintainer 自己的回复，findings 为空数组。
-- 当评论中没有明确文件路径时，使用上面提供的文件和行号作为兜底。
-- 不要输出任何 JSON 以外的内容。`;
+    return this.promptLoader.load('parse-findings-task', {
+      body: input.body,
+      positionHint,
+    });
   }
 
   private extractFindingsFromResponse(
@@ -695,21 +662,10 @@ ${positionHint}
       ? `\n\n项目背景与智库：\n${this.options.projectContext}`
       : '';
 
-    return [
-      '你是一名谨慎的代码维护助手（Maintainer Agent）。',
-      '你会收到代码文件内容和 Reviewer 在 MR discussion 中提出的意见。',
-      `评审规则：根据 Reviewer 意见处理问题并尝试自动修复${soulSection}${contextSection}`,
-      '请根据你对问题的理解，自主决定下一步动作：',
-      '- "fix"：你确信可以根据 Reviewer 的意见做出最小且正确的代码修改。请同时给出简要修复描述。',
-      '- "ask"：评论含糊、缺少上下文、或你不确定如何安全修改。请直接向 Reviewer 提出一个简洁、有针对性的澄清问题。',
-      '- "ignore"：评论明显不需要代码改动（例如只是赞美、已过期、或不相关）。请说明原因。',
-      '',
-      '决策原则：',
-      '1. 在决定 fix 之前，请先确认代码中是否真的存在 finding 描述的问题。如果问题已经被修复、建议的字段/改动已经存在、或代码已经符合 Reviewer 的期望，应选择 ignore，并说明“该问题在当前代码中已不存在/已修复”。',
-      '2. 如果 Reviewer 指出某个文件（尤其是 docs/、.claude/ 等设计文档或本地私有文件）不应该被上传，且该文件确实出现在 MR 中，应选择 fix 并将 deleteFile 设为 true。',
-      '3. 如果评论缺少明确的文件路径、行号或具体修改方式，导致无法安全修改，应选择 ask。',
-      '只能输出 JSON，不要输出任何解释文字。',
-    ].join('\n');
+    return this.promptLoader.load('maintainer-system', {
+      soulSection,
+      projectContextSection: contextSection,
+    });
   }
 
   private buildReplyPrompt(
@@ -720,29 +676,12 @@ ${positionHint}
   ): string {
     const threadText = formatThreadContext(threadContext);
 
-    return [
-      '## 文件路径',
+    return this.promptLoader.load('maintainer-reply-task', {
       filePath,
-      '',
-      '## 文件内容（节选）',
-      '```',
-      this.truncate(fileContent),
-      '```',
-      '',
-      '## 本 discussion 的对话',
+      fileContent: this.truncate(fileContent),
       threadText,
-      '',
-      `## 你的身份\n你是 ${maintainerName}。`,
-      '',
-      '请根据 Reviewer 的最新回复，判断下一步动作，并输出 JSON：',
-      '{',
-      '  "action": "fix" | "ask" | "ignore",',
-      '  "reason": "简要说明理由",',
-      '  "question": "如果 action=ask，填写向 Reviewer 提出的澄清问题",',
-      '  "fixDescription": "如果 action=fix，可选的修复描述",',
-      '  "deleteFile": "如果 action=fix 且需要从 MR 中移除某个文件，填 true"',
-      '}',
-    ].join('\n');
+      maintainerName,
+    });
   }
 
   private truncate(content: string, maxLines = 80): string {

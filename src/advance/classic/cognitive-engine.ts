@@ -5,6 +5,7 @@ import type { IMemoryClient } from './memory/types.js';
 import type { WorktreeManager } from './worktree/worktree-manager.js';
 import { buildFindingCaseKey } from './memory/finding-case-key.js';
 import { logMemorySnapshot } from './utils/memory-snapshot.js';
+import { defaultPromptLoader, type PromptLoader } from '../llm/prompts/loader.js';
 import type {
   CognitiveContext,
   CognitiveDecision,
@@ -80,6 +81,8 @@ const FINAL_DECISION_TOOL: ToolDefinition = {
       consideredOptions: { type: 'array', items: { type: 'string' } },
       reasoning: { type: 'string' },
       confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+      alreadyFixed: { type: 'boolean' },
+      replyBody: { type: 'string' },
     },
     required: ['action', 'reason'],
     additionalProperties: false,
@@ -98,6 +101,8 @@ export interface CognitiveEngineOptions {
   recallPlanner?: RecallPlanner;
   memoryClient?: IMemoryClient;
   worktreeManager?: WorktreeManager;
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 interface InquiryResult {
@@ -122,7 +127,11 @@ interface OptionItem {
  * - deep：standard 全部步骤 + 执行后反思并记录到记忆
  */
 export class CognitiveEngine {
-  constructor(private readonly options: CognitiveEngineOptions) {}
+  private readonly promptLoader: PromptLoader;
+
+  constructor(private readonly options: CognitiveEngineOptions) {
+    this.promptLoader = options.promptLoader ?? defaultPromptLoader;
+  }
 
   async decide(
     context: CognitiveContext,
@@ -143,21 +152,13 @@ export class CognitiveEngine {
     outcome: 'success' | 'failure',
     executedDescription: string
   ): Promise<string> {
-    const prompt = [
-      '请根据以下修复执行情况生成一句简短反思，用于后续同类问题参考。',
-      '',
-      '## 问题',
-      `- 文件：${context.finding.file}:${context.finding.line}`,
-      `- 描述：${context.finding.message}`,
-      '',
-      '## 执行方案',
+    const prompt = this.promptLoader.load('cognitive-reflect-task', {
+      findingFile: context.finding.file,
+      findingLine: String(context.finding.line),
+      findingMessage: context.finding.message,
       executedDescription,
-      '',
-      '## 结果',
       outcome,
-      '',
-      '请只输出一句反思，不要输出 JSON 或其他内容。',
-    ].join('\n');
+    });
 
     const raw = await this.options.llmClient.complete(prompt);
     const reflection = raw.trim();
@@ -210,43 +211,25 @@ export class CognitiveEngine {
           .join('\n')}`
       : '未提供文件概览';
 
-    const prompt = [
-      '请根据当前问题判断还需要补充哪些上下文信息。',
-      '',
-      '## 当前问题',
-      `- 文件：${context.finding.file}:${context.finding.line}`,
-      `- 描述：${context.finding.message}`,
-      `- 建议：${context.finding.suggestion}`,
-      '',
-      '## 已掌握上下文',
+    const relatedFindings =
       context.relatedFindings.length > 0
         ? `同 MR 其他 findings：\n${context.relatedFindings.map((f) => `- ${f.file}:${f.line} ${f.message}`).join('\n')}`
-        : '无',
+        : '无';
+
+    const recalledMemories =
       context.recalledMemories.length > 0
         ? `已召回记忆：\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
-        : '无',
-      '',
-      '## 文件概览',
-      overviewText,
-      '',
-      '可查询的上下文类型：',
-      '- file_history：某文件最近修改历史',
-      '- reviewer_preference：某 Reviewer 对某类问题的偏好',
-      '- project_knowledge：项目规范/架构约定',
-      '- file_range：需要读取某文件指定行范围，target 格式为 "src/foo.ts:10-30"',
-      '- file_search：需要在某文件搜索关键字，target 格式为 "src/foo.ts:keyword"',
-      '',
-      '请输出 JSON：',
-      '{',
-      '  "needsMoreContext": true|false,',
-      '  "queries": [',
-      '    { "type": "file_history", "target": "src/foo.ts" },',
-      '    { "type": "file_range", "target": "src/foo.ts:10-30" },',
-      '    { "type": "file_search", "target": "src/foo.ts:someKeyword" }',
-      '  ],',
-      '  "reason": "为什么需要这些补充"',
-      '}',
-    ].join('\n');
+        : '无';
+
+    const prompt = this.promptLoader.load('cognitive-inquiry-task', {
+      findingFile: context.finding.file,
+      findingLine: String(context.finding.line),
+      findingMessage: context.finding.message,
+      findingSuggestion: context.finding.suggestion ?? '',
+      relatedFindings,
+      recalledMemories,
+      fileOverview: overviewText,
+    });
 
     console.log(`[CognitiveEngine] runInquiry prompt 长度=${prompt.length}`);
     const toolCall = await this.options.llmClient.completeDecision(
@@ -361,38 +344,21 @@ export class CognitiveEngine {
   private async generateOptions(context: CognitiveContext): Promise<OptionItem[]> {
     const overviewText = this.formatFileOverview(context.fileOverview);
     const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
-
-    const prompt = [
-      '请根据以下上下文生成 2~3 个候选修复方案，并列出各自优缺点和风险。',
-      '',
-      '## 问题',
-      `- 文件：${context.finding.file}:${context.finding.line}`,
-      `- 描述：${context.finding.message}`,
-      `- 建议：${context.finding.suggestion}`,
-      '',
-      '## 代码',
-      '```',
-      context.fileContent,
-      '```',
-      '',
-      overviewText,
-      extraContextsText,
+    const relatedMemories =
       context.recalledMemories.length > 0
         ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
-        : '',
-      '',
-      '请输出 JSON：',
-      '{',
-      '  "options": [',
-      '    {',
-      '      "description": "方案描述",',
-      '      "pros": ["优点1"],',
-      '      "cons": ["缺点1"],',
-      '      "risk": "low|medium|high"',
-      '    }',
-      '  ]',
-      '}',
-    ].join('\n');
+        : '';
+
+    const prompt = this.promptLoader.load('cognitive-options-task', {
+      findingFile: context.finding.file,
+      findingLine: String(context.finding.line),
+      findingMessage: context.finding.message,
+      findingSuggestion: context.finding.suggestion ?? '',
+      fileContent: context.fileContent,
+      fileOverview: overviewText,
+      extraFileContexts: extraContextsText,
+      relatedMemories,
+    });
 
     console.log(`[CognitiveEngine] generateOptions prompt 长度=${prompt.length}`);
     const toolCall = await this.options.llmClient.completeDecision(
@@ -411,48 +377,27 @@ export class CognitiveEngine {
   ): Promise<CognitiveDecision> {
     const overviewText = this.formatFileOverview(context.fileOverview);
     const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
-
-    const prompt = [
-      '请从以下候选方案中选择最优方案，并输出最终决策。',
-      '',
-      '## 问题',
-      `- 文件：${context.finding.file}:${context.finding.line}`,
-      `- 描述：${context.finding.message}`,
-      `- 建议：${context.finding.suggestion}`,
-      '',
-      '## 候选方案',
-      options
-        .map(
-          (o, i) =>
-            `${i + 1}. ${o.description}\n   优点：${o.pros.join('，')}\n   缺点：${o.cons.join('，')}\n   风险：${o.risk}`
-        )
-        .join('\n\n'),
-      '',
-      overviewText,
-      extraContextsText,
+    const relatedMemories =
       context.recalledMemories.length > 0
         ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
-        : '',
-      '',
-      '## 决策原则',
-      '1. 在决定 fix 之前，请先确认代码中是否真的存在 finding 描述的问题。如果问题已经被修复、建议的字段/改动已经存在、或代码已经符合 Reviewer 的期望，应选择 ignore，并说明“该问题在当前代码中已不存在/已修复”。',
-      '2. 如果 Reviewer 指出某个文件（尤其是 docs/、.claude/ 等设计文档或本地私有文件）不应该被上传，且该文件确实出现在 MR 中，应选择 fix 并将 deleteFile 设为 true。',
-      '3. 如果评论缺少明确的文件路径、行号或具体修改方式，导致无法安全修改，应选择 ask。',
-      '',
-      '请输出 JSON：',
-      '{',
-      '  "action": "fix" | "ask" | "ignore",',
-      '  "reason": "简要说明",',
-      '  "question": "ask 时的问题",',
-      '  "fixDescription": "fix 时的描述",',
-      '  "deleteFile": true|false,',
-      '  "scope": "trivial|local|cross-file",',
-      '  "analysis": "问题分析",',
-      '  "consideredOptions": ["方案1", "方案2"],',
-      '  "reasoning": "选择最优方案的原因",',
-      '  "confidence": "high|medium|low"',
-      '}',
-    ].join('\n');
+        : '';
+    const optionsText = options
+      .map(
+        (o, i) =>
+          `${i + 1}. ${o.description}\n   优点：${o.pros.join('，')}\n   缺点：${o.cons.join('，')}\n   风险：${o.risk}`
+      )
+      .join('\n\n');
+
+    const prompt = this.promptLoader.load('cognitive-final-task', {
+      findingFile: context.finding.file,
+      findingLine: String(context.finding.line),
+      findingMessage: context.finding.message,
+      findingSuggestion: context.finding.suggestion ?? '',
+      options: optionsText,
+      fileOverview: overviewText,
+      extraFileContexts: extraContextsText,
+      relatedMemories,
+    });
 
     console.log(`[CognitiveEngine] finalDecision prompt 长度=${prompt.length}`);
     const toolCall = await this.options.llmClient.completeDecision(
@@ -468,51 +413,27 @@ export class CognitiveEngine {
   private buildFastPrompt(context: CognitiveContext): string {
     const overviewText = this.formatFileOverview(context.fileOverview);
     const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
-
-    return [
-      '## 文件路径',
-      context.finding.file,
-      '',
-      overviewText,
-      '## 相关代码',
-      '```',
-      context.fileContent,
-      '```',
-      '',
-      extraContextsText,
-      '## Reviewer 评论',
-      context.originalComment,
-      '',
-      '## 解析出的 finding',
-      `- 严重程度：${context.finding.severity}`,
-      context.finding.ruleId ? `- 规则：${context.finding.ruleId}` : '',
-      `- 行号：${context.finding.line}`,
-      `- 问题描述：${context.finding.message}`,
-      `- 修改建议：${context.finding.suggestion}`,
-      '',
+    const relatedMemories =
       context.recalledMemories.length > 0
         ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
-        : '',
-      '',
-      '## 决策原则',
-      '1. 在决定 fix 之前，请先确认“相关代码”中是否真的存在 finding 描述的问题。如果问题已经被修复、建议的字段/改动已经存在、或代码已经符合 Reviewer 的期望，应选择 ignore，并说明“该问题在当前代码中已不存在/已修复”。',
-      '2. 如果 Reviewer 指出某个文件（尤其是 docs/、.claude/ 等设计文档或本地私有文件）不应该被上传，且该文件确实出现在 MR 中，应选择 fix 并将 deleteFile 设为 true。',
-      '3. 如果评论缺少明确的文件路径、行号或具体修改方式，导致无法安全修改，应选择 ask。',
-      '',
-      '请输出 JSON：',
-      '{',
-      '  "action": "fix" | "ask" | "ignore",',
-      '  "reason": "简要说明理由",',
-      '  "question": "如果 action=ask，填写问题",',
-      '  "fixDescription": "如果 action=fix，可选描述",',
-      '  "deleteFile": "如果 action=fix 且需要删除文件，填 true",',
-      '  "scope": "trivial|local|cross-file",',
-      '  "analysis": "对问题的分析",',
-      '  "consideredOptions": ["方案1", "方案2"],',
-      '  "reasoning": "最终选择该方案的原因",',
-      '  "confidence": "high|medium|low"',
-      '}',
-    ].join('\n');
+        : '';
+    const findingRuleIdLine = context.finding.ruleId
+      ? `- 规则：${context.finding.ruleId}`
+      : '';
+
+    return this.promptLoader.load('cognitive-fast-task', {
+      findingFile: context.finding.file,
+      findingSeverity: context.finding.severity,
+      findingRuleIdLine,
+      findingLine: String(context.finding.line),
+      findingMessage: context.finding.message,
+      findingSuggestion: context.finding.suggestion ?? '',
+      fileOverview: overviewText,
+      fileContent: context.fileContent,
+      extraFileContexts: extraContextsText,
+      originalComment: context.originalComment,
+      relatedMemories,
+    });
   }
 
   private formatFileOverview(overview?: CognitiveContext['fileOverview']): string {
@@ -542,6 +463,8 @@ export class CognitiveEngine {
         consideredOptions?: string[];
         reasoning?: string;
         confidence?: string;
+        alreadyFixed?: boolean;
+        replyBody?: string;
       };
 
       const base = this.normalizeBaseDecision(parsed, context);
@@ -577,6 +500,8 @@ export class CognitiveEngine {
       fixDescription?: string;
       deleteFile?: boolean;
       scope?: string;
+      alreadyFixed?: boolean;
+      replyBody?: string;
     },
     _context: CognitiveContext
   ): {
@@ -586,6 +511,8 @@ export class CognitiveEngine {
     fixDescription?: string;
     deleteFile?: boolean;
     scope?: 'trivial' | 'local' | 'cross-file';
+    alreadyFixed?: boolean;
+    replyBody?: string;
   } {
     const reason = parsed.reason ?? '未说明理由';
     switch (parsed.action) {
@@ -604,7 +531,12 @@ export class CognitiveEngine {
           question: parsed.question ?? '能否补充一下期望的修改方式或范围？',
         };
       case 'ignore':
-        return { action: 'ignore', reason };
+        return {
+          action: 'ignore',
+          reason,
+          alreadyFixed: parsed.alreadyFixed === true,
+          replyBody: parsed.replyBody,
+        };
       default:
         return {
           action: 'ask',

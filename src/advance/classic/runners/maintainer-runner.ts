@@ -466,6 +466,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     const failedItems: string[] = [];
     const askedItems: Array<{ fileLine: string; text: string }> = [];
     const ignoredItems: Array<{ fileLine: string; reason: string }> = [];
+    const alreadyFixedItems: Array<{ fileLine: string; reason: string }> = [];
 
     const fixableItems: Array<{
       finding: ReviewFinding;
@@ -500,7 +501,11 @@ export class MaintainerRunner extends BaseRoleRunner {
       );
 
       if (decision.action === 'ignore') {
-        ignoredItems.push({ fileLine: `${finding.file}:${finding.line}`, reason: decision.reason });
+        if (decision.alreadyFixed) {
+          alreadyFixedItems.push({ fileLine: `${finding.file}:${finding.line}`, reason: decision.replyBody || decision.reason });
+        } else {
+          ignoredItems.push({ fileLine: `${finding.file}:${finding.line}`, reason: decision.reason });
+        }
         continue;
       }
 
@@ -584,6 +589,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       failedItems,
       askedItems,
       ignoredItems,
+      alreadyFixedItems,
       state
     );
     recordProcessed();

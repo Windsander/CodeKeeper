@@ -3,6 +3,7 @@ import type { LlmClient } from '../../llm/client.js';
 import type { ToolDefinition } from '../../llm/tool-types.js';
 import type { IMemoryClient } from './types.js';
 import { logMemorySnapshot } from '../utils/memory-snapshot.js';
+import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 const RECALL_DECISION_TOOL: ToolDefinition = {
   name: 'recall_decision',
   description: '判断当前任务是否需要查询历史记忆，以及需要查询哪些类型',
@@ -71,6 +72,8 @@ export interface RecallPlannerOptions {
   enabledTypes?: RecallType[];
   /** 自定义决策提示词（覆盖默认） */
   decisionPrompt?: string;
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 /**
@@ -104,13 +107,15 @@ export class RecallPlanner {
   private readonly llmClient: LlmClient;
   private readonly memoryClient: IMemoryClient;
   private readonly enabledTypes: Set<RecallType>;
-  private readonly decisionPrompt: string;
+  private readonly customDecisionPrompt?: string;
+  private readonly promptLoader: PromptLoader;
 
   constructor(options: RecallPlannerOptions) {
     this.llmClient = options.llmClient;
     this.memoryClient = options.memoryClient;
     this.enabledTypes = new Set(options.enabledTypes ?? ALL_RECALL_TYPES);
-    this.decisionPrompt = options.decisionPrompt ?? this.buildDefaultDecisionPrompt();
+    this.customDecisionPrompt = options.decisionPrompt;
+    this.promptLoader = options.promptLoader ?? defaultPromptLoader;
   }
 
   /**
@@ -202,36 +207,21 @@ export class RecallPlanner {
   }
 
   private buildPrompt(input: RecallDecisionInput): string {
-    const findingsSection = input.availableFindings
-      ? `\n当前已知的 findings：\n${input.availableFindings}`
-      : '';
+    if (this.customDecisionPrompt) {
+      const findingsSection = input.availableFindings
+        ? `\n当前已知的 findings：\n${input.availableFindings}`
+        : '';
+      return `${this.customDecisionPrompt}\n\n当前角色：${input.role}\n任务类型：${input.taskType}\n任务摘要：\n${input.taskSummary}${findingsSection}\n\n请输出 JSON：`;
+    }
 
-    return `${this.decisionPrompt}\n\n当前角色：${input.role}\n任务类型：${input.taskType}\n任务摘要：\n${input.taskSummary}${findingsSection}\n\n请输出 JSON：`;
-  }
-
-  private buildDefaultDecisionPrompt(): string {
-    return `你是一名记忆查询决策助手。请根据当前任务上下文，判断是否需要查询历史记忆。
-
-可查询的记忆类型：
-- review：与该 MR / 代码变更相关的历史评审经验。
-- maintenance：与该问题相关的历史修复/维护经验。
-- project_knowledge：项目规范、架构约定、通用知识。
-- user_preferences：当前交互用户的历史偏好与习惯（必须提供 userId 时才使用）。
-
-决策原则：
-- 只有当任务明显能从历史记忆中受益时才查询（例如需要上下文、用户偏好、往期类似问题）。
-- 如果是简单问候、感谢、emoji、明显不需要记忆的判断，needsRecall 应为 false。
-- 不要为了查询而查询，避免浪费资源。
-- 如果需要查询，给出 1~3 条具体 query，每条 query 应简洁且与任务相关。
-
-输出格式：
-{
-  "needsRecall": true|false,
-  "queries": [
-    { "type": "review|maintenance|project_knowledge|user_preferences", "query": "...", "userId": "..." }
-  ],
-  "reason": "简短说明"
-}`;
+    return this.promptLoader.load('recall-decision', {
+      role: input.role,
+      taskType: input.taskType,
+      taskSummary: input.taskSummary,
+      availableFindings: input.availableFindings
+        ? `\n当前已知的 findings：\n${input.availableFindings}`
+        : '',
+    });
   }
 
   private parsePlan(input: Record<string, unknown>): RecallPlan {

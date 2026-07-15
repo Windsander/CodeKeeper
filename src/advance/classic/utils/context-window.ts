@@ -1,4 +1,5 @@
 import type { LlmClient } from '../../llm/client.js';
+import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 
 /**
  * 上下文窗口选项
@@ -10,6 +11,8 @@ export interface ContextWindowOptions {
   maxRecentItems?: number;
   /** 单条 body 最大字符数；默认 2000 */
   maxCharsPerItem?: number;
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 /**
@@ -101,7 +104,7 @@ export async function summarizeThreadNotes(
     ...recentNotes.map((n, idx) => formatNote(n, olderNotes.length + idx + 1)),
   ].join('\n\n');
 
-  const olderSummary = await summarizeNotes(llmClient, olderNotes);
+  const olderSummary = await summarizeNotes(llmClient, olderNotes, options?.promptLoader);
 
   return {
     recentNotesText,
@@ -111,21 +114,12 @@ export async function summarizeThreadNotes(
   };
 }
 
-async function summarizeNotes(llmClient: LlmClient, notes: ThreadNote[]): Promise<string> {
+async function summarizeNotes(llmClient: LlmClient, notes: ThreadNote[], promptLoader?: PromptLoader): Promise<string> {
   if (notes.length === 0) return '';
 
   const notesText = notes.map((n, idx) => formatNote(n, idx + 1)).join('\n\n');
-  const prompt = `请对以下 discussion 历史评论做简洁摘要，用于后续回复时提供上下文。
-
-要求：
-- 保留关键争议点、用户核心诉求、已确认的事实；
-- 不要逐条复述，合并成一段连贯文字；
-- 控制在 300 字以内。
-
-历史评论：
-${notesText}
-
-摘要：`;
+  const loader = promptLoader ?? defaultPromptLoader;
+  const prompt = loader.load('context-window-summary', { notesText });
 
   try {
     const summary = await llmClient.complete(prompt, '你是讨论摘要助手。');

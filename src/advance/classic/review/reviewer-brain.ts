@@ -9,6 +9,7 @@ import {
 } from '../utils/context-window.js';
 import { logger } from '../../../core/logger.js';
 import { extractJsonText } from '../utils/json-extraction.js';
+import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 
 export interface ReviewerBrainOptions {
   /** LLM 客户端实例 */
@@ -25,6 +26,8 @@ export interface ReviewerBrainOptions {
   memoryClient?: IMemoryClient;
   /** 可选的记忆查询规划器，让 Agent 按需决定查什么记忆 */
   recallPlanner?: RecallPlanner;
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 /**
@@ -35,7 +38,11 @@ export interface ReviewerBrainOptions {
  * 并判断是否需要回复别人对评审结论的评论。
  */
 export class ReviewerBrain {
-  constructor(private readonly options: ReviewerBrainOptions) {}
+  private readonly promptLoader: PromptLoader;
+
+  constructor(private readonly options: ReviewerBrainOptions) {
+    this.promptLoader = options.promptLoader ?? defaultPromptLoader;
+  }
 
   /**
    * 对 MR 的 diff 列表执行评审
@@ -49,7 +56,7 @@ export class ReviewerBrain {
     const prompt = this.buildReviewPrompt(mr, diffs, recalledContext);
     const response = await this.options.llmClient.completeJson(
       prompt,
-      '你是严格的代码评审助手。请只输出 JSON。'
+      this.promptLoader.load('reviewer-system')
     );
 
     const result = this.parseReviewResponse(response);
@@ -73,7 +80,7 @@ export class ReviewerBrain {
     const prompt = this.buildReplyPrompt(input, threadContext, recalledContext);
     const response = await this.options.llmClient.completeJson(
       prompt,
-      '你是严格的代码评审助手。请只输出 JSON。'
+      this.promptLoader.load('reviewer-system')
     );
     return this.parseReplyResponse(response);
   }
@@ -131,39 +138,17 @@ export class ReviewerBrain {
       ? `\n\n项目背景与智库：\n${this.options.projectContext}`
       : '';
 
-    return `请对以下 Merge Request 进行代码评审。
-
-MR 标题: ${mr.title}
-MR 描述: ${mr.description}
-源分支: ${mr.sourceBranch} -> 目标分支: ${mr.targetBranch}
-
-评审规则:
-${this.options.rules}${soulSection}${contextSection}${recalledContext}
-
-变更内容:
-\`\`\`diff
-${diffText}
-\`\`\`
-
-请严格按照以下 JSON 格式输出评审结果，不要包含任何其他文字:
-
-{
-  "findings": [
-    {
-      "severity": "CRITICAL|HIGH|MEDIUM|LOW",
-      "file": "文件路径",
-      "line": 行号,
-      "ruleId": "规则编号（可选）",
-      "message": "问题描述",
-      "suggestion": "修改建议",
-      "autoFixable": true|false
-    }
-  ],
-  "summary": "整体评审总结",
-  "autoFixable": [0, 1, ...]
-}
-
-如果没有发现问题，findings 为空数组，summary 简要说明。`;
+    return this.promptLoader.load('reviewer-review-task', {
+      mrTitle: mr.title,
+      mrDescription: mr.description ?? '',
+      mrSourceBranch: mr.sourceBranch,
+      mrTargetBranch: mr.targetBranch,
+      rules: this.options.rules,
+      soulSection,
+      contextSection,
+      recalledContext,
+      diffText,
+    });
   }
 
   private parseReviewResponse(rawResponse: string): ReviewResult {
@@ -211,38 +196,21 @@ ${diffText}
       ? `\n\n项目背景与智库：\n${this.options.projectContext}`
       : '';
 
-    return `你是对以下 Merge Request 进行评审的 Reviewer Agent。有用户在你在 GitLab MR 中创建的 discussion / comment 下发表了新意见，请你判断是否需要进行回复。
-
-MR 标题: ${input.mr.title}
-MR 描述: ${input.mr.description}
-源分支: ${input.mr.sourceBranch} -> 目标分支: ${input.mr.targetBranch}
-
-你最初的评审发现：
-${findingsText || '（无结构化 findings）'}
-
-该 discussion 的历史评论：
-${notesText}${recalledContext}
-
-需要你判断是否回复的最新评论：
-【待回复】${input.targetNote.author} (${input.targetNote.createdAt}):
-${input.targetNote.body}
-
-评审规则：
-${this.options.rules}${soulSection}${contextSection}
-
-请严格按照以下 JSON 格式输出，不要包含任何其他文字：
-
-{
-  "shouldReply": true|false,
-  "replyBody": "如果需要回复，给出 concise 的回复正文（Markdown）；如果不需要回复，为空字符串",
-  "reason": "简短说明判断理由"
-}
-
-判断原则：
-- 如果是疑问、质疑、要求澄清、需要你进一步说明，shouldReply=true。
-- 如果是 "LGTM"、"thanks"、"👍"、纯表情、明显不需要回应的客套话，shouldReply=false。
-- 回复时保持 Reviewer 的专业、客观、简洁，不道歉、不承诺修改代码。
-- 如果用户指出你的 finding 确实有误，可以承认并说明会忽略或更新该 finding。`;
+    return this.promptLoader.load('reviewer-reply-task', {
+      mrTitle: input.mr.title,
+      mrDescription: input.mr.description ?? '',
+      mrSourceBranch: input.mr.sourceBranch,
+      mrTargetBranch: input.mr.targetBranch,
+      findingsText: findingsText || '（无结构化 findings）',
+      notesText,
+      recalledContext,
+      targetAuthor: input.targetNote.author,
+      targetCreatedAt: input.targetNote.createdAt,
+      targetBody: input.targetNote.body,
+      rules: this.options.rules,
+      soulSection,
+      contextSection,
+    });
   }
 
   private parseReplyResponse(rawResponse: string): ReviewerReplyResult {

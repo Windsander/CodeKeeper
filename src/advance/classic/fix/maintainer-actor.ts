@@ -10,6 +10,7 @@ import type { RecallPlanner } from '../memory/recall-planner.js';
 import { FixToolLoop } from './fix-tool-loop.js';
 import { formatAgentFooter, MAINTAINER_ROLE_LABEL } from '../runners/shared/review-utils.js';
 import { basename } from 'node:path';
+import { defaultPromptLoader } from '../../llm/prompts/loader.js';
 
 export interface MaintainerActorOptions {
   /** GitLab API 提供者 */
@@ -60,25 +61,31 @@ export class MaintainerActor {
         if (decision.deleteFile) {
           const success = await this.executeDeleteFileFix(mr, discussion, finding, decision);
           if (!success) {
-            const question = `我尝试自动删除文件 ${finding.file}，但未成功。请 Reviewer 确认是否应从 MR 中移除该文件。`;
+            const question = defaultPromptLoader.load('maintainer-delete-failed-ask', {
+              file: finding.file,
+            });
             await this.ask(mr, discussion, question, finding.file, state);
           }
           return success;
         }
         const success = await this.executeFix(mr, discussion, finding, decision);
         if (!success) {
-          const question = `我尝试自动修复 ${finding.file}:${finding.line}，但未成功。请 Reviewer 补充期望的修改方式或范围，我会再试一次。`;
+          const question = defaultPromptLoader.load('maintainer-fix-failed-ask', {
+            fileLine: `${finding.file}:${finding.line}`,
+          });
           await this.ask(mr, discussion, question, finding.file, state);
         }
         return success;
       }
       case 'ask': {
-        const question = decision.question ?? '能否补充一下期望的修改方式或范围？';
+        const question =
+          decision.question ??
+          defaultPromptLoader.load('maintainer-ask-clarify');
         await this.ask(mr, discussion, question, finding.file, state);
         return true;
       }
       case 'ignore': {
-        await this.ignore(mr, discussion, decision.reason ?? '无需处理');
+        await this.ignore(mr, discussion, decision.reason ?? '无需处理', decision);
         return true;
       }
     }
@@ -94,6 +101,7 @@ export class MaintainerActor {
     failedItems: string[],
     askedItems: Array<{ fileLine: string; text: string }>,
     ignoredItems: Array<{ fileLine: string; reason: string }>,
+    alreadyFixedItems: Array<{ fileLine: string; reason: string }>,
     state: MrAgentState
   ): Promise<void> {
     const sections: string[] = [];
@@ -101,6 +109,11 @@ export class MaintainerActor {
     if (fixedItems.length > 0) {
       sections.push(
         `✅ 已自动修复并推送：\n${fixedItems.map((item) => `- ${item}`).join('\n')}`
+      );
+    }
+    if (alreadyFixedItems.length > 0) {
+      sections.push(
+        `✅ 已修复（无需重复修改）：\n${alreadyFixedItems.map((item) => `- ${item.fileLine}: ${item.reason}`).join('\n')}`
       );
     }
     if (failedItems.length > 0) {
@@ -415,15 +428,36 @@ export class MaintainerActor {
     }
   }
 
-  private async ignore(mr: MergeRequest, discussion: Discussion, reason: string): Promise<void> {
+  private async ignore(
+    mr: MergeRequest,
+    discussion: Discussion,
+    reason: string,
+    decision: MaintainerDecision
+  ): Promise<void> {
     const { maintainerName, provider } = this.options;
     try {
-      await provider.addDiscussionNote(
-        mr.iid,
-        discussion.id,
-        `📝 ${maintainerName} 决定忽略本 discussion：${reason}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
-      );
-      console.log(`[MaintainerActor] 已忽略 discussion ${discussion.id}`);
+      const isAlreadyFixed = decision.alreadyFixed === true;
+      let body: string;
+      if (isAlreadyFixed) {
+        body =
+          defaultPromptLoader.load('maintainer-already-fixed-reply', {
+            maintainerName,
+            replyBody: decision.replyBody || reason,
+          }) + `\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`;
+      } else {
+        body =
+          defaultPromptLoader.load('maintainer-ignore-reply', {
+            maintainerName,
+            reason,
+          }) + `\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`;
+      }
+      await provider.addDiscussionNote(mr.iid, discussion.id, body);
+      if (isAlreadyFixed) {
+        await provider.resolveDiscussion(mr.iid, discussion.id);
+        console.log(`[MaintainerActor] 已标记 discussion ${discussion.id} 为已修复并 resolve`);
+      } else {
+        console.log(`[MaintainerActor] 已忽略 discussion ${discussion.id}`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[MaintainerActor] 回复 discussion ${discussion.id} 失败: ${message}`);

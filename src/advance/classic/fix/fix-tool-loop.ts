@@ -19,6 +19,7 @@ import { logMemorySnapshot } from '../utils/memory-snapshot.js';
 import { extractJsonText } from '../utils/json-extraction.js';
 import type { ValidationStrategy, ValidationResult } from './validation-strategy.js';
 import { ErrorDeltaValidationStrategy } from './validation-strategy.js';
+import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 
 export interface FixToolLoopOptions {
   llmClient: LlmClient;
@@ -41,6 +42,8 @@ export interface FixToolLoopOptions {
   extraSystemPrompt?: string;
   /** 验证策略，默认 WorkspaceValidationStrategy */
   validationStrategy?: ValidationStrategy;
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 /** 判断 stopReason 是否表示输出被长度截断 */
@@ -62,10 +65,14 @@ export class FixToolLoop {
   private readonly registry: ToolRegistry;
   private readonly executor: ToolExecutor;
   private readonly validationStrategy: ValidationStrategy;
+  private readonly promptLoader: PromptLoader;
   private readonly messages: LlmMessage[] = [];
 
   private appliedFiles = new Set<string>();
   private deletedFiles = new Set<string>();
+  private readFilesThisRun = new Set<string>();
+  private stepsWithoutProgress = 0;
+  private budgetReminderSent = false;
   private baselineResult?: ValidationResult;
   private lastValidationResult?: ValidationResult;
   private fallbackId = 0;
@@ -84,6 +91,7 @@ export class FixToolLoop {
     this.maxNoToolCallRetries = options.maxNoToolCallRetries ?? 2;
     this.maxUnchangedFinishRetries = options.maxUnchangedFinishRetries ?? 2;
     this.extraSystemPrompt = options.extraSystemPrompt ?? '';
+    this.promptLoader = options.promptLoader ?? defaultPromptLoader;
     this.registry = new ToolRegistry(FIX_TOOLS);
     this.executor = new ToolExecutor({
       worktreeManager: options.worktreeManager,
@@ -117,6 +125,14 @@ export class FixToolLoop {
       console.log(`[FixToolLoop] 第 ${step + 1}/${this.maxSteps} 步`);
       logMemorySnapshot(`FixToolLoop 第 ${step + 1} 步开始`);
       console.log(`[FixToolLoop] messages 数量=${this.messages.length}, 总字符=${this.estimateMessagesChars()}`);
+
+      if (step === this.maxSteps - 4 && !this.budgetReminderSent) {
+        this.budgetReminderSent = true;
+        this.messages.push({
+          role: 'user',
+          content: this.promptLoader.load('fix-tool-loop-budget-reminder'),
+        });
+      }
 
       const result = await this.llmClient.completeWithTools(
         this.messages,
@@ -152,10 +168,7 @@ export class FixToolLoop {
         );
         this.messages.push({
           role: 'user',
-          content:
-            '你上一条回复因长度限制被截断，未被执行。请直接调用工具、不要输出解释文字；' +
-            '如需写入大文件，用 write_file 分段写入（第一段 overwrite，后续 append，每段约 100 行以内），' +
-            '或改用 apply_patch 局部修改。',
+          content: this.promptLoader.load('fix-tool-loop-truncation-reminder'),
         });
         continue;
       }
@@ -185,15 +198,26 @@ export class FixToolLoop {
         );
         this.messages.push({
           role: 'user',
-          content:
-            '你上一条回复没有调用任何工具。请必须使用提供的工具（read_file、apply_patch、write_file、validate、finish 等）来推进修复，' +
-            '不要只用文字描述。如果确实无法确定如何修改，调用 finish({ success: false, reason: "需要 Reviewer 澄清具体修改方式" })。',
+          content: this.promptLoader.load('fix-tool-loop-no-tool-reminder'),
         });
         continue;
       }
       this.noToolCallRetries = 0;
 
+      const prevAppliedCount = this.appliedFiles.size;
+      const prevDeletedCount = this.deletedFiles.size;
+      const prevReadCount = this.readFilesThisRun.size;
+
       const toolResults = await this.executeToolCalls(toolCalls);
+
+      const hasFileChange =
+        this.appliedFiles.size > prevAppliedCount || this.deletedFiles.size > prevDeletedCount;
+      const hasNewRead = this.readFilesThisRun.size > prevReadCount;
+      if (hasFileChange || hasNewRead) {
+        this.stepsWithoutProgress = 0;
+      } else {
+        this.stepsWithoutProgress++;
+      }
 
       // 如果本轮包含 validate 工具，用策略评估当前验证状态
       const validateCall = toolCalls.find((tc) => tc.name === 'validate');
@@ -216,6 +240,13 @@ export class FixToolLoop {
         content: toolResults.map((tr) => ({ type: 'tool_result' as const, ...tr })),
       });
 
+      if (this.stepsWithoutProgress === 3) {
+        this.messages.push({
+          role: 'user',
+          content: this.promptLoader.load('fix-tool-loop-stale-reminder'),
+        });
+      }
+
       const finishCall = toolCalls.find((tc: ToolCall) => tc.name === 'finish');
       if (finishCall) {
         const finishResult = this.handleFinish(finishCall);
@@ -231,10 +262,7 @@ export class FixToolLoop {
           );
           this.messages.push({
             role: 'user',
-            content:
-              '你刚才调用 finish 表示修复成功，但我没有检测到任何文件被实际修改或删除。' +
-              '请重新 read_file 确认现状，然后通过 write_file、apply_patch 或 delete_file 实际应用修改；' +
-              '如果你认为确实无法修复，请调用 finish({ success: false, reason: "..." }) 说明原因。',
+            content: this.promptLoader.load('fix-tool-loop-unchanged-finish-reminder'),
           });
           continue;
         }
@@ -285,57 +313,39 @@ export class FixToolLoop {
   }
 
   private buildSystemPrompt(): string {
-    return [
-      '你是 CodeKeeper Maintainer Agent，负责在隔离的 git worktree 中修复代码。',
-      '',
-      '工作原则：',
-      '1. 所有修改必须在 worktree 内进行，不能影响主仓库。',
-      '2. 你只能使用提供的工具操作 worktree；不能运行任意 shell 命令。',
-      '3. run_script 只能调用 package.json 中白名单内的 npm scripts（lint、typecheck、build、test、compile:packages）。',
-      '4. 修改前必须先 read_file 查看目标文件的当前内容，确认现状后再改；禁止不读文件凭猜测修改。跨文件修改需分别读写相关文件。',
-      '5. 写入协议：局部修改优先用 apply_patch；write_file 整文件覆盖仅限小文件（约 100 行以内）；写入更大的文件必须分段（第一段 overwrite，后续 append，每段约 100 行以内）。',
-      `6. 你必须把修复应用到 finding 指出的目标文件（${this.finding.file}）。如果修改涉及导出/导入，可同步修改相关文件，但核心改动必须在目标文件上。`,
-      '7. 调用 write_file 后，如果返回 unchanged=true，说明写入内容和原文件完全一致，没有产生任何变更；此时你必须检查是否写错了文件，并重新修改正确的文件。',
-      '8. 如果 worktree 的运行环境尚未准备好（例如缺少 node_modules、workspace 包未编译、Rust/Python/Go 依赖未安装），你可以先使用 run_setup_command 安装或构建，再读取和修改文件。run_setup_command 仅用于安装/构建，禁止用于 git、find、grep 等查询命令。',
-      '9. 如果阅读目标文件后仍无法确定 Reviewer 期望的具体修改，不要反复搜索或猜测，直接调用 finish({ success: false, reason: "需要 Reviewer 澄清具体修改方式" })，避免耗尽步数。',
-      '10. 完成修改后，必须调用 validate 确认 lint 和 typecheck 通过。',
-      '11. 若修复成功并通过验证，调用 finish({ success: true, reason: "..." })。',
-      '12. 若无法修复、验证失败或需要 Reviewer 澄清，调用 finish({ success: false, reason: "..." })。',
-      '13. 回复要简洁，直接调用工具，不要输出长篇解释；如果输出被截断，优先保证工具调用完整。',
-      '14. 不能直接提交或推送代码，提交由框架在循环外统一处理。',
-      '15. 如果 run_script、run_setup_command、validate 或 read_file 的返回中包含 outputFile，说明完整输出已写入 worktree 临时文件；需要查看完整内容或尾部关键信息时，调用 read_output_file({ outputFile: "...", tailLines?: N })。',
-      '16. 在调用 finish({ success: true, ... }) 之前，必须已经通过 write_file、apply_patch 或 delete_file 实际修改或删除了至少一个文件；如果你尚未做任何文件变更，不要调用 finish，否则我会要求你重新修改。',
-      '17. Reviewer 的修改建议仅供参考。你应先理解问题根因，再决定最合适的修复方式；如果建议本身不合理、无法直接实施，或存在更简洁/更安全的替代方案，你可以选择自己的方案，并在 finish reason 中简要说明为什么这样做。',
-      this.extraSystemPrompt,
-    ]
-      .filter(Boolean)
-      .join('\n');
+    return this.promptLoader
+      .load('fix-tool-loop-system', {
+        findingFile: this.finding.file,
+        extraSystemPrompt: this.extraSystemPrompt,
+      })
+      .trim();
   }
 
   private buildTaskPrompt(): string {
-    return [
-      '请修复以下代码问题。',
-      '',
-      `目标文件: ${this.finding.file}`,
-      `行号: ${this.finding.line}`,
-      `问题: ${this.finding.message}`,
-      `建议: ${this.finding.suggestion ?? '无'}`,
-      `严重程度: ${this.finding.severity}`,
-      '',
-      `MR: ${this.mr.title}`,
-      `源分支: ${this.mr.sourceBranch}`,
-      `目标分支: ${this.mr.targetBranch}`,
-      '',
-      `请重点修改 ${this.finding.file}，按工作原则使用工具完成修复。`,
-      this.finding.suggestion
-        ? 'Reviewer 已给出参考建议，但请不要盲目照搬；请先结合代码理解问题根因，再选择最合适的修复方案。如果建议需要调整（例如符号未导入/未导出、或存在更优雅的改法），可同步修改相关文件。'
-        : '',
-    ].filter(Boolean).join('\n');
+    const suggestionHint = this.finding.suggestion
+      ? 'Reviewer 已给出参考建议，但请不要盲目照搬；请先结合代码理解问题根因，再选择最合适的修复方案。如果建议需要调整（例如符号未导入/未导出、或存在更优雅的改法），可同步修改相关文件。'
+      : '';
+
+    return this.promptLoader.load('fix-tool-loop-task', {
+      findingFile: this.finding.file,
+      findingLine: String(this.finding.line),
+      findingMessage: this.finding.message,
+      findingSuggestion: this.finding.suggestion ?? '无',
+      findingSeverity: this.finding.severity,
+      mrTitle: this.mr.title,
+      mrSourceBranch: this.mr.sourceBranch,
+      mrTargetBranch: this.mr.targetBranch,
+      suggestionHint,
+    });
   }
 
   private async executeToolCalls(toolCalls: ToolCall[]): Promise<ToolResult[]> {
     const results: ToolResult[] = [];
     for (const toolCall of toolCalls) {
+      if (toolCall.name === 'read_file') {
+        const relPath = String(toolCall.input.relPath ?? '');
+        if (relPath) this.readFilesThisRun.add(relPath);
+      }
       if (!this.registry.has(toolCall.name)) {
         results.push({
           tool_use_id: toolCall.id,

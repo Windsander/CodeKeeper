@@ -8,6 +8,7 @@
 import type { LlmClient } from '../../llm/client.js';
 import type { ReviewFinding } from '../provider/types.js';
 import type { FocusedContext } from './focused-context-builder.js';
+import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 
 export interface PlannedPatch {
   /** 需要修改的文件路径（相对项目根目录） */
@@ -25,46 +26,34 @@ export interface CrossFilePlan {
 
 export interface CrossFilePlannerOptions {
   llmClient: LlmClient;
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 export class CrossFilePlanner {
-  constructor(private readonly options: CrossFilePlannerOptions) {}
+  private readonly promptLoader: PromptLoader;
+
+  constructor(private readonly options: CrossFilePlannerOptions) {
+    this.promptLoader = options.promptLoader ?? defaultPromptLoader;
+  }
 
   async plan(finding: ReviewFinding, context: FocusedContext): Promise<CrossFilePlan> {
     const prompt = this.buildPrompt(finding, context);
-    const raw = await this.options.llmClient.complete(
-      prompt,
-      '你是跨文件代码修改规划助手。请只输出 JSON，不要输出解释。'
-    );
+    const system = `你是跨文件代码修改规划助手。${this.promptLoader.load('shared/json-only-constraint')}`;
+    const raw = await this.options.llmClient.complete(prompt, system);
     return this.parseResponse(raw, finding.file);
   }
 
   private buildPrompt(finding: ReviewFinding, context: FocusedContext): string {
-    return `你是一名谨慎的代码维护助手。请根据以下 Reviewer 意见和代码片段，判断本次修改会影响哪些文件，并给出每处需要做什么修改。
-
-问题文件：${finding.file}
-问题行号：${finding.line}
-问题描述：${finding.message}
-修改建议：${finding.suggestion}
-
-当前文件相关代码（行 ${context.snippetStartLine}-${context.snippetEndLine}）：
-${context.snippet}
-
-请输出 JSON：
-{
-  "reason": "为什么需要跨文件修改",
-  "patches": [
-    {
-      "filePath": "相对项目根目录的文件路径，例如 packages/a/src/types.ts",
-      "description": "该文件需要做什么具体修改"
-    }
-  ]
-}
-
-注意：
-- 只列出确实需要修改的文件；
-- 第一个文件通常是 ${finding.file}；
-- 如果不需要跨文件修改，返回空 patches 数组。`;
+    return this.promptLoader.load('cross-file-plan', {
+      findingFile: finding.file,
+      findingLine: String(finding.line),
+      findingMessage: finding.message,
+      findingSuggestion: finding.suggestion,
+      snippetStartLine: String(context.snippetStartLine),
+      snippetEndLine: String(context.snippetEndLine),
+      snippet: context.snippet,
+    });
   }
 
   private parseResponse(raw: string, primaryFile: string): CrossFilePlan {

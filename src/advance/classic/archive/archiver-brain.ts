@@ -1,6 +1,7 @@
 import { LlmClient } from '../../llm/client.js';
 import type { Project } from '../../types.js';
 import type { ProjectKnowledgeItem } from '../memory/types.js';
+import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 
 export interface ProjectAnalyzer {
   name: string;
@@ -10,6 +11,8 @@ export interface ProjectAnalyzer {
 export interface ArchiverBrainOptions {
   llmClient: LlmClient;
   analyzers?: ProjectAnalyzer[];
+  /** 可选的 prompt 加载器，默认使用全局 loader */
+  promptLoader?: PromptLoader;
 }
 
 /**
@@ -19,7 +22,7 @@ export class ArchiverBrain {
   private readonly analyzers: ProjectAnalyzer[];
 
   constructor(options: ArchiverBrainOptions) {
-    this.analyzers = options.analyzers ?? [new LlmProjectAnalyzer(options.llmClient)];
+    this.analyzers = options.analyzers ?? [new LlmProjectAnalyzer(options.llmClient, options.promptLoader)];
   }
 
   async analyzeProject(project: Project, files: string[]): Promise<ProjectKnowledgeItem[]> {
@@ -46,15 +49,19 @@ export class ArchiverBrain {
  */
 export class LlmProjectAnalyzer implements ProjectAnalyzer {
   name = 'llm';
+  private readonly promptLoader: PromptLoader;
 
-  constructor(private readonly llmClient: LlmClient) {}
+  constructor(private readonly llmClient: LlmClient, promptLoader?: PromptLoader) {
+    this.promptLoader = promptLoader ?? defaultPromptLoader;
+  }
 
   async analyze(project: Project, files: string[]): Promise<ProjectKnowledgeItem[]> {
     const keyFiles = this.selectKeyFiles(files);
     if (keyFiles.length === 0) return [];
 
     const prompt = this.buildPrompt(project, keyFiles);
-    const raw = await this.llmClient.complete(prompt, '你是项目知识整理助手。请只输出 JSON。');
+    const system = `你是项目知识整理助手。${this.promptLoader.load('shared/json-only-constraint')}`;
+    const raw = await this.llmClient.complete(prompt, system);
     return this.parseResponse(raw);
   }
 
@@ -69,25 +76,11 @@ export class LlmProjectAnalyzer implements ProjectAnalyzer {
   }
 
   private buildPrompt(project: Project, files: string[]): string {
-    return [
-      '请分析以下项目文件，提炼出可用于代码评审和维护的项目知识。',
-      `项目名称: ${project.name}`,
-      `项目根目录: ${project.rootPath}`,
-      '',
-      '关键文件路径：',
-      files.map((f) => `- ${f}`).join('\n'),
-      '',
-      '请输出 JSON 数组，每个元素包含：',
-      '{',
-      '  "id": "唯一标识（建议用 category+简短英文）",',
-      '  "category": "convention|architecture|domain|risk|stack",',
-      '  "sourceFiles": ["相关文件路径"],',
-      '  "content": "知识内容（中文）",',
-      '  "confidence": "low|medium|high"',
-      '}',
-      '',
-      '只输出 JSON，不要解释。',
-    ].join('\n');
+    return this.promptLoader.load('archiver-analyze', {
+      projectName: project.name,
+      projectRootPath: project.rootPath,
+      filePaths: files.map((f) => `- ${f}`).join('\n'),
+    });
   }
 
   private parseResponse(raw: string): ProjectKnowledgeItem[] {
