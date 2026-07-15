@@ -485,6 +485,39 @@ describe('MaintainerBrain.parseFindings Markdown fallback', () => {
     expect(findings[0]).toMatchObject({ file: 'src/c.ts', line: 5 });
   });
 
+  it('CI Review 表格格式（带 |、反引号、HTML 标签）可解析多条 finding', async () => {
+    const brain = new MaintainerBrain({ llmClient: makeNoCallLlmClient() });
+    const body = `## 🤖 CI Review · Round 1 · commit f0456135
+
+🟡 中风险
+<a href="#">packages/example-core/src/core/telemetry/__tests__/tracker.test.ts:35</a> | 测试覆盖 | \`no-op\` 测试未验证真正的 noop 状态 | 在第二个 describe 的 beforeEach 中调用 setMemoryTracker(noopTracker) 重置
+🟢 低风险
+packages/example-core/src/core/telemetry/__tests__/tracker.test.ts:38 | memoryLlmCall({ durationMs: 10 }) 缺必填字段 scene，tsc 可能报错
+| packages/example-core/src/core/telemetry/tracker.ts:20 | sink 模块单例未在 facade.dispose() 时重置为 noop |
+
+docs/design/telemetry-plan.md | 835 行计划文档不属于 docs/02-架构设计/ 路径
+`;
+
+    const findings = await brain.parseFindings({ body });
+    expect(findings).toHaveLength(4);
+    expect(findings[0]).toMatchObject({
+      file: 'packages/example-core/src/core/telemetry/__tests__/tracker.test.ts',
+      line: 35,
+    });
+    expect(findings[1]).toMatchObject({
+      file: 'packages/example-core/src/core/telemetry/__tests__/tracker.test.ts',
+      line: 38,
+    });
+    expect(findings[2]).toMatchObject({
+      file: 'packages/example-core/src/core/telemetry/tracker.ts',
+      line: 20,
+    });
+    expect(findings[3]).toMatchObject({
+      file: 'docs/design/telemetry-plan.md',
+      line: 1,
+    });
+  });
+
   it('无反引号的 Markdown 列表也能直接解析多条 finding', async () => {
     const brain = new MaintainerBrain({ llmClient: makeNoCallLlmClient() });
     const body = `## 发现项

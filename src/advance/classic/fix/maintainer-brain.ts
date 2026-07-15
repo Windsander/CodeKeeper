@@ -512,12 +512,17 @@ ${positionHint}
   ): ReviewFinding[] {
     // 去掉 Agent 签名 footer 之后的内容
     const bodyWithoutFooter = body.split('\n---\n')[0] ?? body;
-    const lines = bodyWithoutFooter.split('\n');
+    // 预清洗：去掉 HTML 标签，再按行处理，
+    // 让表格行（| 分隔）和带 HTML 标签的路径也能被正常解析
+    const sanitizedBody = bodyWithoutFooter.replace(/<[^>]+>/g, '');
+    const lines = sanitizedBody.split('\n');
     const findings: ReviewFinding[] = [];
     let current: Partial<ReviewFinding> | null = null;
 
     // 匹配常见文件路径 + 行号，例如 src/a.ts:10、./src/a.ts:10
     const fileLinePattern = /\b([\w\-./]+\.[a-zA-Z0-9]+):(\d+)\b/;
+    // 匹配表格/列表中只给路径、没有行号的文件级条目，例如 docs/plan.md | ...
+    const fileOnlyPattern = /^([\w\-./]+\.[a-zA-Z0-9]+)\b\s*\|/;
     // 匹配常见列表标记：- * + 或 1. 2.
     const listMarkerPattern = /^([-+*]\s+|\d+\.\s+)/;
 
@@ -529,7 +534,12 @@ ${positionHint}
     };
 
     for (const rawLine of lines) {
-      const line = rawLine.trim();
+      // 表格行会有前导/尾随的 |，先去掉
+      const line = rawLine
+        .trim()
+        .replace(/^\|+/, '')
+        .replace(/\|+$/, '')
+        .trim();
       if (!line) continue;
 
       if (current && line.startsWith('**问题描述**：')) {
@@ -548,16 +558,20 @@ ${positionHint}
       }
 
       const fileLineMatch = line.match(fileLinePattern);
+      const fileOnlyMatch = line.match(fileOnlyPattern);
       const hasListMarker = listMarkerPattern.test(line);
 
       // 把包含文件定位的新行视为一个新 finding 的开始
-      if (fileLineMatch || hasListMarker) {
+      if (fileLineMatch || fileOnlyMatch || hasListMarker) {
         finalizeCurrent();
         current = { severity: 'MEDIUM' };
 
         if (fileLineMatch) {
           current.file = fileLineMatch[1];
           current.line = parseInt(fileLineMatch[2], 10);
+        } else if (fileOnlyMatch) {
+          current.file = fileOnlyMatch[1];
+          current.line = 1;
         }
 
         const ruleMatch = line.match(/规则\s+`([^`]+)`/);
@@ -566,6 +580,7 @@ ${positionHint}
         let message = line
           .replace(listMarkerPattern, '')
           .replace(fileLinePattern, '')
+          .replace(fileOnlyPattern, '')
           .replace(/·\s*规则\s+`[^`]+`/, '')
           .replace(/`/g, '')
           .trim();
