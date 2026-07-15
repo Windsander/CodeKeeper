@@ -18,11 +18,12 @@ function makeDiscussion(overrides: Partial<Discussion> = {}): Discussion {
 }
 
 function makeState(
-  overrides: Partial<Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions'>> = {}
-): Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions'> {
+  overrides: Partial<Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'>> = {}
+): Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'> {
   return {
     interactiveThreads: {},
     processedDiscussions: {},
+    maintainerThreadState: {},
     ...overrides,
   };
 }
@@ -114,5 +115,63 @@ describe('isDiscussionPending', () => {
       ],
     });
     expect(isDiscussionPending(d, makeState())).toBe(true);
+  });
+
+  it('存在失败且未达重试上限的 fix 时，即使最后一条是 Maintainer 最终回复也进入流程', () => {
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer', body: 'a', createdAt: '2026-01-01T00:00:00Z' },
+        {
+          author: 'maintainer',
+          body: '✅ 已修复\n\n---\n*生成于 2026/01/01 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-02T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': {
+              action: 'fix',
+              reason: '修复失败',
+              failedAttempts: 1,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
+  it('失败 fix 已达重试上限时不再进入流程', () => {
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer', body: 'a', createdAt: '2026-01-01T00:00:00Z' },
+        {
+          author: 'maintainer',
+          body: '✅ 已修复\n\n---\n*生成于 2026/01/01 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-02T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': {
+              action: 'fix',
+              reason: '修复失败',
+              failedAttempts: 3,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
   });
 });

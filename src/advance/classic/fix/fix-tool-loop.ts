@@ -247,9 +247,18 @@ export class FixToolLoop {
         });
       }
 
+      if (this.stepsWithoutProgress >= 5) {
+        return {
+          success: false,
+          reason: this.promptLoader.load('fix-tool-loop-stale-failure-reason', {
+            steps: String(this.stepsWithoutProgress),
+          }),
+        };
+      }
+
       const finishCall = toolCalls.find((tc: ToolCall) => tc.name === 'finish');
       if (finishCall) {
-        const finishResult = this.handleFinish(finishCall);
+        const finishResult = await this.handleFinish(finishCall);
         // LLM 可能 hallucinate：声称成功但实际没有修改任何文件。给它一次（或多次）重新实际修改的机会。
         if (
           !finishResult.success &&
@@ -441,22 +450,38 @@ export class FixToolLoop {
     }
   }
 
-  private handleFinish(finishCall: ToolCall): FixAttemptResult {
+  private async handleFinish(finishCall: ToolCall): Promise<FixAttemptResult> {
     const success = finishCall.input.success === true;
     const reason = String(finishCall.input.reason ?? '');
 
-    if (success && !this.lastValidationResult?.passed) {
-      return {
-        success: false,
-        reason: `LLM 认为修复成功，但尚未通过验证策略：${this.lastValidationResult?.reason ?? '未调用 validate'}`,
-      };
-    }
+    if (success) {
+      // LLM 可能直接调用 finish 却忘记调用 validate；自动补一次验证，避免"未调用 validate"的误判。
+      if (!this.lastValidationResult?.passed) {
+        const raw = await this.worktreeManager.validate();
+        this.lastValidationResult = await this.validationStrategy.evaluate({
+          worktreeManager: this.worktreeManager,
+          appliedFiles: Array.from(this.appliedFiles),
+          deletedFiles: Array.from(this.deletedFiles),
+          rawResult: raw,
+          baseline: this.baselineResult,
+        });
+      }
 
-    if (success && this.appliedFiles.size === 0 && this.deletedFiles.size === 0) {
-      return {
-        success: false,
-        reason: 'LLM 认为修复成功，但未实际修改或删除任何文件',
-      };
+      if (!this.lastValidationResult?.passed) {
+        return {
+          success: false,
+          reason: this.promptLoader.load('fix-tool-loop-validation-failure-reason', {
+            reason: this.lastValidationResult?.reason ?? '未调用 validate',
+          }),
+        };
+      }
+
+      if (this.appliedFiles.size === 0 && this.deletedFiles.size === 0) {
+        return {
+          success: false,
+          reason: this.promptLoader.load('fix-tool-loop-no-change-failure-reason'),
+        };
+      }
     }
 
     return {

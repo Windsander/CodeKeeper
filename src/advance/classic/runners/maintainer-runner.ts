@@ -47,6 +47,31 @@ export function buildMaintainerMrSessionId(projectId: string, mrIid: number): st
   return `maintainer-${projectId}-mr-${mrIid}`;
 }
 
+/** 单条 finding 最大自动修复重试次数 */
+const MAX_FIX_RETRY_ATTEMPTS = 3;
+
+function getFindingKey(finding: ReviewFinding): string {
+  return `${finding.file}:${finding.line}`;
+}
+
+function getLastReviewerNoteAt(discussion: Discussion): number {
+  return discussion.notes
+    .filter((note) => !isMaintainerAuthoredNote(note.body))
+    .reduce((max, note) => {
+      const t = new Date(note.createdAt).getTime();
+      return !Number.isNaN(t) ? Math.max(max, t) : max;
+    }, 0);
+}
+
+function simpleHash(text: string): string {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) {
+    h = (h << 5) - h + text.charCodeAt(i);
+    h |= 0;
+  }
+  return String(h);
+}
+
 /**
  * 批量修复结果分类：把 batch 结果映射为每个 finding 的 fixed/failed。
  *
@@ -475,7 +500,37 @@ export class MaintainerRunner extends BaseRoleRunner {
       deleteFile?: boolean;
     }> = [];
 
+    const threadState = this.getMaintainerThreadState(state, discussion.id);
+    const lastReviewerNoteAt = getLastReviewerNoteAt(discussion);
+    const hasNewReviewerNote = lastReviewerNoteAt > threadState.lastReviewerNoteAt;
+    if (hasNewReviewerNote) {
+      console.log(`[MaintainerRunner] discussion ${discussion.id} 有 Reviewer 新回复，清空历史决策`);
+      threadState.decisions = {};
+    }
+    threadState.lastReviewerNoteAt = lastReviewerNoteAt;
+
     for (const finding of findings) {
+      const key = getFindingKey(finding);
+      const existing = threadState.decisions[key];
+      const needsRetry =
+        existing?.action === 'fix' &&
+        !existing.fixSucceeded &&
+        existing.failedAttempts < MAX_FIX_RETRY_ATTEMPTS;
+      const shouldReuse = existing && !hasNewReviewerNote && !needsRetry;
+
+      if (shouldReuse) {
+        console.log(`[MaintainerRunner] finding ${key} 复用历史决策: action=${existing.action}`);
+        this.applyStoredDecision(existing, finding, {
+          fixedItems,
+          failedItems,
+          askedItems,
+          ignoredItems,
+          alreadyFixedItems,
+          fixableItems,
+        });
+        continue;
+      }
+
       const focusedContent = await readDiscussionFileContent(
         worktreeManager,
         projectRootPath,
@@ -500,9 +555,24 @@ export class MaintainerRunner extends BaseRoleRunner {
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
       );
 
+      threadState.decisions[key] = {
+        action: decision.action,
+        alreadyFixed: decision.alreadyFixed,
+        reason: decision.reason,
+        replyBody: decision.replyBody,
+        question: decision.question,
+        deleteFile: decision.deleteFile,
+        failedAttempts: existing?.action === 'fix' ? (existing.failedAttempts ?? 0) : 0,
+        fixSucceeded: existing?.fixSucceeded,
+        decidedAt: Date.now(),
+      };
+
       if (decision.action === 'ignore') {
         if (decision.alreadyFixed) {
-          alreadyFixedItems.push({ fileLine: `${finding.file}:${finding.line}`, reason: decision.replyBody || decision.reason });
+          alreadyFixedItems.push({
+            fileLine: `${finding.file}:${finding.line}`,
+            reason: decision.replyBody || decision.reason,
+          });
         } else {
           ignoredItems.push({ fileLine: `${finding.file}:${finding.line}`, reason: decision.reason });
         }
@@ -543,6 +613,22 @@ export class MaintainerRunner extends BaseRoleRunner {
         `[MaintainerRunner] 批量修复结果: success=${batchResult.success}, applied=[${batchResult.appliedFiles.join(',')}], deleted=[${batchResult.deletedFiles.join(',')}]`
       );
 
+      // 按 batch 结果更新每条 finding 的决策状态
+      for (const item of fixableItems) {
+        const key = getFindingKey(item.finding);
+        const decision = threadState.decisions[key];
+        if (!decision || decision.action !== 'fix') continue;
+        const isFixed = item.deleteFile
+          ? batchResult.success && batchResult.deletedFiles.includes(item.finding.file)
+          : batchResult.success && batchResult.appliedFiles.includes(item.finding.file);
+        if (isFixed) {
+          decision.fixSucceeded = true;
+        } else {
+          decision.failedAttempts = (decision.failedAttempts ?? 0) + 1;
+          decision.decidedAt = Date.now();
+        }
+      }
+
       if (cognitiveDepth === 'deep' && batchResult.success && memoryClient) {
         const engine = new CognitiveEngine({ llmClient: this.llmClient, memoryClient });
         for (const item of fixableItems) {
@@ -582,16 +668,35 @@ export class MaintainerRunner extends BaseRoleRunner {
       failedItems.push(...classified.failedItems);
     }
 
-    await actor.postSummary(
-      mr,
-      discussion,
-      fixedItems,
-      failedItems,
-      askedItems,
-      ignoredItems,
-      alreadyFixedItems,
-      state
+    const summaryHash = simpleHash(
+      JSON.stringify({ fixedItems, failedItems, askedItems, ignoredItems, alreadyFixedItems })
     );
+    const hasResults =
+      fixedItems.length > 0 ||
+      failedItems.length > 0 ||
+      askedItems.length > 0 ||
+      ignoredItems.length > 0 ||
+      alreadyFixedItems.length > 0;
+    const summaryChanged = summaryHash !== threadState.lastSummaryHash;
+
+    if (hasResults && summaryChanged) {
+      await actor.postSummary(
+        mr,
+        discussion,
+        fixedItems,
+        failedItems,
+        askedItems,
+        ignoredItems,
+        alreadyFixedItems,
+        state
+      );
+      threadState.lastSummaryHash = summaryHash;
+      threadState.lastSummaryAt = Date.now();
+    } else {
+      console.log(
+        `[MaintainerRunner] discussion ${discussion.id} summary 无变化或无需发布，跳过（hasResults=${hasResults}, changed=${summaryChanged}）`
+      );
+    }
     recordProcessed();
   }
 
@@ -661,5 +766,75 @@ export class MaintainerRunner extends BaseRoleRunner {
     };
 
     await actor.applyDecision(mr, discussion, syntheticFindingForApply, decision, state);
+  }
+
+  /**
+   * 获取/初始化 discussion 级别的 Maintainer 状态
+   */
+  private getMaintainerThreadState(state: MrAgentState, discussionId: string) {
+    state.maintainerThreadState ??= {};
+    state.maintainerThreadState[discussionId] ??= {
+      decisions: {},
+      lastReviewerNoteAt: 0,
+    };
+    return state.maintainerThreadState[discussionId];
+  }
+
+  /**
+   * 复用历史决策，把结果分类到对应的汇总列表
+   */
+  private applyStoredDecision(
+    decision: import('./shared/state-utils.js').MaintainerFindingDecision,
+    finding: ReviewFinding,
+    buckets: {
+      fixedItems: string[];
+      failedItems: string[];
+      askedItems: Array<{ fileLine: string; text: string }>;
+      ignoredItems: Array<{ fileLine: string; reason: string }>;
+      alreadyFixedItems: Array<{ fileLine: string; reason: string }>;
+      fixableItems: Array<{
+        finding: ReviewFinding;
+        fileContent: string;
+        scope?: import('../fix/maintainer-brain.js').MaintainerDecision['scope'];
+        deleteFile?: boolean;
+      }>;
+    }
+  ): void {
+    const fileLine = `${finding.file}:${finding.line}`;
+    switch (decision.action) {
+      case 'ignore': {
+        if (decision.alreadyFixed) {
+          buckets.alreadyFixedItems.push({
+            fileLine,
+            reason: decision.replyBody || decision.reason,
+          });
+        } else {
+          buckets.ignoredItems.push({ fileLine, reason: decision.reason });
+        }
+        break;
+      }
+      case 'ask': {
+        buckets.askedItems.push({
+          fileLine,
+          text: decision.question || decision.replyBody || decision.reason,
+        });
+        break;
+      }
+      case 'fix': {
+        if (decision.fixSucceeded) {
+          buckets.fixedItems.push(fileLine);
+        } else if (decision.failedAttempts >= MAX_FIX_RETRY_ATTEMPTS) {
+          buckets.failedItems.push(`${fileLine} — ${decision.reason}`);
+        } else {
+          // 理论上 needsRetry 才会走到这里，保留为可修复项
+          buckets.fixableItems.push({
+            finding,
+            fileContent: '',
+            deleteFile: decision.deleteFile,
+          });
+        }
+        break;
+      }
+    }
   }
 }

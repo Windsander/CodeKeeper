@@ -78,7 +78,7 @@ describe('FixToolLoop', () => {
     expect(loop.getAppliedFiles()).toContain('src/index.ts');
   });
 
-  it('finish 成功但未 validate 返回失败', async () => {
+  it('finish 成功但未 validate 时自动验证，无文件变更仍返回失败', async () => {
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([
         {
@@ -93,7 +93,7 @@ describe('FixToolLoop', () => {
     const result = await loop.run();
 
     expect(result.success).toBe(false);
-    expect(result.reason).toContain('尚未通过验证策略');
+    expect(result.reason).toContain('未实际修改或删除任何文件');
   });
 
   it('达到 maxSteps 返回失败', async () => {
@@ -111,6 +111,28 @@ describe('FixToolLoop', () => {
 
     expect(result.success).toBe(false);
     expect(result.reason).toContain('最大步数');
+  });
+
+  it('连续多步无进展时提前终止，避免耗尽 maxSteps', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+        { toolCalls: [{ id: '2', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '4', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '5', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '6', name: 'validate', input: {} }] },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 20,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('修复陷入循环');
   });
 
   it('content 包含工具调用 JSON 时兜底解析并执行', async () => {

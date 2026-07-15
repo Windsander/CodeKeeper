@@ -38,6 +38,40 @@ export interface InteractiveThread {
 }
 
 /**
+ * Maintainer 对单条 finding 的决策记录
+ */
+export interface MaintainerFindingDecision {
+  action: 'fix' | 'ask' | 'ignore';
+  alreadyFixed?: boolean;
+  reason: string;
+  replyBody?: string;
+  /** ask 时的问题 */
+  question?: string;
+  /** fix 时是否标记为删除文件 */
+  deleteFile?: boolean;
+  /** fix 失败时的累计重试次数 */
+  failedAttempts: number;
+  /** fix 是否已经成功 */
+  fixSucceeded?: boolean;
+  /** 该决策产生的时间戳 */
+  decidedAt: number;
+}
+
+/**
+ * Maintainer 对单个 discussion 的处理状态
+ */
+export interface MaintainerThreadState {
+  /** findingKey -> 决策记录 */
+  decisions: Record<string, MaintainerFindingDecision>;
+  /** 该 discussion 下最近一条 Reviewer note 的时间戳（毫秒） */
+  lastReviewerNoteAt: number;
+  /** 上一次发布 summary 的时间戳 */
+  lastSummaryAt?: number;
+  /** 上一次发布 summary 的内容哈希，用于去重 */
+  lastSummaryHash?: string;
+}
+
+/**
  * MR Agent 状态文件结构
  */
 export interface MrAgentState {
@@ -47,6 +81,8 @@ export interface MrAgentState {
   interactiveThreads: Record<string, InteractiveThread>;
   /** 已处理过的非交互式 discussion，用于避免重复解析 */
   processedDiscussions?: Record<string, { noteCount: number; processedAt: number }>;
+  /** Maintainer 对每个 discussion 的决策记忆与 summary 状态 */
+  maintainerThreadState?: Record<string, MaintainerThreadState>;
   /** 每个分支对的最后一次评审状态，用于避免重复发布 summary/记忆 */
   reviewState?: Record<
     string,
@@ -94,8 +130,8 @@ export function loadState(project: Project): MrAgentState {
     if (!parsed.reviewState) {
       parsed.reviewState = {};
     }
-    if (!parsed.reviewerThreadState) {
-      parsed.reviewerThreadState = {};
+    if (!parsed.maintainerThreadState) {
+      parsed.maintainerThreadState = {};
     }
     return parsed;
   } catch {
