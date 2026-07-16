@@ -67,6 +67,28 @@ const MAINTAINER_REPLY_DECISION_TOOL: ToolDefinition = {
   },
 };
 
+const NON_FINDING_DECISION_TOOL: ToolDefinition = {
+  name: 'non_finding_decision',
+  description:
+    '当 discussion 无法解析出具体文件/行号时，决定如何处理。action 必须是 "record"（录入项目记忆）、"ask"（请求补充信息）或 "ignore"（忽略）三者之一。只有纯统计/汇总/指标类内容才选择 record。',
+  input_schema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['record', 'ask', 'ignore'] },
+      reason: { type: 'string' },
+      question: { type: 'string' },
+      replyBody: { type: 'string' },
+      memoryCategory: {
+        type: 'string',
+        enum: ['convention', 'architecture', 'domain', 'risk', 'stack', 'graph'],
+      },
+      memoryContent: { type: 'string' },
+    },
+    required: ['action', 'reason'],
+    additionalProperties: false,
+  },
+};
+
 const ENV_PREP_DECISION_TOOL: ToolDefinition = {
   name: 'env_prep_decision',
   description: '根据 typecheck 失败输出决定是否需要运行某个 npm script 准备环境',
@@ -106,6 +128,24 @@ export interface MaintainerDecision {
   alreadyFixed?: boolean;
   /** 当 alreadyFixed=true 时，向 Reviewer 解释问题已修复的回复正文 */
   replyBody?: string;
+}
+
+/**
+ * 无法解析出具体 finding 的 discussion 的处理决策
+ */
+export interface NonFindingDecision {
+  /** 处理方式：record 录入记忆、ask 请求补充、ignore 忽略 */
+  action: 'record' | 'ask' | 'ignore';
+  /** 决策理由 */
+  reason: string;
+  /** action=ask 时的问题 */
+  question?: string;
+  /** action=ignore 时可选的轻松回复正文（如感谢 Reviewer）。若为空则不回复。 */
+  replyBody?: string;
+  /** action=record 时的记忆分类 */
+  memoryCategory?: 'convention' | 'architecture' | 'domain' | 'risk' | 'stack' | 'graph';
+  /** action=record 时的记忆内容 */
+  memoryContent?: string;
 }
 
 export interface MaintainerBrainOptions {
@@ -282,6 +322,76 @@ export class MaintainerBrain {
       ...decision,
       scope: decision.scope && decision.scope !== 'local' ? decision.scope : classification.scope,
     };
+  }
+
+  /**
+   * 当 discussion 无法解析出具体 finding 时，由 LLM 决定如何处理
+   */
+  async decideNonFindingComment(params: {
+    body: string;
+    mrIid: number;
+    userId: string;
+    mrContext?: MrContext;
+  }): Promise<NonFindingDecision> {
+    const mrContextText = params.mrContext
+      ? [
+          `标题：${params.mrContext.title}`,
+          `源分支：${params.mrContext.sourceBranch}`,
+          `目标分支：${params.mrContext.targetBranch}`,
+          `变更文件：${params.mrContext.changedFiles.join(', ') || '无'}`,
+          `变更摘要：\n${params.mrContext.diffSummary}`,
+        ].join('\n')
+      : '无';
+
+    const prompt = this.promptLoader.load('maintainer-non-finding-task', {
+      body: params.body,
+      mrContextText,
+      userId: params.userId,
+    });
+
+    try {
+      const toolCall = await this.options.llmClient.completeDecision(
+        [NON_FINDING_DECISION_TOOL],
+        prompt,
+        this.systemPrompt()
+      );
+      const input = toolCall.input as {
+        action: string;
+        reason?: string;
+        question?: string;
+        replyBody?: string;
+        memoryCategory?: string;
+        memoryContent?: string;
+      };
+      const action = this.normalizeNonFindingAction(input.action);
+      if (action === 'unknown') {
+        console.warn('[MaintainerBrain] 非 finding 决策返回未知 action:', input.action);
+        return {
+          action: 'ask',
+          reason: `模型返回未知 action: ${input.action}，需要 Reviewer 确认`,
+          question: '我没有完全理解这条评论的意图，能否补充一下需要处理的具体文件或修改方式？',
+        };
+      }
+      return {
+        action,
+        reason: input.reason ?? '未说明理由',
+        question: input.question,
+        replyBody: input.replyBody,
+        memoryCategory: this.normalizeMemoryCategory(input.memoryCategory),
+        memoryContent: input.memoryContent,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof LlmDecisionError) {
+        console.warn('[MaintainerBrain] 非 finding 决策工具调用失败，保守询问:', message);
+        return {
+          action: 'ask',
+          reason: `决策工具调用失败：${message}`,
+          question: '我没有完全理解这条评论的意图，能否补充一下需要处理的具体文件或修改方式？',
+        };
+      }
+      throw err;
+    }
   }
 
   /**
@@ -738,5 +848,30 @@ export class MaintainerBrain {
     if (['ask', 'question', 'clarify', 'confirm'].includes(lower)) return 'ask';
     if (['ignore', 'skip', 'pass', 'none', 'no-op', 'noop'].includes(lower)) return 'ignore';
     return 'unknown';
+  }
+
+  private normalizeNonFindingAction(action: string | undefined): 'record' | 'ask' | 'ignore' | 'unknown' {
+    if (typeof action !== 'string') return 'unknown';
+    const lower = action.toLowerCase().trim();
+    if (['record', 'memo', 'memory', 'remember'].includes(lower)) return 'record';
+    if (['ask', 'question', 'clarify', 'confirm'].includes(lower)) return 'ask';
+    if (['ignore', 'skip', 'pass', 'none', 'no-op', 'noop'].includes(lower)) return 'ignore';
+    return 'unknown';
+  }
+
+  private normalizeMemoryCategory(
+    category: string | undefined
+  ): NonFindingDecision['memoryCategory'] | undefined {
+    const valid: NonNullable<NonFindingDecision['memoryCategory']>[] = [
+      'convention',
+      'architecture',
+      'domain',
+      'risk',
+      'stack',
+      'graph',
+    ];
+    if (typeof category !== 'string') return undefined;
+    const lower = category.toLowerCase().trim();
+    return valid.find((c) => c === lower);
   }
 }

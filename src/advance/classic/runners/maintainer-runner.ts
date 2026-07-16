@@ -349,6 +349,26 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
     }
 
+    // 获取 MR 级上下文，供非 finding 决策和后续单条/批量处理共用
+    let mrContext: MrContext | undefined;
+    try {
+      const diffs = await provider.getMRDiff(mr.iid);
+      const diffSummary = diffs
+        .map((d) => `${d.filePath}: +${d.additions}/-${d.deletions}`)
+        .join('\n');
+      mrContext = {
+        iid: mr.iid,
+        title: mr.title,
+        sourceBranch: mr.sourceBranch,
+        targetBranch: mr.targetBranch,
+        description: mr.description,
+        diffSummary,
+        changedFiles: diffs.map((d) => d.filePath),
+      };
+    } catch {
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} diff 失败，继续使用基础上下文`);
+    }
+
     // 解析 finding
     let findings = await brain.parseFindings({
       body: firstNote.body,
@@ -389,13 +409,70 @@ export class MaintainerRunner extends BaseRoleRunner {
         console.warn(
           `[MaintainerRunner] discussion ${discussion.id} 解析结果: ${JSON.stringify(findings)}`
         );
-        const question = `👋 ${maintainerName} 没能定位到需要修改的具体文件和行号，请补充一下文件路径或期望的修改方式，我会继续处理。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`;
-        try {
-          await provider.addDiscussionNote(mr.iid, discussion.id, question);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[MaintainerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
+
+        // 没有可定位的 finding 时，让 Maintainer 自行判断如何处理
+        const decision = await brain.decideNonFindingComment({
+          body: firstNote.body,
+          mrIid: mr.iid,
+          userId: firstNote.author,
+          mrContext,
+        });
+        console.log(
+          `[MaintainerRunner] discussion ${discussion.id} 非 finding 决策: action=${decision.action}, reason=${decision.reason}`
+        );
+
+        if (decision.action === 'record') {
+          if (memoryClient) {
+            try {
+              await memoryClient.recordProjectKnowledge([
+                {
+                  id: `non-finding-record-${mr.iid}-${discussion.id}`,
+                  category: decision.memoryCategory ?? 'risk',
+                  sourceFiles: [],
+                  content: decision.memoryContent?.trim()
+                    ? `MR !${mr.iid} 的讨论记录：\n${decision.memoryContent.slice(0, 4000)}`
+                    : `MR !${mr.iid} 的讨论记录：\n${firstNote.body.slice(0, 4000)}`,
+                  confidence: 'high',
+                  createdAt: new Date().toISOString(),
+                },
+              ]);
+              console.log(`[MaintainerRunner] 已把 discussion ${discussion.id} 记录到项目记忆`);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.warn(`[MaintainerRunner] 记录 discussion ${discussion.id} 记忆失败: ${message}`);
+            }
+          }
+        } else if (decision.action === 'ask') {
+          const question = decision.question?.trim()
+            ? decision.question
+            : '我没有完全理解这条评论的意图，能否补充一下需要处理的具体文件或修改方式？';
+          try {
+            await provider.addDiscussionNote(
+              mr.iid,
+              discussion.id,
+              `${question}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[MaintainerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
+          }
+        } else {
+          console.log(`[MaintainerRunner] discussion ${discussion.id} 已忽略: ${decision.reason}`);
+          if (decision.replyBody?.trim()) {
+            try {
+              await provider.addDiscussionNote(
+                mr.iid,
+                discussion.id,
+                `${decision.replyBody}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+              );
+              console.log(`[MaintainerRunner] 已向 discussion ${discussion.id} 发布轻松回复`);
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.error(`[MaintainerRunner] 发布轻松回复失败: ${message}`);
+            }
+          }
         }
+
         recordProcessed();
         return;
       }
@@ -409,28 +486,34 @@ export class MaintainerRunner extends BaseRoleRunner {
       `[MaintainerRunner] 从 discussion ${discussion.id} 解析到 ${findings.length} 个 finding`
     );
 
-    let mrContext: MrContext | undefined;
-    try {
-      const diffs = await provider.getMRDiff(mr.iid);
-      const diffSummary = diffs
-        .map((d) => `${d.filePath}: +${d.additions}/-${d.deletions}`)
-        .join('\n');
-      mrContext = {
-        iid: mr.iid,
-        title: mr.title,
-        sourceBranch: mr.sourceBranch,
-        targetBranch: mr.targetBranch,
-        description: mr.description,
-        diffSummary,
-        changedFiles: diffs.map((d) => d.filePath),
-      };
-    } catch {
-      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} diff 失败，继续使用基础上下文`);
-    }
-
     // 单条 finding：直接交给 Actor 执行决策后的动作
     if (findings.length === 1) {
       const finding = findings[0];
+      const key = getFindingKey(finding);
+
+      // 单条 finding 也使用 decision memory，避免已经处理过的 ignore/已修复被重复回复
+      const threadState = this.getMaintainerThreadState(state, discussion.id);
+      const lastReviewerNoteAt = getLastReviewerNoteAt(discussion);
+      const hasNewReviewerNote = lastReviewerNoteAt > threadState.lastReviewerNoteAt;
+      if (hasNewReviewerNote) {
+        console.log(`[MaintainerRunner] discussion ${discussion.id} 有 Reviewer 新回复，清空历史决策`);
+        threadState.decisions = {};
+      }
+      threadState.lastReviewerNoteAt = lastReviewerNoteAt;
+
+      const existing = threadState.decisions[key];
+      const needsRetry =
+        existing?.action === 'fix' &&
+        !existing.fixSucceeded &&
+        existing.failedAttempts < MAX_FIX_RETRY_ATTEMPTS;
+      if (existing && !hasNewReviewerNote && !needsRetry) {
+        console.log(
+          `[MaintainerRunner] finding ${key} 已有历史决策且无需重试，跳过: action=${existing.action}`
+        );
+        recordProcessed();
+        return;
+      }
+
       const fileContent = await readDiscussionFileContent(
         worktreeManager,
         projectRootPath,
@@ -457,6 +540,22 @@ export class MaintainerRunner extends BaseRoleRunner {
       );
 
       const applied = await actor.applyDecision(mr, discussion, finding, decision, state);
+
+      // 记录本次决策，用于下次轮询去重
+      threadState.decisions[key] = {
+        action: decision.action,
+        alreadyFixed: decision.alreadyFixed,
+        reason: decision.reason,
+        replyBody: decision.replyBody,
+        question: decision.question,
+        deleteFile: decision.deleteFile,
+        failedAttempts:
+          decision.action === 'fix' && !applied
+            ? (existing?.failedAttempts ?? 0) + 1
+            : existing?.failedAttempts ?? 0,
+        fixSucceeded: decision.action === 'fix' ? applied : undefined,
+        decidedAt: Date.now(),
+      };
 
       if (cognitiveDepth === 'deep' && applied && decision.action === 'fix' && decision.fixDescription) {
         const engine = new CognitiveEngine({ llmClient: this.llmClient, memoryClient });

@@ -51,6 +51,15 @@ function createReplyDecisionLlmClient(input: Record<string, unknown>): LlmClient
   });
 }
 
+function createNonFindingDecisionLlmClient(input: Record<string, unknown>): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: {
+      toolResponses: [{ toolCalls: [{ id: '1', name: 'non_finding_decision', input }] }],
+    },
+  });
+}
+
 describe('MaintainerBrain', () => {
   it('LLM 决策为 fix 时返回 fix', async () => {
     const brain = new MaintainerBrain({
@@ -172,6 +181,57 @@ describe('MaintainerBrain', () => {
     });
     expect(decision.action).toBe('fix');
     expect(decision.fixDescription).toBe('把 x 改成 2');
+  });
+
+  it('decideNonFindingComment 解析 record 决策', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createNonFindingDecisionLlmClient({
+        action: 'record',
+        reason: '纯统计报告',
+        memoryCategory: 'risk',
+        memoryContent: 'Warning -1',
+      }),
+    });
+    const decision = await brain.decideNonFindingComment({
+      body: 'Metric Previous Current Delta\nWarning 10 9 -1',
+      mrIid: 1,
+      userId: 'bot',
+    });
+    expect(decision.action).toBe('record');
+    expect(decision.memoryCategory).toBe('risk');
+    expect(decision.memoryContent).toBe('Warning -1');
+  });
+
+  it('decideNonFindingComment 解析 ignore 并携带轻松回复', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createNonFindingDecisionLlmClient({
+        action: 'ignore',
+        reason: 'Reviewer 已确认可接受',
+        replyBody: '👍 感谢确认',
+      }),
+    });
+    const decision = await brain.decideNonFindingComment({
+      body: '🟢 低风险，优点明显，可接受',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
+    expect(decision.action).toBe('ignore');
+    expect(decision.replyBody).toBe('👍 感谢确认');
+  });
+
+  it('decideNonFindingComment 对未知 action 保守 ask', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createNonFindingDecisionLlmClient({
+        action: 'unknown',
+        reason: '我不确定',
+      }),
+    });
+    const decision = await brain.decideNonFindingComment({
+      body: '随便说两句',
+      mrIid: 1,
+      userId: 'reviewer',
+    });
+    expect(decision.action).toBe('ask');
   });
 
   it('决策前召回用户偏好并拼入 prompt', async () => {
