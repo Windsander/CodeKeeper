@@ -39,6 +39,38 @@ function makeFastLlmClient(input: Record<string, unknown>): LlmClient {
   });
 }
 
+function makeAlreadyFixedLlmClient(alreadyFixed: boolean): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: {
+      toolResponses: [
+        {
+          toolCalls: [
+            {
+              id: '1',
+              name: 'inquiry_decision',
+              input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '2',
+              name: 'already_fixed_check',
+              input: {
+                alreadyFixed,
+                reason: alreadyFixed ? 'error 字段已存在' : 'error 字段缺失',
+                evidence: alreadyFixed ? '第 5 行已包含 error?: number' : undefined,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  });
+}
+
 describe('CognitiveEngine', () => {
   it('fast 模式解析 CognitiveDecision', async () => {
     const engine = new CognitiveEngine({
@@ -80,7 +112,7 @@ describe('CognitiveEngine', () => {
     expect(decision.action).toBe('fix');
   });
 
-  it('standard 模式经过 Inquiry + Options + Decide 三步', async () => {
+  it('standard 模式经过 Inquiry + already_fixed_check + Options + Decide 四步', async () => {
     const llmClient = new LlmClient({
       apiKey: 'test',
       mock: {
@@ -102,6 +134,15 @@ describe('CognitiveEngine', () => {
             toolCalls: [
               {
                 id: '2',
+                name: 'already_fixed_check',
+                input: { alreadyFixed: false, reason: '变量 b 仍存在且未使用' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '3',
                 name: 'options_decision',
                 input: {
                   options: [
@@ -115,7 +156,7 @@ describe('CognitiveEngine', () => {
           {
             toolCalls: [
               {
-                id: '3',
+                id: '4',
                 name: 'final_decision',
                 input: {
                   action: 'fix',
@@ -167,6 +208,90 @@ describe('CognitiveEngine', () => {
     expect(decision.action).toBe('ignore');
     expect(decision.alreadyFixed).toBe(true);
     expect(decision.replyBody).toContain('删除');
+  });
+
+  it('standard 模式检测到问题已修复时返回 ignore', async () => {
+    const engine = new CognitiveEngine({
+      llmClient: makeAlreadyFixedLlmClient(true),
+    });
+
+    const decision = await engine.decide(makeContext(), 'standard');
+
+    expect(decision.action).toBe('ignore');
+    expect(decision.alreadyFixed).toBe(true);
+    expect(decision.replyBody).toContain('第 5 行');
+  });
+
+  it('standard 模式检测到问题未修复时继续生成修复方案', async () => {
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'inquiry_decision',
+                input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'already_fixed_check',
+                input: { alreadyFixed: false, reason: 'error 字段缺失' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '3',
+                name: 'options_decision',
+                input: {
+                  options: [
+                    { description: '添加 error 字段', pros: ['修复类型错误'], cons: [], risk: 'low' },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '4',
+                name: 'final_decision',
+                input: { action: 'fix', reason: '添加 error 字段', analysis: '分析', consideredOptions: [], reasoning: '理由', confidence: 'high' },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const engine = new CognitiveEngine({ llmClient });
+    const decision = await engine.decide(makeContext(), 'standard');
+
+    expect(decision.action).toBe('fix');
+  });
+
+  it('fast 模式返回 alreadyFixed=true 但 action=fix 时归一化为 ignore', async () => {
+    const engine = new CognitiveEngine({
+      llmClient: makeFastLlmClient({
+        action: 'fix',
+        reason: '字段已存在',
+        alreadyFixed: true,
+        replyBody: '当前代码已包含 error 字段',
+      }),
+    });
+
+    const decision = await engine.decide(makeContext(), 'fast');
+
+    expect(decision.action).toBe('ignore');
+    expect(decision.alreadyFixed).toBe(true);
+    expect(decision.replyBody).toContain('error 字段');
   });
 
   it('reflect 生成反思并关联 case key', async () => {

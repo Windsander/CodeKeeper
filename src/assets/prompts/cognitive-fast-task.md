@@ -38,5 +38,7 @@
   "analysis": "对问题的分析",
   "consideredOptions": ["方案1", "方案2"],
   "reasoning": "最终选择该方案的原因",
-  "confidence": "high|medium|low"
+  "confidence": "high|medium|low",
+  "alreadyFixed": "如果问题已被修复，填 true",
+  "replyBody": "ignore 且 alreadyFixed=true 时，向 Reviewer 说明已修复的具体证据"
 }

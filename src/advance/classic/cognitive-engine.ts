@@ -89,6 +89,21 @@ const FINAL_DECISION_TOOL: ToolDefinition = {
   },
 };
 
+const ALREADY_FIXED_CHECK_TOOL: ToolDefinition = {
+  name: 'already_fixed_check',
+  description: '判断 finding 描述的问题在代码中是否已经被修复',
+  input_schema: {
+    type: 'object',
+    properties: {
+      alreadyFixed: { type: 'boolean' },
+      reason: { type: 'string' },
+      evidence: { type: 'string' },
+    },
+    required: ['alreadyFixed', 'reason'],
+    additionalProperties: false,
+  },
+};
+
 const FAST_DECISION_TOOL: ToolDefinition = {
   name: 'fast_decision',
   description:
@@ -183,7 +198,7 @@ export class CognitiveEngine {
     const toolCall = await this.options.llmClient.completeDecision(
       [FAST_DECISION_TOOL],
       prompt,
-      '你是谨慎的代码维护助手，必须从 fast_decision 工具输出决策'
+      this.promptLoader.load('cognitive-fast-system')
     );
     console.log(`[CognitiveEngine] decideFast tool=${toolCall.name}`);
     logMemorySnapshot('CognitiveEngine.decideFast LLM 返回后');
@@ -196,6 +211,23 @@ export class CognitiveEngine {
     logMemorySnapshot('CognitiveEngine.decideStandard inquiry 后');
     const enrichedContext = await this.enrichContext(context, inquiry);
     logMemorySnapshot('CognitiveEngine.decideStandard enrichContext 后');
+
+    // 显式预检：issue 是否已经被修复，避免对已修复问题生成无效修复方案
+    const alreadyFixed = await this.checkAlreadyFixed(enrichedContext);
+    if (alreadyFixed.alreadyFixed) {
+      console.log(`[CognitiveEngine] 检测到问题已修复: ${enrichedContext.finding.file}:${enrichedContext.finding.line}`);
+      return {
+        action: 'ignore',
+        reason: alreadyFixed.reason,
+        alreadyFixed: true,
+        replyBody: alreadyFixed.evidence || alreadyFixed.reason,
+        analysis: alreadyFixed.reason,
+        consideredOptions: [],
+        reasoning: '当前代码已满足 Reviewer 的要求，无需修改',
+        confidence: 'high',
+      };
+    }
+
     const options = await this.generateOptions(enrichedContext);
     logMemorySnapshot('CognitiveEngine.decideStandard generateOptions 后');
     const decision = await this.finalDecision(enrichedContext, options);
@@ -235,7 +267,7 @@ export class CognitiveEngine {
     const toolCall = await this.options.llmClient.completeDecision(
       [INQUIRY_DECISION_TOOL],
       prompt,
-      '你是上下文决策助手，必须从 inquiry_decision 工具输出决策'
+      this.promptLoader.load('cognitive-inquiry-system')
     );
     console.log(`[CognitiveEngine] runInquiry tool=${toolCall.name}`);
     logMemorySnapshot('CognitiveEngine.runInquiry LLM 返回后');
@@ -341,6 +373,47 @@ export class CognitiveEngine {
     }
   }
 
+  /**
+   * 显式检查 finding 描述的问题是否已经在当前代码中被修复
+   */
+  private async checkAlreadyFixed(context: CognitiveContext): Promise<{
+    alreadyFixed: boolean;
+    reason: string;
+    evidence?: string;
+  }> {
+    const prompt = this.promptLoader.load('cognitive-already-fixed-task', {
+      findingFile: context.finding.file,
+      findingLine: String(context.finding.line),
+      findingMessage: context.finding.message,
+      findingSuggestion: context.finding.suggestion ?? '',
+      fileContent: context.fileContent,
+      fileOverview: this.formatFileOverview(context.fileOverview),
+      extraFileContexts: this.formatExtraFileContexts(context.extraFileContexts),
+    });
+
+    try {
+      const toolCall = await this.options.llmClient.completeDecision(
+        [ALREADY_FIXED_CHECK_TOOL],
+        prompt,
+        this.promptLoader.load('cognitive-already-fixed-system')
+      );
+      const input = toolCall.input as {
+        alreadyFixed?: boolean;
+        reason?: string;
+        evidence?: string;
+      };
+      return {
+        alreadyFixed: input.alreadyFixed === true,
+        reason: input.reason ?? '未说明理由',
+        evidence: input.evidence,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CognitiveEngine] already_fixed_check 调用失败: ${message}`);
+      return { alreadyFixed: false, reason: '无法判断问题是否已修复' };
+    }
+  }
+
   private async generateOptions(context: CognitiveContext): Promise<OptionItem[]> {
     const overviewText = this.formatFileOverview(context.fileOverview);
     const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
@@ -364,7 +437,7 @@ export class CognitiveEngine {
     const toolCall = await this.options.llmClient.completeDecision(
       [OPTIONS_DECISION_TOOL],
       prompt,
-      '你是代码方案设计助手，必须从 options_decision 工具输出决策'
+      this.promptLoader.load('cognitive-options-system')
     );
     console.log(`[CognitiveEngine] generateOptions tool=${toolCall.name}`);
     logMemorySnapshot('CognitiveEngine.generateOptions LLM 返回后');
@@ -403,7 +476,7 @@ export class CognitiveEngine {
     const toolCall = await this.options.llmClient.completeDecision(
       [FINAL_DECISION_TOOL],
       prompt,
-      '你是代码维护决策助手，必须从 final_decision 工具输出决策'
+      this.promptLoader.load('cognitive-final-system')
     );
     console.log(`[CognitiveEngine] finalDecision tool=${toolCall.name}`);
     logMemorySnapshot('CognitiveEngine.finalDecision LLM 返回后');
@@ -468,6 +541,20 @@ export class CognitiveEngine {
       };
 
       const base = this.normalizeBaseDecision(parsed, context);
+      // 如果模型明确标记问题已修复，强制按 ignore 处理，避免对已修复代码发起无效修复
+      if (parsed.alreadyFixed === true && base.action === 'fix') {
+        console.log(`[CognitiveEngine] 模型返回 alreadyFixed=true 但 action=fix，已归一化为 ignore: ${context.finding.file}:${context.finding.line}`);
+        return {
+          action: 'ignore',
+          reason: base.reason,
+          alreadyFixed: true,
+          replyBody: parsed.replyBody || base.replyBody || '当前代码已满足 Reviewer 的要求',
+          analysis: parsed.analysis ?? '问题已修复',
+          consideredOptions: Array.isArray(parsed.consideredOptions) ? parsed.consideredOptions : [],
+          reasoning: parsed.reasoning ?? base.reason,
+          confidence: this.normalizeConfidence(parsed.confidence),
+        };
+      }
       return {
         ...base,
         analysis: parsed.analysis ?? '未提供分析',
