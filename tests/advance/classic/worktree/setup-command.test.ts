@@ -14,6 +14,6 @@ describe('WorktreeManager.runSetupCommand', () => {
 
     const result = await manager.runSetupCommand('npm install', 'packages/foo');
     expect(result.success).toBe(true);
-    expect(runner).toHaveBeenCalledWith('npm install', expect.stringContaining('packages/foo'));
+    expect(runner).toHaveBeenCalledWith('npm install', expect.stringMatching(/packages[\\/]foo/));
   });
 });
