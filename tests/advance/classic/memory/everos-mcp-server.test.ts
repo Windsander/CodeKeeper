@@ -7,8 +7,15 @@ import {
   buildReviewMemoryMessages,
   formatFindingCaseContent,
 } from '../../../../src/advance/classic/memory/everos-mcp-server.js';
-import type { MemoryContext, MemoryReviewComment } from '../../../../src/advance/classic/memory/types.js';
-import { everosMemoryAddMessages, everosMemoryFlush } from '../../../../src/advance/classic/memory/everos-api.js';
+import type {
+  MemoryContext,
+  MemoryReviewComment,
+} from '../../../../src/advance/classic/memory/types.js';
+import {
+  everosMemoryAdd,
+  everosMemoryAddMessages,
+  everosMemoryFlush,
+} from '../../../../src/advance/classic/memory/everos-api.js';
 import type { IMemoryWriteQueue } from '../../../../src/advance/classic/memory/memory-write-queue.js';
 
 vi.mock('../../../../src/advance/classic/memory/everos-api.js', () => ({
@@ -49,7 +56,9 @@ describe('EverOSMcpServer', () => {
 });
 
 describe('EverOSMcpServer 失败入队', () => {
-  async function connect(server: EverOSMcpServer): Promise<{ client: Client; transport: SSEClientTransport; url: string }> {
+  async function connect(
+    server: EverOSMcpServer
+  ): Promise<{ client: Client; transport: SSEClientTransport; url: string }> {
     const url = await server.start();
     const client = new Client({ name: 'test', version: '0.1.0' });
     const transport = new SSEClientTransport(new URL('/sse', url));
@@ -85,7 +94,7 @@ describe('EverOSMcpServer 失败入队', () => {
     });
 
     // 后台写入是异步的，等待一小段时间让 catch 入队
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(queue.enqueue).toHaveBeenCalledTimes(1);
     expect(queue.enqueue).toHaveBeenCalledWith(ctx, 'add_messages', expect.any(Array));
@@ -121,7 +130,7 @@ describe('EverOSMcpServer 失败入队', () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(queue.enqueue).toHaveBeenCalledTimes(1);
     expect(queue.enqueue).toHaveBeenCalledWith(ctx, 'flush');
@@ -152,7 +161,7 @@ describe('buildReviewMemoryMessages', () => {
     expect(result.messages[1].senderId).toBe(ctx.agentId);
     expect(result.messages[1].role).toBe('assistant');
 
-    const ownerIds = result.owners.map((o) => o.ownerId);
+    const ownerIds = result.owners.map(o => o.ownerId);
     expect(ownerIds).toContain(ctx.agentId);
     expect(ownerIds).toContain('alice');
     expect(ownerIds).not.toContain('codekeeper-system');
@@ -175,7 +184,7 @@ describe('buildReviewMemoryMessages', () => {
     expect(result.messages[0].role).toBe('user');
     expect(result.messages[0].content).toContain('发起自动评审');
 
-    const ownerIds = result.owners.map((o) => o.ownerId);
+    const ownerIds = result.owners.map(o => o.ownerId);
     expect(ownerIds).toContain(ctx.agentId);
     expect(ownerIds).not.toContain('codekeeper-system');
   });
@@ -202,7 +211,7 @@ describe('buildReviewMemoryMessages', () => {
     expect(result.messages[0].role).toBe('user');
     expect(result.messages[1].role).toBe('assistant');
 
-    const ownerIds = result.owners.map((o) => o.ownerId);
+    const ownerIds = result.owners.map(o => o.ownerId);
     expect(ownerIds).toContain('bob');
     expect(ownerIds).not.toContain('codekeeper-system');
   });
@@ -228,7 +237,7 @@ describe('buildReviewMemoryMessages', () => {
     expect(result.messages[0].senderId).toBe(ctx.agentId);
     expect(result.messages[0].role).toBe('assistant');
 
-    const userOwners = result.owners.filter((o) => o.ownerType === 'user');
+    const userOwners = result.owners.filter(o => o.ownerType === 'user');
     expect(userOwners).toHaveLength(0);
   });
 });
@@ -255,7 +264,9 @@ describe('formatFindingCaseContent', () => {
 });
 
 describe('EverOSMcpServer finding case tools', () => {
-  async function connect(server: EverOSMcpServer): Promise<{ client: Client; transport: SSEClientTransport; url: string }> {
+  async function connect(
+    server: EverOSMcpServer
+  ): Promise<{ client: Client; transport: SSEClientTransport; url: string }> {
     const url = await server.start();
     const client = new Client({ name: 'test', version: '0.1.0' });
     const transport = new SSEClientTransport(new URL('/sse', url));
@@ -264,6 +275,7 @@ describe('EverOSMcpServer finding case tools', () => {
   }
 
   beforeEach(() => {
+    vi.mocked(everosMemoryAdd).mockReset();
     vi.mocked(everosMemoryAddMessages).mockReset();
     vi.mocked(everosMemoryFlush).mockReset();
   });
@@ -296,7 +308,7 @@ describe('EverOSMcpServer finding case tools', () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(everosMemoryAddMessages).toHaveBeenCalledTimes(1);
     const call = vi.mocked(everosMemoryAddMessages).mock.calls[0];
@@ -318,8 +330,112 @@ describe('EverOSMcpServer finding case tools', () => {
     await server.stop();
   });
 
+  it('flush_session 调用 everosMemoryFlush', async () => {
+    vi.mocked(everosMemoryFlush).mockResolvedValue(undefined);
+
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999' });
+    const { client, transport } = await connect(server);
+
+    const ctx = makeCtx({ sessionId: 'sess-flush' });
+    await client.callTool({
+      name: 'flush_session',
+      arguments: { context: ctx },
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(everosMemoryFlush).toHaveBeenCalledTimes(1);
+    expect(everosMemoryFlush).toHaveBeenCalledWith(
+      'http://127.0.0.1:9999',
+      expect.objectContaining({
+        appId: ctx.appId,
+        projectId: ctx.projectId,
+        sessionId: ctx.sessionId,
+      })
+    );
+
+    await transport.close();
+    await server.stop();
+  });
+
+  it('Maintainer 反思写入完成后才返回，并立即 flush 当前 session', async () => {
+    vi.mocked(everosMemoryAdd).mockResolvedValue(undefined);
+    vi.mocked(everosMemoryFlush).mockResolvedValue(undefined);
+
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999' });
+    const { client, transport } = await connect(server);
+    const ctx = makeCtx({
+      agentId: 'maintainer',
+      agentDisplayName: 'Maintainer',
+      sessionId: 'maintainer-proj-1-mr-1',
+    });
+
+    await client.callTool({
+      name: 'record_reflection',
+      arguments: {
+        context: ctx,
+        caseKey: 'case:proj-1:mr-1:src_a_ts:10:rule-any',
+        reflection: '修复后应保留默认路径覆盖',
+        outcome: 'success',
+      },
+    });
+
+    expect(everosMemoryAdd).toHaveBeenCalledTimes(1);
+    expect(everosMemoryAdd).toHaveBeenCalledWith(
+      'http://127.0.0.1:9999',
+      expect.objectContaining({
+        appId: ctx.appId,
+        projectId: ctx.projectId,
+        sessionId: ctx.sessionId,
+        senderId: 'maintainer',
+        role: 'assistant',
+        content: expect.stringContaining('[CASE:case:proj-1:mr-1:src_a_ts:10:rule-any]'),
+      })
+    );
+    expect(everosMemoryFlush).toHaveBeenCalledTimes(1);
+    expect(everosMemoryFlush).toHaveBeenCalledWith(
+      'http://127.0.0.1:9999',
+      expect.objectContaining({
+        appId: ctx.appId,
+        projectId: ctx.projectId,
+        sessionId: ctx.sessionId,
+      })
+    );
+
+    await transport.close();
+    await server.stop();
+  });
+
+  it('flush_session 失败时入队 flush 任务', async () => {
+    vi.mocked(everosMemoryFlush).mockRejectedValue(new Error('flush boom'));
+
+    const queue: IMemoryWriteQueue = {
+      enqueue: vi.fn(),
+      listReady: vi.fn().mockReturnValue([]),
+      remove: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999', queue });
+    const { client, transport } = await connect(server);
+
+    const ctx = makeCtx({ sessionId: 'sess-flush-fail' });
+    await client.callTool({
+      name: 'flush_session',
+      arguments: { context: ctx },
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
+    expect(queue.enqueue).toHaveBeenCalledWith(ctx, 'flush');
+
+    await transport.close();
+    await server.stop();
+  });
+
   it('recall_finding_case 按 reviewer-case owner 搜索', async () => {
-    const { everosMemorySearch } = await import('../../../../src/advance/classic/memory/everos-api.js');
+    const { everosMemorySearch } =
+      await import('../../../../src/advance/classic/memory/everos-api.js');
     vi.mocked(everosMemorySearch).mockResolvedValue({
       items: [
         {
@@ -352,7 +468,9 @@ describe('EverOSMcpServer finding case tools', () => {
         query: 'case:proj-1:mr-1:src_a_ts:10:rule-any',
       })
     );
-    expect(result).toEqual({ content: [{ type: 'text', text: expect.stringContaining('状态: open') }] });
+    expect(result).toEqual({
+      content: [{ type: 'text', text: expect.stringContaining('状态: open') }],
+    });
 
     await transport.close();
     await server.stop();

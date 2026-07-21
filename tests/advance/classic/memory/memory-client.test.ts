@@ -139,6 +139,26 @@ describe('MemoryClient 记录方法', () => {
     });
   });
 
+  it('flush 调用 flush_session tool', async () => {
+    await client.flush();
+    expect(callToolSpy).toHaveBeenCalledWith({
+      name: 'flush_session',
+      arguments: {
+        context: mockContext,
+      },
+    });
+  });
+
+  it('disconnect 前会先调用 flush_session', async () => {
+    await client.disconnect();
+    expect(callToolSpy).toHaveBeenCalledWith({
+      name: 'flush_session',
+      arguments: {
+        context: mockContext,
+      },
+    });
+  });
+
   it('tool 调用失败时抛出异常', async () => {
     vi.spyOn(Client.prototype, 'callTool').mockRejectedValue(new Error('MCP 断开'));
     const testClient = new MemoryClient({ mcpUrl: 'http://127.0.0.1:9999', context: mockContext });

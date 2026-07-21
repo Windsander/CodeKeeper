@@ -367,7 +367,11 @@ export class MaintainerBrain {
     try {
       const resolved = await manager.resolveFilePath(finding.file);
       if (!resolved) {
-        return { alreadyFixed: false, reason: `当前分支无法定位文件 ${finding.file}` };
+        return {
+          alreadyFixed: true,
+          reason: `当前分支已不存在文件 ${finding.file}，旧 finding 不再适用`,
+          evidence: `当前分支无法定位 ${finding.file}，该文件已被删除或移动`,
+        };
       }
       const fileContent = manager.readFile(resolved);
       const fileOverview = await this.safeGetFileOverview(resolved);

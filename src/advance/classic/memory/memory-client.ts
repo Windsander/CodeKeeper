@@ -1,7 +1,14 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { logger } from '../../../core/logger.js';
-import type { IMemoryClient, MemoryContext, MemoryFinding, MemoryFindingCase, MemoryReviewComment, ProjectKnowledgeItem } from './types.js';
+import type {
+  IMemoryClient,
+  MemoryContext,
+  MemoryFinding,
+  MemoryFindingCase,
+  MemoryReviewComment,
+  ProjectKnowledgeItem,
+} from './types.js';
 import { sanitizeEverOSId } from './types.js';
 
 export interface MemoryClientOptions {
@@ -39,8 +46,22 @@ export class MemoryClient implements IMemoryClient {
   }
 
   async disconnect(): Promise<void> {
+    // 断开前先 flush，确保本次 session 中所有 add-only 的写入被 EverOS 提取。
+    // 失败也不影响关闭 transport，后续由 MemoryWriteRetryService 重试。
+    try {
+      await this.flush();
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: this.context.sessionId },
+        'MemoryClient disconnect 前 flush 失败，将继续关闭连接'
+      );
+    }
     await this.transport?.close();
     this.transport = null;
+  }
+
+  async flush(): Promise<void> {
+    await this.callTool('flush_session', { context: this.context });
   }
 
   async recordReview(input: {
@@ -98,15 +119,21 @@ export class MemoryClient implements IMemoryClient {
   }
 
   async recallForReview(query: string): Promise<string[]> {
-    return this.parseRecallResult(await this.callTool('recall_for_review', { context: this.context, query }));
+    return this.parseRecallResult(
+      await this.callTool('recall_for_review', { context: this.context, query })
+    );
   }
 
   async recallForMaintenance(query: string): Promise<string[]> {
-    return this.parseRecallResult(await this.callTool('recall_for_maintenance', { context: this.context, query }));
+    return this.parseRecallResult(
+      await this.callTool('recall_for_maintenance', { context: this.context, query })
+    );
   }
 
   async recallProjectKnowledge(query: string): Promise<string[]> {
-    return this.parseRecallResult(await this.callTool('recall_project_knowledge', { context: this.context, query }));
+    return this.parseRecallResult(
+      await this.callTool('recall_project_knowledge', { context: this.context, query })
+    );
   }
 
   async recallUserPreferences(userId: string, query: string): Promise<string[]> {
@@ -121,7 +148,10 @@ export class MemoryClient implements IMemoryClient {
   ): Promise<{ content?: Array<{ type: string; text?: string }> } | undefined> {
     try {
       const result = await this.client.callTool({ name, arguments: args });
-      const cast = result as { content?: Array<{ type: string; text?: string }>; isError?: boolean };
+      const cast = result as {
+        content?: Array<{ type: string; text?: string }>;
+        isError?: boolean;
+      };
       if (cast.isError) {
         const message = cast.content?.[0]?.text ?? 'MCP tool 返回错误';
         logger.error({ tool: name, result }, `MemoryClient 调用 ${name} 失败`);
@@ -135,13 +165,17 @@ export class MemoryClient implements IMemoryClient {
     }
   }
 
-  private parseRecallResult(result: { content?: Array<{ type: string; text?: string }> } | undefined): string[] {
+  private parseRecallResult(
+    result: { content?: Array<{ type: string; text?: string }> } | undefined
+  ): string[] {
     const text = result?.content?.[0]?.text ?? '';
     if (!text) return [];
     try {
       const parsed = JSON.parse(text) as { results?: string[] };
       const items = Array.isArray(parsed.results) ? parsed.results : [];
-      console.log(`[MemoryClient] 召回结果解析 text 长度=${text.length}, 条目数=${items.length}, 总字符=${items.reduce((sum, m) => sum + m.length, 0)}`);
+      console.log(
+        `[MemoryClient] 召回结果解析 text 长度=${text.length}, 条目数=${items.length}, 总字符=${items.reduce((sum, m) => sum + m.length, 0)}`
+      );
       return items;
     } catch {
       return [];

@@ -10,7 +10,12 @@ import http, { type Server as HttpServer } from 'node:http';
 import { URL } from 'node:url';
 import { logger } from '../../../core/logger.js';
 import { SecretSanitizer } from './secret-sanitizer.js';
-import type { MemoryContext, MemoryFindingCase, MemoryReviewComment, ProjectKnowledgeItem } from './types.js';
+import type {
+  MemoryContext,
+  MemoryFindingCase,
+  MemoryReviewComment,
+  ProjectKnowledgeItem,
+} from './types.js';
 import { sanitizeEverOSId } from './types.js';
 import {
   everosMemoryAdd,
@@ -52,7 +57,7 @@ export interface BuildReviewMemoryResult {
 export function formatFindingsForMemory(findings: unknown[]): string {
   const items = findings
     .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
-    .map((f) => {
+    .map(f => {
       const severity = String(f.severity ?? 'LOW');
       const file = String(f.file ?? 'unknown');
       const line = Number(f.line ?? 0);
@@ -223,7 +228,7 @@ export class EverOSMcpServer {
    * 每个 SSE 连接创建独立的 MCP Server 实例，避免 SDK 的 "Already connected to a transport" 限制。
    */
   async start(): Promise<string> {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       const transportMap = new Map<string, SSEServerTransport>();
       const serverMap = new Map<string, Server>();
 
@@ -287,7 +292,7 @@ export class EverOSMcpServer {
    * 停止服务
    */
   async stop(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       this.httpServer?.close(() => resolve());
     });
   }
@@ -431,7 +436,10 @@ export class EverOSMcpServer {
             type: 'object',
             properties: {
               context: { type: 'object' },
-              key: { type: 'string', description: 'case key，例如 case:proj:mr-1:file:line:ruleId' },
+              key: {
+                type: 'string',
+                description: 'case key，例如 case:proj:mr-1:file:line:ruleId',
+              },
             },
             required: ['context', 'key'],
           },
@@ -485,20 +493,35 @@ export class EverOSMcpServer {
             required: ['context', 'sessionId'],
           },
         },
+        {
+          name: 'flush_session',
+          description: '强制刷新当前 session 的记忆缓冲区，使 add-only 的写入立即进入提取流水线',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              context: { type: 'object' },
+            },
+            required: ['context'],
+          },
+        },
       ],
     }));
 
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async request => {
       const { name, arguments: args } = request.params;
       logger.info({ tool: name }, '调用 MCP tool');
 
       try {
         if (name === 'record_review') {
-          await this.handleRecordReview(args as { context: MemoryContext } & Record<string, unknown>);
+          await this.handleRecordReview(
+            args as { context: MemoryContext } & Record<string, unknown>
+          );
           return this.okResult();
         }
         if (name === 'record_finding_cases') {
-          await this.handleRecordFindingCases(args as { context: MemoryContext } & Record<string, unknown>);
+          await this.handleRecordFindingCases(
+            args as { context: MemoryContext } & Record<string, unknown>
+          );
           return this.okResult();
         }
         if (name === 'record_project_knowledge') {
@@ -509,15 +532,21 @@ export class EverOSMcpServer {
           return this.okResult();
         }
         if (name === 'record_fix_attempt') {
-          await this.handleRecordFixAttempt(args as { context: MemoryContext } & Record<string, unknown>);
+          await this.handleRecordFixAttempt(
+            args as { context: MemoryContext } & Record<string, unknown>
+          );
           return this.okResult();
         }
         if (name === 'record_interaction') {
-          await this.handleRecordInteraction(args as { context: MemoryContext } & Record<string, unknown>);
+          await this.handleRecordInteraction(
+            args as { context: MemoryContext } & Record<string, unknown>
+          );
           return this.okResult();
         }
         if (name === 'record_reflection') {
-          await this.handleRecordReflection(args as { context: MemoryContext } & Record<string, unknown>);
+          await this.handleRecordReflection(
+            args as { context: MemoryContext } & Record<string, unknown>
+          );
           return this.okResult();
         }
         if (name === 'recall_for_review') {
@@ -537,7 +566,9 @@ export class EverOSMcpServer {
         }
         if (name === 'recall_project_knowledge') {
           return this.recallResult(
-            await this.handleRecallProjectKnowledge(args as { context: MemoryContext; query: string })
+            await this.handleRecallProjectKnowledge(
+              args as { context: MemoryContext; query: string }
+            )
           );
         }
         if (name === 'recall_user_preferences') {
@@ -548,7 +579,13 @@ export class EverOSMcpServer {
           );
         }
         if (name === 'memory_delete') {
-          await this.handleMemoryDelete(args as { context: MemoryContext } & Record<string, unknown>);
+          await this.handleMemoryDelete(
+            args as { context: MemoryContext } & Record<string, unknown>
+          );
+          return this.okResult();
+        }
+        if (name === 'flush_session') {
+          await this.handleFlushSession((args as { context: MemoryContext }).context);
           return this.okResult();
         }
         throw new Error(`未知 tool: ${name}`);
@@ -568,7 +605,7 @@ export class EverOSMcpServer {
     const maxResults = 5;
     const results = items
       .slice(0, maxResults)
-      .map((item) => (item.source ? `${item.source}\n${item.content}` : item.content));
+      .map(item => (item.source ? `${item.source}\n${item.content}` : item.content));
     return {
       content: [{ type: 'text', text: JSON.stringify({ results }) } as TextContent],
     };
@@ -578,7 +615,9 @@ export class EverOSMcpServer {
     return { content: [{ type: 'text', text: `error: ${message}` } as TextContent], isError: true };
   }
 
-  private async handleRecordReview(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+  private async handleRecordReview(
+    args: { context: MemoryContext } & Record<string, unknown>
+  ): Promise<void> {
     const ctx = args.context;
     const summary = this.sanitizer.sanitize(String(args.summary ?? ''));
     const findings = Array.isArray(args.findings) ? args.findings : [];
@@ -600,13 +639,15 @@ export class EverOSMcpServer {
 
     this.onMemoryOwners?.(ctx.projectId, owners);
 
-    this.persistReview(ctx, messages).catch((err) => {
+    this.persistReview(ctx, messages).catch(err => {
       logger.error({ err, sessionId: ctx.sessionId }, 'record_review 后台记忆写入失败');
       this.queue?.enqueue(ctx, 'add_messages', messages);
     });
   }
 
-  private async handleRecordFindingCases(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+  private async handleRecordFindingCases(
+    args: { context: MemoryContext } & Record<string, unknown>
+  ): Promise<void> {
     const ctx = args.context;
     const cases = (Array.isArray(args.cases) ? args.cases : []) as MemoryFindingCase[];
     if (cases.length === 0) return;
@@ -617,21 +658,24 @@ export class EverOSMcpServer {
       agentDisplayName: 'Reviewer Finding Case',
       sessionId: `finding-cases-${ctx.projectId}`,
     };
-    const messages: EverOSAddMessage[] = cases.map((c) => ({
+    const messages: EverOSAddMessage[] = cases.map(c => ({
       senderId: 'reviewer-case',
       role: 'assistant',
       content: formatFindingCaseContent(c),
     }));
 
-    this.persistAndFlush(caseCtx, messages).catch((err) => {
-      logger.error({ err, sessionId: caseCtx.sessionId }, 'record_finding_cases 后台记忆写入失败，已入队重试');
+    this.persistAndFlush(caseCtx, messages).catch(err => {
+      logger.error(
+        { err, sessionId: caseCtx.sessionId },
+        'record_finding_cases 后台记忆写入失败，已入队重试'
+      );
       this.queue?.enqueue(caseCtx, 'add_messages', messages);
     });
   }
 
   private async persistReview(ctx: MemoryContext, messages: EverOSAddMessage[]): Promise<void> {
     const start = Date.now();
-    const senderSet = new Set(messages.map((m) => `${m.role}:${m.senderId}`));
+    const senderSet = new Set(messages.map(m => `${m.role}:${m.senderId}`));
     logger.info(
       { sessionId: ctx.sessionId, messageCount: messages.length, senders: [...senderSet] },
       'record_review 批量写入 EverOS'
@@ -640,10 +684,16 @@ export class EverOSMcpServer {
     try {
       await this.flushSession(ctx);
     } catch (flushErr) {
-      logger.error({ err: flushErr, sessionId: ctx.sessionId }, 'record_review flush 失败，已入队重试');
+      logger.error(
+        { err: flushErr, sessionId: ctx.sessionId },
+        'record_review flush 失败，已入队重试'
+      );
       this.queue?.enqueue(ctx, 'flush');
     }
-    logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, 'record_review 后台记忆写入完成');
+    logger.info(
+      { sessionId: ctx.sessionId, durationMs: Date.now() - start },
+      'record_review 后台记忆写入完成'
+    );
   }
 
   /**
@@ -653,7 +703,10 @@ export class EverOSMcpServer {
     const start = Date.now();
     await everosMemoryAddMessages(this.everosUrl, ctx, messages);
     await this.flushSession(ctx);
-    logger.info({ sessionId: ctx.sessionId, messageCount: messages.length, durationMs: Date.now() - start }, 'finding case 批量写入并 flush 完成');
+    logger.info(
+      { sessionId: ctx.sessionId, messageCount: messages.length, durationMs: Date.now() - start },
+      'finding case 批量写入并 flush 完成'
+    );
   }
 
   private async flushSession(ctx: MemoryContext): Promise<void> {
@@ -664,31 +717,40 @@ export class EverOSMcpServer {
     });
   }
 
-  private async handleRecordProjectKnowledge(ctx: MemoryContext, items: ProjectKnowledgeItem[]): Promise<void> {
+  private async handleRecordProjectKnowledge(
+    ctx: MemoryContext,
+    items: ProjectKnowledgeItem[]
+  ): Promise<void> {
     if (items.length === 0) return;
-    const sanitized = items.map((item) => ({
+    const sanitized = items.map(item => ({
       ...item,
       content: this.sanitizer.sanitize(item.content),
     }));
     const content = `整理项目知识：\n${JSON.stringify(sanitized, null, 2)}`;
 
-    // 项目知识写入为 best-effort，后台执行避免阻塞 MCP
-    this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content).catch((err) => {
+    try {
+      await this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content);
+    } catch (err) {
       logger.error({ err, sessionId: ctx.sessionId }, 'record_project_knowledge 后台记忆写入失败');
-    });
+    }
   }
 
-  private async handleRecordFixAttempt(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+  private async handleRecordFixAttempt(
+    args: { context: MemoryContext } & Record<string, unknown>
+  ): Promise<void> {
     const ctx = args.context;
     const content = `Maintainer 在 MR !${String(args.mrIid ?? 0)} 尝试修复 ${String(args.file ?? '')}:${String(args.line ?? 0)}，结果=${args.success === true ? '成功' : '失败'}，理由=${String(args.reason ?? '')}`;
 
-    // 修复记录为 best-effort，后台执行避免阻塞 MCP
-    this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content).catch((err) => {
+    try {
+      await this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content);
+    } catch (err) {
       logger.error({ err, sessionId: ctx.sessionId }, 'record_fix_attempt 后台记忆写入失败');
-    });
+    }
   }
 
-  private async handleRecordInteraction(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+  private async handleRecordInteraction(
+    args: { context: MemoryContext } & Record<string, unknown>
+  ): Promise<void> {
     const ctx = args.context;
     const discussionId = String(args.discussionId ?? '');
     const userId = sanitizeEverOSId(String(args.userId ?? ''));
@@ -709,33 +771,47 @@ export class EverOSMcpServer {
       },
     ];
 
-    // 交互记录为 best-effort，后台执行避免阻塞 MCP
-    this.persistMessages(interactionCtx, messages).catch((err) => {
+    try {
+      await this.persistMessages(interactionCtx, messages);
+    } catch (err) {
       logger.error({ err, sessionId }, 'record_interaction 后台记忆写入失败，已入队重试');
-      this.queue?.enqueue(interactionCtx, 'add_messages', messages);
-    });
+    }
   }
 
-  private async handleRecordReflection(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+  private async handleRecordReflection(
+    args: { context: MemoryContext } & Record<string, unknown>
+  ): Promise<void> {
     const ctx = args.context;
     const caseKey = String(args.caseKey ?? '');
     const reflection = String(args.reflection ?? '');
     const outcome = String(args.outcome ?? '');
     const content = `[CASE:${caseKey}]\n反思: ${reflection}\n结果: ${outcome}\n时间: ${new Date().toISOString()}`;
 
-    // 反思记录为 best-effort，后台执行避免阻塞 MCP
-    this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content).catch((err) => {
+    try {
+      await this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content);
+    } catch (err) {
       logger.error({ err, sessionId: ctx.sessionId }, 'record_reflection 后台记忆写入失败');
-    });
+    }
   }
 
-  private async persistMessages(
-    ctx: MemoryContext,
-    messages: EverOSAddMessage[]
-  ): Promise<void> {
+  private async persistMessages(ctx: MemoryContext, messages: EverOSAddMessage[]): Promise<void> {
     const start = Date.now();
-    await everosMemoryAddMessages(this.everosUrl, ctx, messages);
-    logger.info({ sessionId: ctx.sessionId, messageCount: messages.length, durationMs: Date.now() - start }, '多条记忆后台写入完成');
+    try {
+      await everosMemoryAddMessages(this.everosUrl, ctx, messages);
+    } catch (err) {
+      this.queue?.enqueue(ctx, 'add_messages', messages);
+      throw err;
+    }
+    try {
+      await this.flushSession(ctx);
+    } catch (err) {
+      this.queue?.enqueue(ctx, 'flush');
+      throw err;
+    }
+    logger.info(
+      { sessionId: ctx.sessionId, messageCount: messages.length, durationMs: Date.now() - start },
+      '多条记忆后台写入完成'
+    );
   }
 
   private async persistSingleMessage(
@@ -759,15 +835,27 @@ export class EverOSMcpServer {
         role,
         content,
       });
-      logger.info({ sessionId: ctx.sessionId, durationMs: Date.now() - start }, '单条记忆后台写入完成');
     } catch (err) {
       logger.error({ err, sessionId: ctx.sessionId }, '单条记忆后台写入失败，已入队重试');
       this.queue?.enqueue(ctx, 'add_messages', [message]);
       throw err;
     }
+    try {
+      await this.flushSession(ctx);
+    } catch (err) {
+      this.queue?.enqueue(ctx, 'flush');
+      throw err;
+    }
+    logger.info(
+      { sessionId: ctx.sessionId, durationMs: Date.now() - start },
+      '单条记忆后台写入完成'
+    );
   }
 
-  private async handleRecallForReview(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
+  private async handleRecallForReview(args: {
+    context: MemoryContext;
+    query: string;
+  }): Promise<EverOSSearchItem[]> {
     const ctx = args.context;
     const ownerResult = await everosMemorySearch(this.everosUrl, {
       appId: ctx.appId,
@@ -780,7 +868,10 @@ export class EverOSMcpServer {
     return ownerResult.items;
   }
 
-  private async handleRecallFindingCase(args: { context: MemoryContext; key: string }): Promise<EverOSSearchItem[]> {
+  private async handleRecallFindingCase(args: {
+    context: MemoryContext;
+    key: string;
+  }): Promise<EverOSSearchItem[]> {
     const ctx = args.context;
     const result = await everosMemorySearch(this.everosUrl, {
       appId: ctx.appId,
@@ -793,7 +884,10 @@ export class EverOSMcpServer {
     return result.items;
   }
 
-  private async handleRecallForMaintenance(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
+  private async handleRecallForMaintenance(args: {
+    context: MemoryContext;
+    query: string;
+  }): Promise<EverOSSearchItem[]> {
     const ctx = args.context;
     const result = await everosMemorySearch(this.everosUrl, {
       appId: ctx.appId,
@@ -805,7 +899,10 @@ export class EverOSMcpServer {
     return result.items;
   }
 
-  private async handleRecallProjectKnowledge(args: { context: MemoryContext; query: string }): Promise<EverOSSearchItem[]> {
+  private async handleRecallProjectKnowledge(args: {
+    context: MemoryContext;
+    query: string;
+  }): Promise<EverOSSearchItem[]> {
     const ctx = args.context;
     const result = await everosMemorySearch(this.everosUrl, {
       appId: ctx.appId,
@@ -817,11 +914,27 @@ export class EverOSMcpServer {
     return result.items;
   }
 
-  private async handleMemoryDelete(args: { context: MemoryContext } & Record<string, unknown>): Promise<void> {
+  private async handleMemoryDelete(
+    args: { context: MemoryContext } & Record<string, unknown>
+  ): Promise<void> {
     const ctx = args.context;
     const sessionId = String(args.sessionId ?? '');
     logger.info({ appId: ctx.appId, projectId: ctx.projectId, sessionId }, '标记记忆删除');
     // EverOS 当前未暴露 memory 物理删除 API，tool 层仅记录 tombstone，后续由 Reflection/GC 处理
+  }
+
+  private async handleFlushSession(ctx: MemoryContext): Promise<void> {
+    logger.info(
+      { appId: ctx.appId, projectId: ctx.projectId, sessionId: ctx.sessionId },
+      'flush session'
+    );
+    try {
+      await this.flushSession(ctx);
+    } catch (err) {
+      logger.error({ err, sessionId: ctx.sessionId }, 'flush_session 失败，已入队重试');
+      this.queue?.enqueue(ctx, 'flush');
+      throw err;
+    }
   }
 
   private async handleRecallUserPreferences(args: {

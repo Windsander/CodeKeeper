@@ -1750,6 +1750,164 @@ describe('MaintainerRunner', () => {
     expect(state.maintainerThreadState?.['d-report']?.statisticalReport).toBe(true);
     expect(state.processedDiscussions?.['d-report']).toBeDefined();
   });
+
+  it('stale CI Review 中已删除文件不再进入读取失败或修复流程', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const deletedFile = 'docs/example/plans/2026-06-24-memory-telemetry-plan.md';
+    const discussion: Discussion = {
+      id: 'd-stale-deleted',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 1,
+          author: 'ci-bot',
+          body: `## 🤖 CI Review · Round 9 · commit a1b2c3d4
+### AI 分析
+#### 🟢 LOW
+- ${deletedFile}:1 | 计划文档已删除 | 无需处理`,
+          createdAt: '2026-07-08T00:00:00Z',
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      decide: vi.fn(),
+      recheckAlreadyFixed: vi.fn(),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn(),
+      postSummary: vi.fn(),
+    });
+    const provider = mockOf<GitLabProvider>({ getMRDiff: vi.fn().mockResolvedValue([]) });
+    const worktreeManager = mockOf<WorktreeManager>({
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockResolvedValue(null),
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
+    });
+    const state = mockOf<MrAgentState>({ interactiveThreads: {}, processedDiscussions: {} });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/project',
+      undefined,
+      'standard',
+      'ffffffff'
+    );
+
+    expect(brain.decide).not.toHaveBeenCalled();
+    expect(brain.recheckAlreadyFixed).not.toHaveBeenCalled();
+    expect(actor.applyDecision).not.toHaveBeenCalled();
+    expect(actor.postSummary).not.toHaveBeenCalled();
+    expect(
+      state.maintainerThreadState?.['d-stale-deleted']?.decisions[`${deletedFile}:1`]
+    ).toMatchObject({
+      action: 'ignore',
+      alreadyFixed: true,
+    });
+  });
+
+  it('stale CI Review 无人工评论时先复核当前文件，不复用历史失败或重新提问', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const discussion: Discussion = {
+      id: 'd-stale-recheck',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 1,
+          author: 'ci-bot',
+          body: `## 🤖 CI Review · Round 9 · commit a1b2c3d4
+### AI 分析
+#### 🟢 LOW
+- src/index.ts:2 | 旧 finding 已在后续提交中处理 | 无需修改
+- src/other.ts:4 | 旧 finding 已在后续提交中处理 | 无需修改`,
+          createdAt: '2026-07-08T00:00:00Z',
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      decide: vi.fn(),
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({
+        alreadyFixed: true,
+        reason: '当前完整文件中已不存在该问题',
+        evidence: '后续提交已满足原 finding',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn(),
+      postSummary: vi.fn(),
+    });
+    const provider = mockOf<GitLabProvider>({ getMRDiff: vi.fn().mockResolvedValue([]) });
+    const worktreeManager = mockOf<WorktreeManager>({
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockImplementation(async file => file),
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
+      readFileWindow: vi.fn().mockResolvedValue({
+        imports: '',
+        snippet: 'current implementation',
+        snippetStartLine: 1,
+        snippetEndLine: 5,
+        totalLines: 5,
+        truncated: false,
+        targetLine: 2,
+      }),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      processedDiscussions: {},
+      maintainerThreadState: {
+        'd-stale-recheck': {
+          decisions: {
+            'src/index.ts:2': {
+              action: 'fix',
+              reason: '旧失败',
+              failedAttempts: 3,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+          lastHumanNoteAt: 0,
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/project',
+      undefined,
+      'standard',
+      'ffffffff'
+    );
+
+    expect(brain.recheckAlreadyFixed).toHaveBeenCalledTimes(2);
+    expect(brain.decide).not.toHaveBeenCalled();
+    expect(actor.applyDecision).not.toHaveBeenCalled();
+    expect(actor.postSummary).not.toHaveBeenCalled();
+    expect(state.maintainerThreadState?.['d-stale-recheck']?.decisions).toMatchObject({
+      'src/index.ts:2': { action: 'ignore', alreadyFixed: true },
+      'src/other.ts:4': { action: 'ignore', alreadyFixed: true },
+    });
+  });
 });
 
 describe('classifyBatchFixItems', () => {

@@ -88,7 +88,9 @@ function shortHash(str: string): string {
     h1 = Math.imul(h1 ^ ch, 2654435761);
     h2 = Math.imul(h2 ^ ch, 1597334677);
   }
-  return ((h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0')).slice(0, 8);
+  return (
+    (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0')
+  ).slice(0, 8);
 }
 
 /**
@@ -179,4 +181,11 @@ export interface IMemoryClient {
   recallForMaintenance(query: string): Promise<string[]>;
   recallProjectKnowledge(query: string): Promise<string[]>;
   recallUserPreferences(userId: string, query: string): Promise<string[]>;
+
+  /**
+   * 强制刷新当前 session 的记忆缓冲区。
+   * 对 Maintainer/Archiver 这类只 add 不立即 flush 的写入尤为重要，
+   * 否则 assistant-only 消息会一直停在 EverOS buffer 里，无法进入图谱/统计。
+   */
+  flush(): Promise<void>;
 }

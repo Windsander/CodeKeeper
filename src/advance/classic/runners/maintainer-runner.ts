@@ -704,6 +704,29 @@ export class MaintainerRunner extends BaseRoleRunner {
       const hasNewHumanNote = lastHumanNoteAt > (threadState.lastHumanNoteAt ?? 0);
 
       const existing = threadState.decisions[key];
+      const staleRecheck = await this.recheckStaleFindingIfNeeded(
+        brain,
+        worktreeManager,
+        finding,
+        projectRootPath,
+        mr.sourceBranch,
+        staleFinding,
+        lastHumanNoteAt === 0
+      );
+      if (staleRecheck?.alreadyFixed) {
+        threadState.decisions[key] = {
+          action: 'ignore',
+          alreadyFixed: true,
+          reason: staleRecheck.reason,
+          replyBody: staleRecheck.evidence || staleRecheck.reason,
+          failedAttempts: 0,
+          decidedAt: Date.now(),
+        };
+        threadState.lastHumanNoteAt = lastHumanNoteAt;
+        console.log(`[MaintainerRunner] stale finding ${key} 已在当前代码中解决，静默收敛`);
+        recordProcessed();
+        return;
+      }
       const needsRetry =
         existing?.action === 'fix' &&
         !existing.fixSucceeded &&
@@ -838,6 +861,27 @@ export class MaintainerRunner extends BaseRoleRunner {
         existing?.action === 'fix' &&
         !existing.fixSucceeded &&
         existing.failedAttempts < MAX_FIX_RETRY_ATTEMPTS;
+      const staleRecheck = await this.recheckStaleFindingIfNeeded(
+        brain,
+        worktreeManager,
+        finding,
+        projectRootPath,
+        mr.sourceBranch,
+        staleFinding,
+        getLastHumanNoteAt(discussion) === 0
+      );
+      if (staleRecheck?.alreadyFixed) {
+        threadState.decisions[key] = {
+          action: 'ignore',
+          alreadyFixed: true,
+          reason: staleRecheck.reason,
+          replyBody: staleRecheck.evidence || staleRecheck.reason,
+          failedAttempts: 0,
+          decidedAt: Date.now(),
+        };
+        console.log(`[MaintainerRunner] stale finding ${key} 已在当前代码中解决，静默收敛`);
+        continue;
+      }
       const shouldReuse = existing && !hasNewHumanNote && !needsRetry;
 
       if (shouldReuse) {
@@ -1131,6 +1175,55 @@ export class MaintainerRunner extends BaseRoleRunner {
       lastHumanNoteAt: 0,
     };
     return state.maintainerThreadState[discussionId];
+  }
+
+  private async recheckStaleFindingIfNeeded(
+    brain: MaintainerBrain,
+    worktreeManager: WorktreeManager,
+    finding: ReviewFinding,
+    projectRootPath: string,
+    sourceBranch: string,
+    staleFinding: boolean,
+    withoutHumanNotes: boolean
+  ): Promise<{ alreadyFixed: boolean; reason: string; evidence?: string } | null> {
+    if (!staleFinding || !withoutHumanNotes || typeof brain.recheckAlreadyFixed !== 'function') {
+      return null;
+    }
+
+    const focusedContent = await readDiscussionFileContent(
+      worktreeManager,
+      projectRootPath,
+      finding,
+      sourceBranch
+    );
+    if (focusedContent === null) {
+      try {
+        const resolved = await worktreeManager.resolveFilePath(finding.file);
+        if (!resolved) {
+          return {
+            alreadyFixed: true,
+            reason: `当前分支已不存在文件 ${finding.file}，旧 finding 不再适用`,
+            evidence: `当前分支无法定位 ${finding.file}，该文件已被删除或移动`,
+          };
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[MaintainerRunner] stale finding ${finding.file}:${finding.line} 路径复核失败: ${message}`
+        );
+      }
+      return null;
+    }
+
+    try {
+      return await brain.recheckAlreadyFixed(finding);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[MaintainerRunner] stale finding ${finding.file}:${finding.line} 当前代码复核失败: ${message}`
+      );
+      return null;
+    }
   }
 
   /**

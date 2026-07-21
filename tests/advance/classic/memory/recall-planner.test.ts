@@ -22,10 +22,14 @@ function createMemoryClient(): IMemoryClient {
     recordFixAttempt: vi.fn(),
     recordInteraction: vi.fn(),
     recordProjectKnowledge: vi.fn(),
+    recordFindingCases: vi.fn(),
+    recordReflection: vi.fn(),
+    recallFindingCase: vi.fn().mockResolvedValue([]),
     recallForReview: vi.fn().mockResolvedValue(['review memory']),
     recallForMaintenance: vi.fn().mockResolvedValue(['maintenance memory']),
     recallProjectKnowledge: vi.fn().mockResolvedValue(['knowledge memory']),
     recallUserPreferences: vi.fn().mockResolvedValue(['user preference']),
+    flush: vi.fn(),
   } as unknown as IMemoryClient;
 }
 

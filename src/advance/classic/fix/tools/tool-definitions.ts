@@ -27,7 +27,9 @@ export const WRITE_FILE_TOOL: ToolDefinition = {
   description:
     '将内容写入 worktree 中的相对路径文件，会自动创建父目录。' +
     'mode=overwrite（默认）整文件覆盖，仅适用于小文件（约 100 行以内）；' +
-    '写入大文件时必须分段：第一段 overwrite，后续段 append，每段控制在约 100 行以内，避免单轮输出过长被截断。',
+    '写入大文件时必须分段：第一段 overwrite，后续段 append。' +
+    '分段是为了避免单轮输出被截断，不是越细越好——每轮应连续发起多段 append，' +
+    '尽量用满单轮输出预算（合计约 300 行），避免碎块写入耗尽步数。',
   input_schema: {
     type: 'object',
     properties: {

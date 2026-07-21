@@ -25,6 +25,15 @@ export class LlmDecisionError extends Error {
 /** 单轮 complete 响应允许的最大字符数，防止异常大响应撑爆堆内存 */
 const MAX_COMPLETE_RESPONSE_CHARS = 200_000;
 
+/**
+ * 整个 HTTP 响应体允许读取的最大字符数（2MB）。
+ *
+ * `stream: false` 的 tool-use 请求会把整个响应体读进内存，
+ * 异常端点返回持续增长的超大响应时（如模型失控、网关回显异常），
+ * 无上限的 `response.json()/text()` 会在几十秒内吃光堆内存。
+ */
+const MAX_RESPONSE_BODY_CHARS = 2_000_000;
+
 export type LlmProvider = 'anthropic' | 'openai';
 
 export interface LlmClientOptions {
@@ -280,11 +289,12 @@ export class LlmClient {
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status}: ${text}`);
+      const text = await this.readResponseTextWithLimit(response);
+      throw new Error(`HTTP ${response.status}: ${text.slice(0, 2000)}`);
     }
 
-    const data = (await response.json()) as {
+    const text = await this.readResponseTextWithLimit(response);
+    const data = JSON.parse(text) as {
       choices?: Array<{
         message?: {
           content?: string;
@@ -738,6 +748,46 @@ export class LlmClient {
     return this.completeOpenAIStream(messages);
   }
 
+  /**
+   * 带上限读取 fetch 响应体文本。
+   *
+   * 逐 chunk 流式解码并在超过上限时取消请求、抛出错误，
+   * 避免异常端点返回超大响应时把整个 body 无上限地缓冲进内存。
+   */
+  private async readResponseTextWithLimit(
+    response: Response,
+    maxChars: number = MAX_RESPONSE_BODY_CHARS
+  ): Promise<string> {
+    if (!response.body) {
+      const text = await response.text();
+      if (text.length > maxChars) {
+        throw new Error(`响应体长度 ${text.length} 超过上限 ${maxChars}，可能端点返回了超大响应`);
+      }
+      return text;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.length > 0) {
+          text += decoder.decode(value, { stream: true });
+          if (text.length > maxChars) {
+            await reader.cancel().catch(() => undefined);
+            throw new Error(`响应体累计长度超过上限 ${maxChars}，可能端点返回了超大响应`);
+          }
+        }
+      }
+      text += decoder.decode();
+      return text;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   private async completeOpenAIStream(
     messages: Array<{ role: string; content: string }>,
     responseFormat?: 'json_object'
@@ -768,8 +818,8 @@ export class LlmClient {
     console.log(`[LlmClient] completeOpenAIStream 响应 status=${response.status} content-length=${response.headers.get('content-length') ?? 'unknown'}`);
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status}: ${text}`);
+      const text = await this.readResponseTextWithLimit(response);
+      throw new Error(`HTTP ${response.status}: ${text.slice(0, 2000)}`);
     }
 
     if (!response.body) {
