@@ -53,6 +53,11 @@ export interface MaintainerFindingDecision {
   failedAttempts: number;
   /** fix 是否已经成功 */
   fixSucceeded?: boolean;
+  /**
+   * 最近一次 fix 尝试失败的真实原因（如批量修复返回的失败描述）。
+   * 复用历史决策生成失败汇总时应展示它，而不是决策理由 reason。
+   */
+  lastFailureReason?: string;
   /** 该决策产生的时间戳 */
   decidedAt: number;
 }
@@ -65,6 +70,22 @@ export interface MaintainerThreadState {
   decisions: Record<string, MaintainerFindingDecision>;
   /** 该 discussion 下最近一条 Reviewer note 的时间戳（毫秒） */
   lastReviewerNoteAt: number;
+  /**
+   * 该 discussion 下最近一条「人工」note 的时间戳（毫秒）。
+   * 只有人工新回复才可能改变已有结论；Agent 自动重扫不带新信息，不触发重评估。
+   */
+  lastHumanNoteAt?: number;
+  /**
+   * 该 discussion 已被判定为「批量统计/指标聚合报告」。
+   * 命中后静默跳过（不修复、不回复），并借此避免每轮轮询重复调用 LLM 判定。
+   */
+  statisticalReport?: boolean;
+  /**
+   * 非 finding 讨论的处理结果记录。
+   * 作为「已处理」证据：只有记录了的非 finding 讨论才可被过滤逻辑安全跳过，
+   * 避免旧版本只发过轻松回复/提问（无任何记录）的讨论被永久压住。
+   */
+  nonFindingAction?: 'record' | 'ask' | 'ignore';
   /** 上一次发布 summary 的时间戳 */
   lastSummaryAt?: number;
   /** 上一次发布 summary 的内容哈希，用于去重 */

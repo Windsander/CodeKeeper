@@ -69,6 +69,29 @@ export function isMaintainerAuthoredNote(body: string): boolean {
 }
 
 /**
+ * 自动化 bot 作者的命名模式。
+ *
+ * 覆盖：
+ * - GitLab project/group access token bot：`project_123_bot_<hex>`、`group_456_bot_<hex>`
+ * - 常见 CI/自动化 bot 命名：`ci-bot`、`review-bot`、`dependabot[bot]` 等
+ *
+ * 只用于把「明确的自动化账号」排除在「人工回复」之外；
+ * 拿不准的一律视为人工，避免漏掉真实用户的新信息。
+ */
+const BOT_AUTHOR_PATTERN = /(?:^|[_[-])bot(?:[\]-]|$)|_bot_[a-f0-9]{8,}$/i;
+
+/**
+ * 判断 note 作者是否为自动化 bot。
+ *
+ * bot 的自动重扫/补发不带新信息，不应触发重评估；
+ * 也不应成为 Maintainer 提问/轻松回复的对象（发了也无人回应）。
+ */
+export function isBotAuthor(author: string | undefined): boolean {
+  if (!author) return false;
+  return BOT_AUTHOR_PATTERN.test(author);
+}
+
+/**
  * 生成 Agent 身份签名 footer
  *
  * 统一格式：

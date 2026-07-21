@@ -38,12 +38,22 @@ export interface FixToolLoopOptions {
   maxNoToolCallRetries?: number;
   /** finish 成功但未实际修改文件时的最大连续重试次数，默认 2 */
   maxUnchangedFinishRetries?: number;
+  /** 连续无实际进展（未修改/删除文件、未读取新文件窗口）的最大步数，默认 5 */
+  maxStepsWithoutProgress?: number;
+  /** 触发无进展提醒的步数阈值，默认 maxStepsWithoutProgress - 2 */
+  staleReminderStep?: number;
   /** 额外系统提示 */
   extraSystemPrompt?: string;
   /** 验证策略，默认 WorkspaceValidationStrategy */
   validationStrategy?: ValidationStrategy;
   /** 可选的 prompt 加载器，默认使用全局 loader */
   promptLoader?: PromptLoader;
+  /** 连续无进展时对当前完整文件做最终 already-fixed 回查 */
+  recheckAlreadyFixed?: () => Promise<{
+    alreadyFixed: boolean;
+    reason: string;
+    evidence?: string;
+  }>;
 }
 
 /** 判断 stopReason 是否表示输出被长度截断 */
@@ -61,11 +71,14 @@ export class FixToolLoop {
   private readonly maxTruncationRetries: number;
   private readonly maxNoToolCallRetries: number;
   private readonly maxUnchangedFinishRetries: number;
+  private readonly maxStepsWithoutProgress: number;
+  private readonly staleReminderStep: number;
   private readonly extraSystemPrompt: string;
   private readonly registry: ToolRegistry;
   private readonly executor: ToolExecutor;
   private readonly validationStrategy: ValidationStrategy;
   private readonly promptLoader: PromptLoader;
+  private readonly recheckAlreadyFixed?: FixToolLoopOptions['recheckAlreadyFixed'];
   private readonly messages: LlmMessage[] = [];
 
   private appliedFiles = new Set<string>();
@@ -79,6 +92,7 @@ export class FixToolLoop {
   private truncationRetries = 0;
   private noToolCallRetries = 0;
   private unchangedFinishRetries = 0;
+  private alreadyFixedRecheckAttempted = false;
 
   constructor(options: FixToolLoopOptions) {
     this.llmClient = options.llmClient;
@@ -90,8 +104,12 @@ export class FixToolLoop {
     this.maxTruncationRetries = options.maxTruncationRetries ?? 3;
     this.maxNoToolCallRetries = options.maxNoToolCallRetries ?? 2;
     this.maxUnchangedFinishRetries = options.maxUnchangedFinishRetries ?? 2;
+    this.maxStepsWithoutProgress = options.maxStepsWithoutProgress ?? 5;
+    this.staleReminderStep =
+      options.staleReminderStep ?? Math.max(1, this.maxStepsWithoutProgress - 2);
     this.extraSystemPrompt = options.extraSystemPrompt ?? '';
     this.promptLoader = options.promptLoader ?? defaultPromptLoader;
+    this.recheckAlreadyFixed = options.recheckAlreadyFixed;
     this.registry = new ToolRegistry(FIX_TOOLS);
     this.executor = new ToolExecutor({
       worktreeManager: options.worktreeManager,
@@ -124,7 +142,9 @@ export class FixToolLoop {
     for (let step = 0; step < this.maxSteps; step++) {
       console.log(`[FixToolLoop] 第 ${step + 1}/${this.maxSteps} 步`);
       logMemorySnapshot(`FixToolLoop 第 ${step + 1} 步开始`);
-      console.log(`[FixToolLoop] messages 数量=${this.messages.length}, 总字符=${this.estimateMessagesChars()}`);
+      console.log(
+        `[FixToolLoop] messages 数量=${this.messages.length}, 总字符=${this.estimateMessagesChars()}`
+      );
 
       if (step === this.maxSteps - 4 && !this.budgetReminderSent) {
         this.budgetReminderSent = true;
@@ -134,11 +154,11 @@ export class FixToolLoop {
         });
       }
 
-      const result = await this.llmClient.completeWithTools(
-        this.messages,
-        this.registry.list(),
-        { system: this.buildSystemPrompt(), toolChoice: { type: 'any' }, maxTokens: this.maxTokens }
-      );
+      const result = await this.llmClient.completeWithTools(this.messages, this.registry.list(), {
+        system: this.buildSystemPrompt(),
+        toolChoice: { type: 'any' },
+        maxTokens: this.maxTokens,
+      });
 
       console.log(
         `[FixToolLoop] LLM 停止原因=${result.stopReason}, toolCalls=${result.toolCalls.length}`
@@ -220,9 +240,9 @@ export class FixToolLoop {
       }
 
       // 如果本轮包含 validate 工具，用策略评估当前验证状态
-      const validateCall = toolCalls.find((tc) => tc.name === 'validate');
+      const validateCall = toolCalls.find(tc => tc.name === 'validate');
       if (validateCall) {
-        const validateResult = toolResults.find((tr) => tr.tool_use_id === validateCall.id);
+        const validateResult = toolResults.find(tr => tr.tool_use_id === validateCall.id);
         if (validateResult) {
           const raw = this.parseValidateResult(validateResult);
           this.lastValidationResult = await this.validationStrategy.evaluate({
@@ -237,17 +257,19 @@ export class FixToolLoop {
 
       this.messages.push({
         role: 'user',
-        content: toolResults.map((tr) => ({ type: 'tool_result' as const, ...tr })),
+        content: toolResults.map(tr => ({ type: 'tool_result' as const, ...tr })),
       });
 
-      if (this.stepsWithoutProgress === 3) {
+      if (this.stepsWithoutProgress === this.staleReminderStep) {
         this.messages.push({
           role: 'user',
           content: this.promptLoader.load('fix-tool-loop-stale-reminder'),
         });
       }
 
-      if (this.stepsWithoutProgress >= 5) {
+      if (this.stepsWithoutProgress >= this.maxStepsWithoutProgress) {
+        const rechecked = await this.tryRecheckAlreadyFixed();
+        if (rechecked) return rechecked;
         return {
           success: false,
           reason: this.promptLoader.load('fix-tool-loop-stale-failure-reason', {
@@ -279,10 +301,31 @@ export class FixToolLoop {
       }
     }
 
+    const rechecked = await this.tryRecheckAlreadyFixed();
+    if (rechecked) return rechecked;
     return {
       success: false,
       reason: `达到最大步数 ${this.maxSteps}，修复未收敛`,
     };
+  }
+
+  private async tryRecheckAlreadyFixed(): Promise<FixAttemptResult | null> {
+    if (!this.recheckAlreadyFixed || this.alreadyFixedRecheckAttempted) return null;
+    this.alreadyFixedRecheckAttempted = true;
+    try {
+      const result = await this.recheckAlreadyFixed();
+      if (!result.alreadyFixed) return null;
+      return {
+        success: true,
+        alreadyFixed: true,
+        reason: result.reason || '当前代码中已不存在该问题',
+        evidence: result.evidence,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[FixToolLoop] already-fixed 回查失败: ${message}`);
+      return null;
+    }
   }
 
   getAppliedFiles(): string[] {
@@ -321,6 +364,26 @@ export class FixToolLoop {
     return Array.from(this.deletedFiles);
   }
 
+  /**
+   * 生成 read_file 调用的唯一进度 key。
+   *
+   * 同一文件的不同 startLine/endLine 或 targetLine/windowLines 窗口应视为不同读取，
+   * 避免大文件滑动窗口读取被误判为重复读取。
+   */
+  private buildReadFileKey(relPath: string, input: Record<string, unknown>): string {
+    const startLine = Number(input.startLine ?? 0);
+    const endLine = Number(input.endLine ?? 0);
+    const targetLine = Number(input.targetLine ?? 0);
+    const windowLines = Number(input.windowLines ?? 0);
+    if (targetLine > 0) {
+      return `${relPath}:target=${targetLine},window=${windowLines || 80}`;
+    }
+    if (startLine > 0 && endLine > 0) {
+      return `${relPath}:${startLine}-${endLine}`;
+    }
+    return `${relPath}:full`;
+  }
+
   private buildSystemPrompt(): string {
     return this.promptLoader
       .load('fix-tool-loop-system', {
@@ -353,7 +416,10 @@ export class FixToolLoop {
     for (const toolCall of toolCalls) {
       if (toolCall.name === 'read_file') {
         const relPath = String(toolCall.input.relPath ?? '');
-        if (relPath) this.readFilesThisRun.add(relPath);
+        if (relPath) {
+          const readKey = this.buildReadFileKey(relPath, toolCall.input);
+          this.readFilesThisRun.add(readKey);
+        }
       }
       if (!this.registry.has(toolCall.name)) {
         results.push({
@@ -364,7 +430,9 @@ export class FixToolLoop {
         continue;
       }
 
-      console.log(`[FixToolLoop] 执行工具: ${toolCall.name}, 参数: ${JSON.stringify(toolCall.input)}`);
+      console.log(
+        `[FixToolLoop] 执行工具: ${toolCall.name}, 参数: ${JSON.stringify(toolCall.input)}`
+      );
       const result = await this.executor.execute(toolCall);
       console.log(`[FixToolLoop] 工具结果: ${result.content.slice(0, 500)}`);
 
@@ -376,16 +444,28 @@ export class FixToolLoop {
 
   private trackFileChange(toolCall: ToolCall, result: ToolResult): void {
     try {
-      const parsed = JSON.parse(result.content) as { success?: boolean; data?: { unchanged?: boolean } };
+      const parsed = JSON.parse(result.content) as {
+        success?: boolean;
+        data?: { unchanged?: boolean };
+      };
       if (!parsed.success) {
         return;
       }
-      if (toolCall.name === 'write_file' || toolCall.name === 'apply_patch') {
+      if (toolCall.name === 'write_file') {
         if (parsed.data?.unchanged === true) {
           return;
         }
         const relPath = String(toolCall.input.relPath ?? '');
         if (relPath) this.appliedFiles.add(relPath);
+      }
+      if (toolCall.name === 'apply_patch') {
+        if (parsed.data?.unchanged === true) {
+          return;
+        }
+        const patchText = String(toolCall.input.patchText ?? '');
+        for (const relPath of this.extractPatchFilePaths(patchText)) {
+          if (relPath) this.appliedFiles.add(relPath);
+        }
       }
       if (toolCall.name === 'delete_file') {
         const relPath = String(toolCall.input.relPath ?? '');
@@ -394,6 +474,23 @@ export class FixToolLoop {
     } catch {
       // 解析失败时保守处理，不记录文件变更
     }
+  }
+
+  /**
+   * 从 unified diff 文本中提取被修改的文件路径列表。
+   * 兼容 `+++ b/path/to/file` 以及带时间戳的格式，忽略 `/dev/null`（删除目标）。
+   */
+  private extractPatchFilePaths(patchText: string): string[] {
+    const paths = new Set<string>();
+    for (const line of patchText.split('\n')) {
+      if (!line.startsWith('+++ ')) continue;
+      const raw = line.slice(4).split('\t')[0].trim();
+      const path = raw.replace(/^(a\/|b\/)/, '');
+      if (path && path !== '/dev/null') {
+        paths.add(path);
+      }
+    }
+    return Array.from(paths);
   }
 
   private tryParseToolCallsFromContent(content: string): ToolCall[] {
@@ -411,9 +508,10 @@ export class FixToolLoop {
       for (const c of candidates) {
         const name = typeof c.name === 'string' ? c.name : '';
         if (!this.registry.has(name)) continue;
-        const input = c.input && typeof c.input === 'object' && !Array.isArray(c.input)
-          ? (c.input as Record<string, unknown>)
-          : (c as Record<string, unknown>);
+        const input =
+          c.input && typeof c.input === 'object' && !Array.isArray(c.input)
+            ? (c.input as Record<string, unknown>)
+            : (c as Record<string, unknown>);
         calls.push({
           id: `fallback-${this.fallbackId++}`,
           name,
@@ -426,9 +524,12 @@ export class FixToolLoop {
     }
   }
 
-  private parseValidateResult(
-    result: ToolResult
-  ): { lint: boolean; typecheck: boolean; lintReason?: string; typecheckReason?: string } {
+  private parseValidateResult(result: ToolResult): {
+    lint: boolean;
+    typecheck: boolean;
+    lintReason?: string;
+    typecheckReason?: string;
+  } {
     try {
       const parsed = JSON.parse(result.content) as {
         success?: boolean;

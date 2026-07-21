@@ -53,6 +53,8 @@ export interface CognitiveContext {
   projectContext?: string;
   /** Agent 个性/策略内容（可选） */
   soulContent?: string;
+  /** finding 是否来自落后于当前 MR HEAD 的历史评审 */
+  staleFinding?: boolean;
 }
 
 /**

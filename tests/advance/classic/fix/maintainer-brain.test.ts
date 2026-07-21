@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { MaintainerBrain } from '../../../../src/advance/classic/fix/maintainer-brain.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import { RecallPlanner } from '../../../../src/advance/classic/memory/recall-planner.js';
+import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
 import type { ReviewFinding } from '../../../../src/advance/classic/provider/types.js';
+import { mockOf } from '../../../helpers/mock-of.js';
 
 function makeFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
@@ -247,18 +249,16 @@ describe('MaintainerBrain', () => {
         confidence: 'medium',
       },
     });
-    const llmClient = {
+    const llmClient = mockOf<LlmClient>({
       complete: vi.fn(),
       completeDecision,
-    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
-    const memoryClient = {
+    });
+    const memoryClient = mockOf<IMemoryClient>({
       recallUserPreferences: vi.fn().mockResolvedValue(['该用户偏好显式类型注解']),
       recallProjectKnowledge: vi.fn().mockResolvedValue([]),
       recallForMaintenance: vi.fn().mockResolvedValue([]),
       recordFixAttempt: vi.fn(),
-    } as unknown as NonNullable<
-      import('../../../../src/advance/classic/fix/maintainer-brain.js').MaintainerBrainOptions['memoryClient']
-    >;
+    });
 
     const brain = new MaintainerBrain({ llmClient, memoryClient, cognitiveDepth: 'fast' });
     await brain.decide({
@@ -298,19 +298,17 @@ describe('MaintainerBrain', () => {
           confidence: 'medium',
         },
       });
-    const llmClient = {
+    const llmClient = mockOf<LlmClient>({
       complete: vi.fn(),
       completeDecision,
-    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
-    const memoryClient = {
+    });
+    const memoryClient = mockOf<IMemoryClient>({
       recallUserPreferences: vi.fn().mockResolvedValue([]),
       recallProjectKnowledge: vi.fn().mockResolvedValue([]),
       recallForMaintenance: vi.fn().mockResolvedValue(['历史修复方式：显式类型注解']),
       recallForReview: vi.fn().mockResolvedValue([]),
       recordFixAttempt: vi.fn(),
-    } as unknown as NonNullable<
-      import('../../../../src/advance/classic/fix/maintainer-brain.js').MaintainerBrainOptions['memoryClient']
-    >;
+    });
     const recallPlanner = new RecallPlanner({ llmClient, memoryClient });
 
     const brain = new MaintainerBrain({
@@ -363,6 +361,37 @@ describe('MaintainerBrain', () => {
     });
     expect(findings[0].file).toBe('src/c.ts');
     expect(findings[0].line).toBe(5);
+  });
+
+  it('从空格分隔的 ESLint 统计报告中解析出 line:1 的文件级条目', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createParseFindingsLlmClient([]),
+    });
+    const body = [
+      'ESLint Report',
+      'Severity    Count',
+      'Error    0',
+      'Warning    2724',
+      '',
+      'Top rules',
+      'Rule    Count',
+      'no-console    1251',
+      '@typescript-eslint/no-non-null-assertion    673',
+      '',
+      'Top files',
+      'File    Errors    Warnings',
+      'src/app/core.ts    0    203',
+      'src/app/gateway.ts    0    188',
+      'src/app/auth.ts    0    123',
+    ].join('\n');
+
+    const findings = await brain.parseFindings({ body });
+
+    expect(findings.length).toBeGreaterThanOrEqual(3);
+    expect(findings.every((f) => f.line === 1)).toBe(true);
+    expect(findings.map((f) => f.file)).toContain('src/app/core.ts');
+    expect(findings.map((f) => f.file)).toContain('src/app/gateway.ts');
+    expect(findings.every((f) => /^[\d\s|.%-]*$/.test(f.message))).toBe(true);
   });
 
   it('无修复点的评论返回空数组', async () => {
@@ -425,10 +454,10 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
         confidence: 'medium',
       },
     });
-    const llmClient = {
+    const llmClient = mockOf<LlmClient>({
       complete: vi.fn(),
       completeDecision,
-    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    });
     const brain = new MaintainerBrain({ llmClient, cognitiveDepth: 'fast' });
 
     const fileContent = `import { foo } from './foo';\n\nfunction target() {\n  const x = 1;\n  return x;\n}\n`;
@@ -471,9 +500,9 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
 
 describe('MaintainerBrain.parseFindings Markdown fallback', () => {
   function makeNoCallLlmClient(): LlmClient {
-    return {
+    return mockOf<LlmClient>({
       complete: vi.fn().mockRejectedValue(new Error('LLM 不应被调用')),
-    } as unknown as LlmClient;
+    });
   }
 
   it('Markdown 列表直接解析多条 finding', async () => {
@@ -596,12 +625,10 @@ docs/design/telemetry-plan.md | 835 行计划文档不属于 docs/02-架构设�
 
 describe('MaintainerBrain.enrichFindingsWithCases', () => {
   function makeMemoryClient(recallResult: string[] = []) {
-    return {
+    return mockOf<IMemoryClient>({
       context: { projectId: 'proj-1' },
       recallFindingCase: vi.fn().mockResolvedValue(recallResult),
-    } as unknown as NonNullable<
-      import('../../../../src/advance/classic/fix/maintainer-brain.js').MaintainerBrainOptions['memoryClient']
-    >;
+    });
   }
 
   it('命中 case 时合并字段', async () => {

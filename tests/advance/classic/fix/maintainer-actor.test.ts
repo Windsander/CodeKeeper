@@ -5,8 +5,15 @@ import {
   extractCommitRejectionSection,
 } from '../../../../src/advance/classic/fix/maintainer-actor.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
-import type { MergeRequest, ReviewFinding, Discussion } from '../../../../src/advance/classic/provider/types.js';
-import type { MaintainerBrain, CognitiveDecision } from '../../../../src/advance/classic/fix/maintainer-brain.js';
+import type {
+  MergeRequest,
+  ReviewFinding,
+  Discussion,
+} from '../../../../src/advance/classic/provider/types.js';
+import type {
+  MaintainerBrain,
+  CognitiveDecision,
+} from '../../../../src/advance/classic/fix/maintainer-brain.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type { MrAgentState } from '../../../../src/advance/classic/runners/shared/state-utils.js';
 import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
@@ -73,11 +80,13 @@ function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): Wo
   } as unknown as WorktreeManager;
 }
 
-function createMockLlmClient(toolResponses: Array<{
-  content?: string;
-  toolCalls: { id: string; name: string; input: Record<string, unknown> }[];
-  stopReason?: string;
-}>): LlmClient {
+function createMockLlmClient(
+  toolResponses: Array<{
+    content?: string;
+    toolCalls: { id: string; name: string; input: Record<string, unknown> }[];
+    stopReason?: string;
+  }>
+): LlmClient {
   return new LlmClient({
     apiKey: 'test',
     mock: { toolResponses },
@@ -178,7 +187,11 @@ describe('MaintainerActor', () => {
           { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
           {
             toolCalls: [
-              { id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'const used = 1;' } },
+              {
+                id: '2',
+                name: 'write_file',
+                input: { relPath: 'src/index.ts', content: 'const used = 1;' },
+              },
             ],
           },
           { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
@@ -213,7 +226,13 @@ describe('MaintainerActor', () => {
       confidence: 'high',
     };
 
-    const ok = await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
+    const ok = await actor.applyDecision(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
 
     expect(ok).toBe(true);
     expect(commitAndPush).toHaveBeenCalledTimes(2);
@@ -232,7 +251,9 @@ describe('MaintainerActor', () => {
 
   it('commit 被拒绝且与格式无关时不重试', async () => {
     const provider = createMockProvider();
-    const commitAndPush = vi.fn().mockRejectedValue(new Error('Worktree commit 失败: pre-commit lint 未通过'));
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValue(new Error('Worktree commit 失败: pre-commit lint 未通过'));
     const worktreeManager = createMockWorktreeManager({ commitAndPush });
     const brain = createMockBrain();
 
@@ -243,7 +264,11 @@ describe('MaintainerActor', () => {
           { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
           {
             toolCalls: [
-              { id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'const used = 1;' } },
+              {
+                id: '2',
+                name: 'write_file',
+                input: { relPath: 'src/index.ts', content: 'const used = 1;' },
+              },
             ],
           },
           { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
@@ -269,7 +294,13 @@ describe('MaintainerActor', () => {
       confidence: 'high',
     };
 
-    const ok = await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
+    const ok = await actor.applyDecision(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
 
     expect(ok).toBe(false);
     expect(commitAndPush).toHaveBeenCalledTimes(1);
@@ -280,7 +311,10 @@ describe('MaintainerActor', () => {
     const noise = Array.from({ length: 50 }, (_, i) => `第 ${i} 行无关输出...`).join('\n');
     const ansiNoise = '[33m[1m警告[22m[39m';
     const commitError = `Worktree commit 失败: ${noise}\n${ansiNoise}\n❌ Commit message 不符合 Conventional Commits 规范。\n格式: <type>(<scope>): <description>\ntypes: feat | fix | docs`;
-    const commitAndPush = vi.fn().mockRejectedValueOnce(new Error(commitError)).mockResolvedValueOnce(undefined);
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValueOnce(new Error(commitError))
+      .mockResolvedValueOnce(undefined);
     const worktreeManager = createMockWorktreeManager({ commitAndPush });
     const brain = createMockBrain();
 
@@ -289,7 +323,15 @@ describe('MaintainerActor', () => {
       mock: {
         toolResponses: [
           { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
-          { toolCalls: [{ id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'const used = 1;' } }] },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'write_file',
+                input: { relPath: 'src/index.ts', content: 'const used = 1;' },
+              },
+            ],
+          },
           { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
           { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
         ],
@@ -323,7 +365,13 @@ describe('MaintainerActor', () => {
       confidence: 'high',
     };
 
-    const ok = await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
+    const ok = await actor.applyDecision(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
 
     expect(ok).toBe(true);
     expect(commitAndPush).toHaveBeenCalledTimes(2);
@@ -467,6 +515,54 @@ describe('MaintainerActor', () => {
       expect.stringContaining('未成功')
     );
   });
+
+  it('批量修复无进展后回查为 already-fixed 时不提交且不返回失败', async () => {
+    const provider = createMockProvider();
+    const worktreeManager = createMockWorktreeManager();
+    const recheckAlreadyFixed = vi.fn().mockResolvedValue({
+      alreadyFixed: true,
+      reason: '当前完整文件已经满足要求',
+      evidence: '默认 sink 路径已有测试覆盖',
+    });
+    const brain = createMockBrain({ recheckAlreadyFixed });
+    const llmClient = createMockLlmClient([
+      { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+      { toolCalls: [{ id: '2', name: 'validate', input: {} }] },
+      { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+      { toolCalls: [{ id: '4', name: 'validate', input: {} }] },
+      { toolCalls: [{ id: '5', name: 'validate', input: {} }] },
+      { toolCalls: [{ id: '6', name: 'validate', input: {} }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+
+    const result = await actor.executeBatchFix(
+      mockMR,
+      [{ finding: mockFinding, fileContent: 'const current = true;' }],
+      '旧评审指出默认路径缺少覆盖'
+    );
+
+    expect(recheckAlreadyFixed).toHaveBeenCalledWith(mockFinding);
+    expect(result).toEqual({
+      success: true,
+      reason: '所有 finding 在当前代码中均已修复，无需提交',
+      appliedFiles: [],
+      deletedFiles: [],
+      alreadyFixedItems: [
+        {
+          file: 'src/index.ts',
+          line: 2,
+          reason: '默认 sink 路径已有测试覆盖',
+        },
+      ],
+    });
+    expect(worktreeManager.commitAndPush).not.toHaveBeenCalled();
+  });
 });
 
 describe('提交信息输出预处理', () => {
@@ -477,7 +573,8 @@ describe('提交信息输出预处理', () => {
 
   it('extractCommitRejectionSection 从冗长输出中提取 commit 规范片段', () => {
     const noise = 'lint 警告...\n'.repeat(30);
-    const section = '❌ Commit message 不符合 Conventional Commits 规范。\n格式: <type>(<scope>): <description>';
+    const section =
+      '❌ Commit message 不符合 Conventional Commits 规范。\n格式: <type>(<scope>): <description>';
     const extracted = extractCommitRejectionSection(`${noise}${section}`);
     expect(extracted).toContain('Commit message');
     expect(extracted).toContain('Conventional Commits');

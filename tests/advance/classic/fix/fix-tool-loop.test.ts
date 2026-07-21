@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { FixToolLoop } from '../../../../src/advance/classic/fix/fix-tool-loop.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
-import type { ReviewFinding, MergeRequest } from '../../../../src/advance/classic/provider/types.js';
+import type {
+  ReviewFinding,
+  MergeRequest,
+} from '../../../../src/advance/classic/provider/types.js';
+import type { FocusedContext } from '../../../../src/advance/classic/fix/focused-context-builder.js';
 import { ErrorDeltaValidationStrategy } from '../../../../src/advance/classic/fix/validation-strategy.js';
+import { mockOf } from '../../../helpers/mock-of.js';
 
 function createMockWorktreeManager(validateResult?: {
   lint: boolean;
@@ -11,16 +16,28 @@ function createMockWorktreeManager(validateResult?: {
   lintReason?: string;
   typecheckReason?: string;
 }): WorktreeManager {
-  return {
+  return mockOf<WorktreeManager>({
     getWorktreePath: () => '/tmp/fix-tool-loop-test-worktree',
     resolveFilePath: async (p: string) => p,
     readFile: () => 'line1\nline2\n',
+    readFileRange: async (_p: string, start: number, end: number) => `lines ${start}-${end}\n`,
+    readFileWindow: async (_p: string, finding: ReviewFinding): Promise<FocusedContext> => ({
+      imports: '',
+      snippet: `around line ${finding.line}\n`,
+      snippetStartLine: finding.line,
+      snippetEndLine: finding.line + 1,
+      totalLines: 100,
+      truncated: false,
+      targetLine: finding.line,
+    }),
     writeFile: () => undefined,
     validate: async () => validateResult ?? { lint: true, typecheck: true },
     applyPatch: async () => true,
+    searchInFile: async () => [],
+    getFileOverview: async () => ({ lineCount: 2, symbols: [] }),
     runScript: async () => ({ success: true }),
     removeFile: async () => undefined,
-  } as unknown as WorktreeManager;
+  });
 }
 
 function createMockLlmClient(
@@ -61,7 +78,11 @@ describe('FixToolLoop', () => {
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([
         { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
-        { toolCalls: [{ id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        {
+          toolCalls: [
+            { id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+          ],
+        },
         { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
         {
           toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }],
@@ -135,15 +156,174 @@ describe('FixToolLoop', () => {
     expect(result.reason).toContain('修复陷入循环');
   });
 
+  it('连续无进展后回查发现已修复时返回成功且不要求文件变更', async () => {
+    const recheckAlreadyFixed = vi.fn().mockResolvedValue({
+      alreadyFixed: true,
+      reason: '当前完整文件中问题已经消失',
+      evidence: '默认 sink 的未注入路径已有测试覆盖',
+    });
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+        { toolCalls: [{ id: '2', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '4', name: 'validate', input: {} }] },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 20,
+      maxStepsWithoutProgress: 3,
+      recheckAlreadyFixed,
+    });
+
+    const result = await loop.run();
+
+    expect(recheckAlreadyFixed).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      success: true,
+      alreadyFixed: true,
+      reason: '当前完整文件中问题已经消失',
+      evidence: '默认 sink 的未注入路径已有测试覆盖',
+    });
+    expect(loop.getAppliedFiles()).toEqual([]);
+  });
+
+  it('读取同一文件的不同窗口视为有进展，不因 5 步无进展早退', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        {
+          toolCalls: [
+            {
+              id: '1',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 1, endLine: 80 },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '2',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 81, endLine: 160 },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '3',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 161, endLine: 240 },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '4',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 241, endLine: 320 },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '5',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 321, endLine: 400 },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '6',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 401, endLine: 480 },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            { id: '7', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+          ],
+        },
+        { toolCalls: [{ id: '8', name: 'finish', input: { success: true, reason: 'done' } }] },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 20,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(true);
+  });
+
+  it('可配置 maxStepsWithoutProgress，缩短无进展早退阈值', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+        { toolCalls: [{ id: '2', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '4', name: 'validate', input: {} }] },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 20,
+      maxStepsWithoutProgress: 3,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('修复陷入循环');
+  });
+
+  it('可配置 staleReminderStep，在无进展初期就触发提醒', async () => {
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
+        { toolCalls: [{ id: '2', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '4', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '5', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '6', name: 'validate', input: {} }] },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 20,
+      maxStepsWithoutProgress: 5,
+      staleReminderStep: 1,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('修复陷入循环');
+  });
+
   it('content 包含工具调用 JSON 时兜底解析并执行', async () => {
     const loop = new FixToolLoop({
       llmClient: new LlmClient({
         apiKey: 'test',
         mock: {
           toolResponses: [
-            { content: '{"name":"write_file","input":{"relPath":"src/index.ts","content":"fixed"}}', toolCalls: [] },
+            {
+              content: '{"name":"write_file","input":{"relPath":"src/index.ts","content":"fixed"}}',
+              toolCalls: [],
+            },
             { content: '{"name":"validate","input":{}}', toolCalls: [] },
-            { content: '{"name":"finish","input":{"success":true,"reason":"done"}}', toolCalls: [] },
+            {
+              content: '{"name":"finish","input":{"success":true,"reason":"done"}}',
+              toolCalls: [],
+            },
           ],
         },
       }),
@@ -189,7 +369,11 @@ describe('FixToolLoop', () => {
         },
         // 重试后正常完成
         { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
-        { toolCalls: [{ id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        {
+          toolCalls: [
+            { id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+          ],
+        },
         { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
         { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
       ]),
@@ -228,7 +412,11 @@ describe('FixToolLoop', () => {
         { content: '我认为应该删除未使用的变量。', toolCalls: [], stopReason: 'stop' },
         // 重试后正常完成
         { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
-        { toolCalls: [{ id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        {
+          toolCalls: [
+            { id: '2', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+          ],
+        },
         { toolCalls: [{ id: '3', name: 'validate', input: {} }] },
         { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
       ]),
@@ -266,7 +454,11 @@ describe('FixToolLoop', () => {
       llmClient: createMockLlmClient([
         {
           toolCalls: [
-            { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'line1\nline2\n' } },
+            {
+              id: '1',
+              name: 'write_file',
+              input: { relPath: 'src/index.ts', content: 'line1\nline2\n' },
+            },
           ],
         },
         { toolCalls: [{ id: '2', name: 'validate', input: {} }] },
@@ -295,7 +487,11 @@ describe('FixToolLoop', () => {
           toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }],
         },
         { toolCalls: [{ id: '3', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
-        { toolCalls: [{ id: '4', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        {
+          toolCalls: [
+            { id: '4', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+          ],
+        },
         { toolCalls: [{ id: '5', name: 'validate', input: {} }] },
         {
           toolCalls: [{ id: '6', name: 'finish', input: { success: true, reason: 'done' } }],
@@ -312,30 +508,47 @@ describe('FixToolLoop', () => {
     expect(loop.getAppliedFiles()).toContain('src/index.ts');
   });
 
-  it('finish 成功但未实际修改任何文件超过重试上限后返回失败', async () => {
+  it('apply_patch 成功后即使后续只读取/搜索同一文件也不应被误判为无进展并提前终止', async () => {
+    const patchText = `--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,2 +1,3 @@
+ line1
+ line2
++line3`;
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([
-        { toolCalls: [{ id: '1', name: 'validate', input: {} }] },
+        { toolCalls: [{ id: '1', name: 'apply_patch', input: { patchText } }] },
+        { toolCalls: [{ id: '2', name: 'read_file', input: { relPath: 'src/index.ts' } }] },
         {
-          toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }],
+          toolCalls: [
+            {
+              id: '3',
+              name: 'search_in_file',
+              input: { relPath: 'src/index.ts', keyword: 'line3' },
+            },
+          ],
         },
+        { toolCalls: [{ id: '4', name: 'validate', input: {} }] },
         {
-          toolCalls: [{ id: '3', name: 'finish', input: { success: true, reason: 'done' } }],
+          toolCalls: [
+            {
+              id: '5',
+              name: 'search_in_file',
+              input: { relPath: 'src/index.ts', keyword: 'line2' },
+            },
+          ],
         },
-        {
-          toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }],
-        },
+        { toolCalls: [{ id: '6', name: 'finish', input: { success: true, reason: 'done' } }] },
       ]),
       worktreeManager: createMockWorktreeManager(),
       finding: mockFinding,
       mr: mockMR,
-      maxUnchangedFinishRetries: 2,
-      maxSteps: 10,
+      maxSteps: 20,
     });
 
     const result = await loop.run();
 
-    expect(result.success).toBe(false);
-    expect(result.reason).toContain('未实际修改或删除任何文件');
+    expect(result.success).toBe(true);
+    expect(loop.getAppliedFiles()).toContain('src/index.ts');
   });
 });

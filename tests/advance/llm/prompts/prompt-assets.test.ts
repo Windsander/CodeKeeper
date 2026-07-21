@@ -149,4 +149,12 @@ describe('prompt assets', () => {
 
     expect(defaultPromptLoader.load('maintainer-ask-clarify')).toContain('修改方式');
   });
+
+  it('maintainer-statistical-report-task 变量可替换', () => {
+    const content = defaultPromptLoader.load('maintainer-statistical-report-task', {
+      body: 'ESLint Report\nTop files\n...',
+    });
+    expect(content).toContain('ESLint Report');
+    expect(content).toContain('statistical_report_decision');
+  });
 });

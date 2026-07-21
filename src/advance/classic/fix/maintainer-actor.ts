@@ -78,9 +78,7 @@ export class MaintainerActor {
         return success;
       }
       case 'ask': {
-        const question =
-          decision.question ??
-          defaultPromptLoader.load('maintainer-ask-clarify');
+        const question = decision.question ?? defaultPromptLoader.load('maintainer-ask-clarify');
         await this.ask(mr, discussion, question, finding.file, state);
         return true;
       }
@@ -107,28 +105,24 @@ export class MaintainerActor {
     const sections: string[] = [];
 
     if (fixedItems.length > 0) {
-      sections.push(
-        `✅ 已自动修复并推送：\n${fixedItems.map((item) => `- ${item}`).join('\n')}`
-      );
+      sections.push(`✅ 已自动修复并推送：\n${fixedItems.map(item => `- ${item}`).join('\n')}`);
     }
     if (alreadyFixedItems.length > 0) {
       sections.push(
-        `✅ 已修复（无需重复修改）：\n${alreadyFixedItems.map((item) => `- ${item.fileLine}: ${item.reason}`).join('\n')}`
+        `✅ 已修复（无需重复修改）：\n${alreadyFixedItems.map(item => `- ${item.fileLine}: ${item.reason}`).join('\n')}`
       );
     }
     if (failedItems.length > 0) {
-      sections.push(
-        `⏸️ 尝试修复未成功：\n${failedItems.map((item) => `- ${item}`).join('\n')}`
-      );
+      sections.push(`⏸️ 尝试修复未成功：\n${failedItems.map(item => `- ${item}`).join('\n')}`);
     }
     if (askedItems.length > 0) {
       sections.push(
-        `❓ 需要 Reviewer 澄清：\n${askedItems.map((item) => `- ${item.fileLine}: ${item.text}`).join('\n')}`
+        `❓ 需要 Reviewer 澄清：\n${askedItems.map(item => `- ${item.fileLine}: ${item.text}`).join('\n')}`
       );
     }
     if (ignoredItems.length > 0) {
       sections.push(
-        `📝 已忽略：\n${ignoredItems.map((item) => `- ${item.fileLine}: ${item.reason}`).join('\n')}`
+        `📝 已忽略：\n${ignoredItems.map(item => `- ${item.fileLine}: ${item.reason}`).join('\n')}`
       );
     }
 
@@ -172,6 +166,7 @@ export class MaintainerActor {
     reason: string;
     appliedFiles: string[];
     deletedFiles: string[];
+    alreadyFixedItems: Array<{ file: string; line: number; reason: string }>;
   }> {
     console.log(`[MaintainerActor] 开始批量修复，${fixableItems.length} 个 finding`);
 
@@ -185,6 +180,7 @@ export class MaintainerActor {
 
       const appliedFiles = new Set<string>();
       const deletedFiles = new Set<string>();
+      const alreadyFixedItems: Array<{ file: string; line: number; reason: string }> = [];
 
       for (const item of fixableItems) {
         const { finding } = item;
@@ -206,10 +202,22 @@ export class MaintainerActor {
           memoryClient: this.options.memoryClient,
           recallPlanner: this.options.recallPlanner,
           extraSystemPrompt: `这是同一条 discussion 中的批量修复任务之一。原始评论：\n${originalComment}`,
+          recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
         });
 
         const result = await loop.run();
-        console.log(`[MaintainerActor] finding ${finding.file}:${finding.line} 修复结果: success=${result.success}, reason=${result.reason}`);
+        console.log(
+          `[MaintainerActor] finding ${finding.file}:${finding.line} 修复结果: success=${result.success}, reason=${result.reason}`
+        );
+
+        if (result.alreadyFixed) {
+          alreadyFixedItems.push({
+            file: finding.file,
+            line: finding.line,
+            reason: result.evidence || result.reason,
+          });
+          continue;
+        }
 
         if (!result.success) {
           return {
@@ -217,6 +225,7 @@ export class MaintainerActor {
             reason: result.reason,
             appliedFiles: Array.from(appliedFiles),
             deletedFiles: Array.from(deletedFiles),
+            alreadyFixedItems,
           };
         }
 
@@ -228,40 +237,51 @@ export class MaintainerActor {
         }
       }
 
-      if (appliedFiles.size === 0 && deletedFiles.size === 0) {
+      if (appliedFiles.size === 0 && deletedFiles.size === 0 && alreadyFixedItems.length === 0) {
         return {
           success: false,
           reason: '没有文件被修改或删除',
           appliedFiles: [],
           deletedFiles: [],
+          alreadyFixedItems: [],
         };
       }
 
       const changeDescription = [
         appliedFiles.size > 0
-          ? `修改文件：\n${Array.from(appliedFiles).map((f) => `- ${f}`).join('\n')}`
+          ? `修改文件：\n${Array.from(appliedFiles)
+              .map(f => `- ${f}`)
+              .join('\n')}`
           : '',
         deletedFiles.size > 0
-          ? `删除文件：\n${Array.from(deletedFiles).map((f) => `- ${f}`).join('\n')}`
+          ? `删除文件：\n${Array.from(deletedFiles)
+              .map(f => `- ${f}`)
+              .join('\n')}`
           : '',
       ]
         .filter(Boolean)
         .join('\n');
-      console.log(`[MaintainerActor] 阶段=commit-push 批量提交到分支: ${mr.sourceBranch}`);
-      await this.commitWithConventionRetry(mr.sourceBranch, changeDescription, () =>
-        buildDefaultBatchMessage(Array.from(appliedFiles), Array.from(deletedFiles))
-      );
+      if (appliedFiles.size > 0 || deletedFiles.size > 0) {
+        console.log(`[MaintainerActor] 阶段=commit-push 批量提交到分支: ${mr.sourceBranch}`);
+        await this.commitWithConventionRetry(mr.sourceBranch, changeDescription, () =>
+          buildDefaultBatchMessage(Array.from(appliedFiles), Array.from(deletedFiles))
+        );
+      }
 
       return {
         success: true,
-        reason: '批量修复已推送至 source branch',
+        reason:
+          appliedFiles.size > 0 || deletedFiles.size > 0
+            ? '批量修复已推送至 source branch'
+            : '所有 finding 在当前代码中均已修复，无需提交',
         appliedFiles: Array.from(appliedFiles),
         deletedFiles: Array.from(deletedFiles),
+        alreadyFixedItems,
       };
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[MaintainerActor] 批量修复异常: ${reason}`);
-      return { success: false, reason, appliedFiles: [], deletedFiles: [] };
+      return { success: false, reason, appliedFiles: [], deletedFiles: [], alreadyFixedItems: [] };
     }
   }
 
@@ -298,10 +318,22 @@ export class MaintainerActor {
         mr,
         memoryClient: this.options.memoryClient,
         recallPlanner: this.options.recallPlanner,
+        recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
       });
 
       const fixResult = await loop.run();
-      console.log(`[MaintainerActor] 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`);
+      console.log(
+        `[MaintainerActor] 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`
+      );
+
+      if (fixResult.alreadyFixed) {
+        decision.action = 'ignore';
+        decision.alreadyFixed = true;
+        decision.reason = fixResult.reason;
+        decision.replyBody = fixResult.evidence || fixResult.reason;
+        await this.ignore(mr, discussion, decision.reason, decision);
+        return true;
+      }
 
       if (!fixResult.success) {
         return false;
@@ -579,7 +611,7 @@ export class MaintainerActor {
         'commit message 提交信息规范 convention git 提交格式'
       );
       this.commitConvention = recalled.find(
-        (item) => typeof item === 'string' && /commit|提交/i.test(item)
+        item => typeof item === 'string' && /commit|提交/i.test(item)
       );
     } catch (err) {
       console.warn(
@@ -705,10 +737,10 @@ function buildDefaultBatchMessage(appliedFiles: string[], deletedFiles: string[]
   const total = appliedFiles.length + deletedFiles.length;
   const lines = [`批量修复 ${total} 个 Reviewer 问题`, ''];
   if (appliedFiles.length > 0) {
-    lines.push('修改文件：', ...appliedFiles.map((f) => `- ${f}`), '');
+    lines.push('修改文件：', ...appliedFiles.map(f => `- ${f}`), '');
   }
   if (deletedFiles.length > 0) {
-    lines.push('删除文件：', ...deletedFiles.map((f) => `- ${f}`), '');
+    lines.push('删除文件：', ...deletedFiles.map(f => `- ${f}`), '');
   }
   return lines.join('\n');
 }

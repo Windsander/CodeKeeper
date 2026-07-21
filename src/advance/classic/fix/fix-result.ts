@@ -9,6 +9,10 @@ export interface FixAttemptResult {
   success: boolean;
   /** 说明 */
   reason: string;
+  /** 修复循环结束前确认问题在当前代码中已经不存在 */
+  alreadyFixed?: boolean;
+  /** alreadyFixed 的具体证据 */
+  evidence?: string;
 }
 
 export interface BatchFixResult {

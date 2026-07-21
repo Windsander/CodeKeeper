@@ -103,6 +103,21 @@ const ENV_PREP_DECISION_TOOL: ToolDefinition = {
   },
 };
 
+const STATISTICAL_REPORT_TOOL: ToolDefinition = {
+  name: 'statistical_report_decision',
+  description:
+    '判断 discussion 是否为批量统计/指标聚合报告（只做统计汇总/排名/指标展示，没有需要逐条修改代码的具体问题）',
+  input_schema: {
+    type: 'object',
+    properties: {
+      isStatisticalReport: { type: 'boolean' },
+      reason: { type: 'string' },
+    },
+    required: ['isStatisticalReport', 'reason'],
+    additionalProperties: false,
+  },
+};
+
 /**
  * Maintainer 对单条 finding/discussion 可执行的最终动作
  */
@@ -209,8 +224,19 @@ export class MaintainerBrain {
     mrContext?: MrContext;
     /** 同 MR 其他相关 findings（可选） */
     relatedFindings?: ReviewFinding[];
+    /** finding 是否来自历史评审提交 */
+    staleFinding?: boolean;
   }): Promise<CognitiveDecision> {
-    const { finding, fileContent, originalComment, mrIid, userId, mrContext, relatedFindings } = params;
+    const {
+      finding,
+      fileContent,
+      originalComment,
+      mrIid,
+      userId,
+      mrContext,
+      relatedFindings,
+      staleFinding,
+    } = params;
 
     // 风险等级未开启时，不直接修复，而是询问 Reviewer 如何处理
     if (!this.allowedRiskLevels.includes(finding.severity)) {
@@ -227,12 +253,12 @@ export class MaintainerBrain {
 
     const recalledMemories = await this.recallMemories(userId, finding, originalComment);
     logMemorySnapshot('MaintainerBrain.decide 召回记忆后');
-    console.log(`[MaintainerBrain] recalledMemories 数量=${recalledMemories.length}, 总字符=${recalledMemories.reduce((sum, m) => sum + m.length, 0)}`);
+    console.log(
+      `[MaintainerBrain] recalledMemories 数量=${recalledMemories.length}, 总字符=${recalledMemories.reduce((sum, m) => sum + m.length, 0)}`
+    );
 
     const focusedContext =
-      typeof fileContent === 'string'
-        ? buildFocusedContext(fileContent, finding)
-        : fileContent;
+      typeof fileContent === 'string' ? buildFocusedContext(fileContent, finding) : fileContent;
     const classification = await new IssueScopeClassifier({
       llmClient: this.options.llmClient,
     }).classify(finding, focusedContext);
@@ -286,6 +312,7 @@ export class MaintainerBrain {
           extraFileContexts: [],
           projectContext: this.options.projectContext,
           soulContent: this.options.soulContent,
+          staleFinding,
         },
         this.options.cognitiveDepth ?? 'standard'
       );
@@ -322,6 +349,58 @@ export class MaintainerBrain {
       ...decision,
       scope: decision.scope && decision.scope !== 'local' ? decision.scope : classification.scope,
     };
+  }
+
+  /**
+   * 修复循环无进展时，基于当前分支的完整文件重新判断问题是否仍然存在。
+   */
+  async recheckAlreadyFixed(finding: ReviewFinding): Promise<{
+    alreadyFixed: boolean;
+    reason: string;
+    evidence?: string;
+  }> {
+    const manager = this.options.worktreeManager;
+    if (!manager) {
+      return { alreadyFixed: false, reason: '未配置 worktree，无法重新检查当前文件' };
+    }
+
+    try {
+      const resolved = await manager.resolveFilePath(finding.file);
+      if (!resolved) {
+        return { alreadyFixed: false, reason: `当前分支无法定位文件 ${finding.file}` };
+      }
+      const fileContent = manager.readFile(resolved);
+      const fileOverview = await this.safeGetFileOverview(resolved);
+      const engine = new CognitiveEngine({
+        llmClient: this.options.llmClient,
+        recallPlanner: this.options.recallPlanner,
+        memoryClient: this.options.memoryClient,
+        worktreeManager: manager,
+      });
+      return engine.checkAlreadyFixed({
+        finding: { ...finding, file: resolved },
+        fileContent,
+        originalComment: '',
+        mrContext: {
+          iid: 0,
+          title: '',
+          sourceBranch: '',
+          targetBranch: '',
+          description: '',
+          diffSummary: '',
+          changedFiles: [],
+        },
+        relatedFindings: [],
+        recalledMemories: [],
+        fileOverview,
+        extraFileContexts: [],
+        projectContext: this.options.projectContext,
+        soulContent: this.options.soulContent,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { alreadyFixed: false, reason: `重新检查当前文件失败：${message}` };
+    }
   }
 
   /**
@@ -395,6 +474,30 @@ export class MaintainerBrain {
   }
 
   /**
+   * 判断 discussion 是否为批量统计/指标聚合报告（如 lint 计数、覆盖率、扫描统计等）。
+   *
+   * 这类报告常被 parseFindings 误解析成一堆文件级 finding（全是 :1），
+   * 若据此进入修复流程会污染 MR。此处由 LLM 根据内容实质判断，与具体报告格式无关，
+   * 因此能跨项目、跨工具通用。判定失败时保守返回 false（按非统计报告处理）。
+   */
+  async isStatisticalReport(body: string): Promise<boolean> {
+    const prompt = this.promptLoader.load('maintainer-statistical-report-task', { body });
+    try {
+      const toolCall = await this.options.llmClient.completeDecision(
+        [STATISTICAL_REPORT_TOOL],
+        prompt,
+        '你是 MR 评论分类助手，必须从 statistical_report_decision 工具输出判定结论'
+      );
+      const input = toolCall.input as { isStatisticalReport?: boolean; reason?: string };
+      return input.isStatisticalReport === true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[MaintainerBrain] 统计报告判定失败，保守按非统计报告处理:', message);
+      return false;
+    }
+  }
+
+  /**
    * 从评论内容中解析可修复的 finding 列表
    */
   async parseFindings(input: ParseFindingsInput): Promise<ReviewFinding[]> {
@@ -419,7 +522,11 @@ export class MaintainerBrain {
   ): Promise<string[]> {
     // 优先使用 RecallPlanner 让 Agent 自己决定查什么记忆
     if (this.options.recallPlanner) {
-      const query = `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(0, 2000);
+      const query =
+        `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(
+          0,
+          2000
+        );
       const plan = await this.options.recallPlanner.plan({
         role: 'maintainer',
         taskType: 'fix',
@@ -432,10 +539,8 @@ export class MaintainerBrain {
 
     // fallback：未提供 planner 时维持原有三路查询
     if (!this.options.memoryClient) return [];
-    const query = `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(
-      0,
-      2000
-    );
+    const query =
+      `${finding.file} ${finding.line} ${finding.message} ${originalComment ?? ''}`.slice(0, 2000);
     const [userPrefs, projectKnowledge, maintenanceMemories] = await Promise.all([
       this.options.memoryClient.recallUserPreferences(userId, query),
       this.options.memoryClient.recallProjectKnowledge(query),
@@ -444,13 +549,13 @@ export class MaintainerBrain {
 
     const memories: string[] = [];
     if (userPrefs.length > 0) {
-      memories.push(`用户偏好：\n${userPrefs.map((m) => `- ${m}`).join('\n')}`);
+      memories.push(`用户偏好：\n${userPrefs.map(m => `- ${m}`).join('\n')}`);
     }
     if (projectKnowledge.length > 0) {
-      memories.push(`项目知识：\n${projectKnowledge.map((m) => `- ${m}`).join('\n')}`);
+      memories.push(`项目知识：\n${projectKnowledge.map(m => `- ${m}`).join('\n')}`);
     }
     if (maintenanceMemories.length > 0) {
-      memories.push(`维护历史：\n${maintenanceMemories.map((m) => `- ${m}`).join('\n')}`);
+      memories.push(`维护历史：\n${maintenanceMemories.map(m => `- ${m}`).join('\n')}`);
     }
     return memories;
   }
@@ -485,11 +590,10 @@ export class MaintainerBrain {
     threadNotes: Array<{ author: string; body: string; createdAt: string }>;
     maintainerName: string;
   }): Promise<MaintainerDecision> {
-    const threadContext = await summarizeThreadNotes(
-      this.options.llmClient,
-      params.threadNotes,
-      { maxRawTokens: 8000, maxRecentItems: 5 }
-    );
+    const threadContext = await summarizeThreadNotes(this.options.llmClient, params.threadNotes, {
+      maxRawTokens: 8000,
+      maxRecentItems: 5,
+    });
     const fileContentString =
       typeof params.fileContent === 'string'
         ? params.fileContent
@@ -515,7 +619,7 @@ export class MaintainerBrain {
     const prompt = this.promptLoader.load('env-prep-task', {
       availableScripts:
         context.availableScripts.length > 0
-          ? context.availableScripts.map((s) => `- ${s}`).join('\n')
+          ? context.availableScripts.map(s => `- ${s}`).join('\n')
           : '（未能读取到 package.json scripts）',
       validateOutput: context.validateOutput.slice(0, 4000),
     });
@@ -556,7 +660,12 @@ export class MaintainerBrain {
     let parsed: unknown[] = [];
     if (Array.isArray(input)) {
       parsed = input;
-    } else if (input && typeof input === 'object' && 'findings' in input && Array.isArray(input.findings)) {
+    } else if (
+      input &&
+      typeof input === 'object' &&
+      'findings' in input &&
+      Array.isArray(input.findings)
+    ) {
       parsed = input.findings as unknown[];
     } else {
       return [];
@@ -564,7 +673,7 @@ export class MaintainerBrain {
 
     return parsed
       .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
-      .map((item) => {
+      .map(item => {
         let file = String(item.file ?? '');
         let line = Number(item.line ?? 0);
         if ((!file || line <= 0) && position) {
@@ -598,8 +707,9 @@ export class MaintainerBrain {
 
     // 匹配常见文件路径 + 行号，例如 src/a.ts:10、./src/a.ts:10
     const fileLinePattern = /\b([\w\-./]+\.[a-zA-Z0-9]+):(\d+)\b/;
-    // 匹配表格/列表中只给路径、没有行号的文件级条目，例如 docs/plan.md | ...
-    const fileOnlyPattern = /^([\w\-./]+\.[a-zA-Z0-9]+)\b\s*\|/;
+    // 匹配表格/列表中只给路径、没有行号的文件级条目。
+    // 同时支持 markdown 表格（docs/plan.md | ...）和空格对齐的纯文本表格（src/main.ts    0    203）。
+    const fileOnlyPattern = /^([\w\-./]+\.[a-zA-Z0-9]+)\b(?:\s*\|\s*|\s+(?=[\d\s|.%-]))/;
     // 匹配常见列表标记：- * + 或 1. 2.
     const listMarkerPattern = /^([-+*]\s+|\d+\.\s+)/;
 
@@ -612,11 +722,7 @@ export class MaintainerBrain {
 
     for (const rawLine of lines) {
       // 表格行会有前导/尾随的 |，先去掉
-      const line = rawLine
-        .trim()
-        .replace(/^\|+/, '')
-        .replace(/\|+$/, '')
-        .trim();
+      const line = rawLine.trim().replace(/^\|+/, '').replace(/\|+$/, '').trim();
       if (!line) continue;
 
       if (current && line.startsWith('**问题描述**：')) {
@@ -662,10 +768,9 @@ export class MaintainerBrain {
           .replace(/`/g, '')
           .trim();
         // 去掉常见的 severity emoji/前缀
-        message = message.replace(
-          /^[\u{1F534}\u{1F7E0}\u{1F7E1}\u{1F7E2}\u{26AA}]+\s*/u,
-          ''
-        ).trim();
+        message = message
+          .replace(/^[\u{1F534}\u{1F7E0}\u{1F7E1}\u{1F7E2}\u{26AA}]+\s*/u, '')
+          .trim();
         if (message) current.message = message;
         continue;
       }
@@ -676,7 +781,7 @@ export class MaintainerBrain {
     }
 
     finalizeCurrent();
-    return findings.filter((f) => f.file && f.line > 0);
+    return findings.filter(f => f.file && f.line > 0);
   }
 
   private finalizeFinding(
@@ -703,13 +808,16 @@ export class MaintainerBrain {
   /**
    * 用 EverOS 中的 reviewer case 丰富 finding 的 message/suggestion/ruleId
    */
-  async enrichFindingsWithCases(findings: ReviewFinding[], mrIid: number): Promise<ReviewFinding[]> {
+  async enrichFindingsWithCases(
+    findings: ReviewFinding[],
+    mrIid: number
+  ): Promise<ReviewFinding[]> {
     const memoryClient = this.options.memoryClient;
     if (!memoryClient) return findings;
     const projectId = memoryClient.context.projectId;
 
     const enriched = await Promise.all(
-      findings.map(async (finding) => {
+      findings.map(async finding => {
         const key = buildFindingCaseKey({
           projectId,
           mrIid,
@@ -742,7 +850,7 @@ export class MaintainerBrain {
     items: string[],
     key: string
   ): { message?: string; suggestion?: string; ruleId?: string; status?: string } | null {
-    const text = items.find((item) => item.includes(`[CASE:${key}]`));
+    const text = items.find(item => item.includes(`[CASE:${key}]`));
     if (!text) return null;
 
     const ruleMatch = text.match(/规则:\s*(.+)/);
@@ -761,7 +869,9 @@ export class MaintainerBrain {
   private normalizeSeverity(severity: string): ReviewFinding['severity'] {
     const valid: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
     const upper = severity.toUpperCase();
-    return valid.includes(upper as ReviewFinding['severity']) ? (upper as ReviewFinding['severity']) : 'MEDIUM';
+    return valid.includes(upper as ReviewFinding['severity'])
+      ? (upper as ReviewFinding['severity'])
+      : 'MEDIUM';
   }
 
   private systemPrompt(): string {
@@ -800,7 +910,9 @@ export class MaintainerBrain {
     return lines.slice(0, maxLines).join('\n') + '\n...（内容已截断）';
   }
 
-  private parseDecisionFromToolCall(toolCall: { input: Record<string, unknown> }): MaintainerDecision {
+  private parseDecisionFromToolCall(toolCall: {
+    input: Record<string, unknown>;
+  }): MaintainerDecision {
     const input = toolCall.input as {
       action: string;
       reason?: string;
@@ -811,7 +923,9 @@ export class MaintainerBrain {
 
     const normalizedAction = this.normalizeDecisionAction(input.action);
     if (normalizedAction !== input.action) {
-      console.log(`[MaintainerBrain] 将模型返回的 action "${input.action}" 归一化为 "${normalizedAction}"`);
+      console.log(
+        `[MaintainerBrain] 将模型返回的 action "${input.action}" 归一化为 "${normalizedAction}"`
+      );
     }
 
     const reason = input.reason ?? '未说明理由';
@@ -832,7 +946,12 @@ export class MaintainerBrain {
       case 'ignore':
         return { action: 'ignore', reason };
       default:
-        console.warn('[MaintainerBrain] 模型返回未知 action:', input.action, '输入:', JSON.stringify(input));
+        console.warn(
+          '[MaintainerBrain] 模型返回未知 action:',
+          input.action,
+          '输入:',
+          JSON.stringify(input)
+        );
         return {
           action: 'ask',
           reason: `未知 action: ${input.action}，需要 Reviewer 确认`,
@@ -850,7 +969,9 @@ export class MaintainerBrain {
     return 'unknown';
   }
 
-  private normalizeNonFindingAction(action: string | undefined): 'record' | 'ask' | 'ignore' | 'unknown' {
+  private normalizeNonFindingAction(
+    action: string | undefined
+  ): 'record' | 'ask' | 'ignore' | 'unknown' {
     if (typeof action !== 'string') return 'unknown';
     const lower = action.toLowerCase().trim();
     if (['record', 'memo', 'memory', 'remember'].includes(lower)) return 'record';
@@ -872,6 +993,6 @@ export class MaintainerBrain {
     ];
     if (typeof category !== 'string') return undefined;
     const lower = category.toLowerCase().trim();
-    return valid.find((c) => c === lower);
+    return valid.find(c => c === lower);
   }
 }

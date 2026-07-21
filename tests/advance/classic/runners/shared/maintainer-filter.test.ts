@@ -55,7 +55,17 @@ describe('isDiscussionPending', () => {
         },
       ],
     });
-    const state = makeState({ processedDiscussions: { 'd-1': { noteCount: 2, processedAt: 1 } } });
+    const state = makeState({
+      processedDiscussions: { 'd-1': { noteCount: 2, processedAt: 1 } },
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': { action: 'ignore', reason: '已忽略', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
     expect(isDiscussionPending(d, state)).toBe(false);
   });
 
@@ -70,10 +80,71 @@ describe('isDiscussionPending', () => {
     expect(isDiscussionPending(d, state)).toBe(true);
   });
 
-  it('交互式等待中的 discussion 进入流程', () => {
+  it('交互式等待中且无新人工回复时不再每轮进入流程', () => {
+    const now = Date.now();
+    const d = makeDiscussion({
+      notes: [
+        { author: 'human', body: '这里要怎么改？', createdAt: new Date(now - 60_000).toISOString() },
+        {
+          author: 'maintainer',
+          body: '能否补充一下期望？\n\n---\n*生成于 2026/01/01 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: new Date(now - 30_000).toISOString(),
+        },
+      ],
+    });
+    const state = makeState({
+      interactiveThreads: {
+        'd-1': { status: 'awaiting-reply', askedAt: now - 30_000, question: '能否补充？', filePath: 'a.ts' },
+      },
+      processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 30_000 } },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('交互式等待中出现新人工回复时进入流程', () => {
+    const now = Date.now();
+    const d = makeDiscussion({
+      notes: [
+        { author: 'human', body: '这里要怎么改？', createdAt: new Date(now - 60_000).toISOString() },
+        {
+          author: 'maintainer',
+          body: '能否补充一下期望？\n\n---\n*生成于 2026/01/01 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: new Date(now - 30_000).toISOString(),
+        },
+        { author: 'human', body: '按方案 A 改', createdAt: new Date(now - 10_000).toISOString() },
+      ],
+    });
+    const state = makeState({
+      interactiveThreads: {
+        'd-1': { status: 'awaiting-reply', askedAt: now - 30_000, question: '能否补充？', filePath: 'a.ts' },
+      },
+      processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 30_000 } },
+    });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
+  it('交互式提问 note 被人工删除时进入流程清理脏状态', () => {
+    const now = Date.now();
+    const d = makeDiscussion({
+      notes: [
+        // 只剩人工 note，Maintainer 的提问 note 已被删除
+        { author: 'human', body: '这里为什么要这么改？', createdAt: new Date(now - 60_000).toISOString() },
+      ],
+    });
+    const state = makeState({
+      interactiveThreads: {
+        'd-1': { status: 'awaiting-reply', askedAt: now - 30_000, question: '能否补充？', filePath: 'a.ts' },
+      },
+      processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 30_000 } },
+    });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
+  it('交互式等待超时后进入流程以便收尾', () => {
     const d = makeDiscussion();
     const state = makeState({
       interactiveThreads: {
+        // askedAt 极早，必然超过 3 天超时
         'd-1': { status: 'awaiting-reply', askedAt: 1, question: '请问？', filePath: 'a.ts' },
       },
       processedDiscussions: { 'd-1': { noteCount: 2, processedAt: 1 } },
@@ -89,7 +160,65 @@ describe('isDiscussionPending', () => {
     expect(isDiscussionPending(d, state)).toBe(true);
   });
 
-  it('存在 Maintainer 最终回复时跳过', () => {
+  it('已处理过但无处理证据（空 threadState）时放行重新评估', () => {
+    // 旧版本走了 non-finding 路径，只记了 noteCount，没留任何决策记录，
+    // 不能因为「处理过」就永久压住真实 finding
+    const d = makeDiscussion({
+      notes: [{ author: 'ci-bot', body: 'CI Review 报告', createdAt: '2026-01-01T00:00:00Z' }],
+    });
+    const state = makeState({
+      processedDiscussions: { 'd-1': { noteCount: 1, processedAt: 1 } },
+      maintainerThreadState: {
+        'd-1': { decisions: {}, lastReviewerNoteAt: 0 },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
+  it('已处理且有非 finding 处理记录时跳过', () => {
+    const d = makeDiscussion({
+      notes: [{ author: 'ci-bot', body: 'CI Review 报告', createdAt: '2026-01-01T00:00:00Z' }],
+    });
+    const state = makeState({
+      processedDiscussions: { 'd-1': { noteCount: 1, processedAt: 1 } },
+      maintainerThreadState: {
+        'd-1': { decisions: {}, lastReviewerNoteAt: 0, nonFindingAction: 'record' },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('CI bot 作者的 note 不算人工回复，不触发重评估', () => {
+    // Maintainer 已回复后，CI bot 的重扫 note 不算人工新回复，不应重新处理
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer', body: '有个问题', createdAt: '2026-01-01T00:00:00Z' },
+        {
+          author: 'maintainer',
+          body: '✅ 已处理\n\n---\n*生成于 2026/01/01 01:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-01T01:00:00Z',
+        },
+        {
+          author: 'project_193142_bot_63ebd35e8f3b9293ee769e43fa413e1e',
+          body: 'CI Review 重扫报告',
+          createdAt: '2026-01-01T02:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': { action: 'ignore', reason: '已处理', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('存在 Maintainer 最终回复且有处理证据时跳过', () => {
     const d = makeDiscussion({
       notes: [
         { author: 'reviewer', body: 'a', createdAt: '2026-01-01T00:00:00Z' },
@@ -100,10 +229,91 @@ describe('isDiscussionPending', () => {
         },
       ],
     });
-    expect(isDiscussionPending(d, makeState())).toBe(false);
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': {
+              action: 'ignore',
+              alreadyFixed: true,
+              reason: '已修复',
+              failedAttempts: 0,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
   });
 
-  it('最后一条 Maintainer note 是提问时进入流程', () => {
+  it('有 Maintainer 回复但无任何处理记录时放行重新评估', () => {
+    // 旧版本对含真实 finding 的评论只发过轻松回复，未记录任何决策，
+    // 不能因为有一条 Maintainer note 就永久跳过
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer-bot', body: 'CI Review 报告（含 finding 表格）', createdAt: '2026-01-01T00:00:00Z' },
+        {
+          author: 'maintainer',
+          body: '感谢 Review 的详细分析！\n\n---\n*生成于 2026/01/01 01:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-01T01:00:00Z',
+        },
+      ],
+    });
+    expect(isDiscussionPending(d, makeState())).toBe(true);
+  });
+
+  it('有 Maintainer 回复且有非 finding 处理记录时跳过', () => {
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer-bot', body: '普通汇总评论', createdAt: '2026-01-01T00:00:00Z' },
+        {
+          author: 'maintainer',
+          body: '感谢确认\n\n---\n*生成于 2026/01/01 01:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-01T01:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {},
+          lastReviewerNoteAt: 0,
+          nonFindingAction: 'ignore',
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('最后一条 Maintainer note 是提问且无人工回复时跳过', () => {
+    const now = Date.now();
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer', body: 'a', createdAt: new Date(now - 120_000).toISOString() },
+        {
+          author: 'maintainer',
+          body: '能否补充一下期望？\n\n---\n*生成于 2026/01/01 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: new Date(now - 60_000).toISOString(),
+        },
+      ],
+    });
+    // 现行代码提问时会登记交互等待状态，等待期间由交互分支静默处理
+    const state = makeState({
+      interactiveThreads: {
+        'd-1': {
+          status: 'awaiting-reply',
+          askedAt: now - 60_000,
+          question: '能否补充一下期望？',
+          filePath: 'a.ts',
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('提问后有人工回复时进入流程', () => {
     const d = makeDiscussion({
       notes: [
         { author: 'reviewer', body: 'a', createdAt: '2026-01-01T00:00:00Z' },
@@ -112,9 +322,51 @@ describe('isDiscussionPending', () => {
           body: '能否补充一下期望？\n\n---\n*生成于 2026/01/01 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
           createdAt: '2026-01-02T00:00:00Z',
         },
+        { author: 'human', body: '补充说明', createdAt: '2026-01-03T00:00:00Z' },
       ],
     });
     expect(isDiscussionPending(d, makeState())).toBe(true);
+  });
+
+  it('Reviewer bot 发的原始 finding 未回复时进入流程', () => {
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'reviewer-bot',
+          body: 'src/a.ts:1 变量未使用\n\n---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent · bot*',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    expect(isDiscussionPending(d, makeState())).toBe(true);
+  });
+
+  it('Reviewer bot 的 finding 已被 Maintainer 回复且有处理证据后跳过', () => {
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'reviewer-bot',
+          body: 'src/a.ts:1 变量未使用\n\n---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent · bot*',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          author: 'maintainer',
+          body: '✅ 已修复\n\n---\n*生成于 2026/01/02 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-02T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': { action: 'fix', reason: '已删除', failedAttempts: 0, fixSucceeded: true, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
   });
 
   it('存在失败且未达重试上限的 fix 时，即使最后一条是 Maintainer 最终回复也进入流程', () => {

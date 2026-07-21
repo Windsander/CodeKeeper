@@ -3,6 +3,9 @@ import { CognitiveEngine } from '../../../../src/advance/classic/cognitive-engin
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { CognitiveContext } from '../../../../src/advance/classic/fix/cognitive-types.js';
 import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
+import type { RecallPlanner } from '../../../../src/advance/classic/memory/recall-planner.js';
+import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
+import { mockOf } from '../../../helpers/mock-of.js';
 
 function makeContext(): CognitiveContext {
   return {
@@ -174,15 +177,15 @@ describe('CognitiveEngine', () => {
       },
     });
 
-    const recallPlanner = {
+    const recallPlanner = mockOf<RecallPlanner>({
       plan: vi.fn().mockResolvedValue({
         needsRecall: true,
         queries: [{ type: 'project_knowledge', query: 'unused variable convention' }],
       }),
       execute: vi.fn().mockResolvedValue(['项目约定：未使用变量应删除']),
-    };
+    });
 
-    const engine = new CognitiveEngine({ llmClient, recallPlanner: recallPlanner as unknown as import('../../../../src/advance/classic/memory/recall-planner.js').RecallPlanner });
+    const engine = new CognitiveEngine({ llmClient, recallPlanner });
     const decision = await engine.decide(makeContext(), 'standard');
 
     expect(decision.action).toBe('fix');
@@ -252,7 +255,12 @@ describe('CognitiveEngine', () => {
                 name: 'options_decision',
                 input: {
                   options: [
-                    { description: '添加 error 字段', pros: ['修复类型错误'], cons: [], risk: 'low' },
+                    {
+                      description: '添加 error 字段',
+                      pros: ['修复类型错误'],
+                      cons: [],
+                      risk: 'low',
+                    },
                   ],
                 },
               },
@@ -263,7 +271,14 @@ describe('CognitiveEngine', () => {
               {
                 id: '4',
                 name: 'final_decision',
-                input: { action: 'fix', reason: '添加 error 字段', analysis: '分析', consideredOptions: [], reasoning: '理由', confidence: 'high' },
+                input: {
+                  action: 'fix',
+                  reason: '添加 error 字段',
+                  analysis: '分析',
+                  consideredOptions: [],
+                  reasoning: '理由',
+                  confidence: 'high',
+                },
               },
             ],
           },
@@ -275,6 +290,125 @@ describe('CognitiveEngine', () => {
     const decision = await engine.decide(makeContext(), 'standard');
 
     expect(decision.action).toBe('fix');
+  });
+
+  it('standard 模式聚焦窗口不足时会读取完整文件复核 alreadyFixed', async () => {
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'inquiry_decision',
+                input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'already_fixed_check',
+                input: {
+                  alreadyFixed: false,
+                  reason: '聚焦窗口看不到相关类型定义',
+                  needsMoreContext: true,
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '3',
+                name: 'already_fixed_check',
+                input: {
+                  alreadyFixed: true,
+                  reason: '完整文件中第 10 行已定义 error 字段',
+                  evidence: '第 10 行已包含 error?: number',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const worktreeManager = mockOf<WorktreeManager>({
+      resolveFilePath: vi.fn().mockResolvedValue('src/a.ts'),
+      readFile: vi
+        .fn()
+        .mockResolvedValue('完整文件内容\nconst error: number | undefined = undefined;\n'),
+    });
+
+    const engine = new CognitiveEngine({ llmClient, worktreeManager });
+    const decision = await engine.decide(makeContext(), 'standard');
+
+    expect(decision.action).toBe('ignore');
+    expect(decision.alreadyFixed).toBe(true);
+    expect(decision.replyBody).toContain('第 10 行已包含 error?: number');
+  });
+
+  it('历史 finding 即使聚焦检查不要求更多上下文也会读取完整文件复核', async () => {
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'inquiry_decision',
+                input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'already_fixed_check',
+                input: {
+                  alreadyFixed: false,
+                  reason: '旧行号附近仍像是缺少默认 sink 测试',
+                  needsMoreContext: false,
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '3',
+                name: 'already_fixed_check',
+                input: {
+                  alreadyFixed: true,
+                  reason: '当前完整文件已经覆盖默认 sink 路径',
+                  evidence: '完整文件中存在未注入 tracker 时不抛异常的测试',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const readFile = vi.fn().mockResolvedValue('完整文件中存在默认 sink 测试');
+    const worktreeManager = mockOf<WorktreeManager>({
+      resolveFilePath: vi.fn().mockResolvedValue('src/a.ts'),
+      readFile,
+    });
+    const context = makeContext();
+    context.staleFinding = true;
+
+    const engine = new CognitiveEngine({ llmClient, worktreeManager });
+    const decision = await engine.decide(context, 'standard');
+
+    expect(readFile).toHaveBeenCalledWith('src/a.ts');
+    expect(decision.action).toBe('ignore');
+    expect(decision.alreadyFixed).toBe(true);
+    expect(decision.replyBody).toContain('完整文件中存在未注入 tracker 时不抛异常的测试');
   });
 
   it('fast 模式返回 alreadyFixed=true 但 action=fix 时归一化为 ignore', async () => {
@@ -295,13 +429,14 @@ describe('CognitiveEngine', () => {
   });
 
   it('reflect 生成反思并关联 case key', async () => {
-    const recorded: Array<{ caseKey: string; reflection: string; outcome: 'success' | 'failure' }> = [];
-    const memoryClient = {
+    const recorded: Array<{ caseKey: string; reflection: string; outcome: 'success' | 'failure' }> =
+      [];
+    const memoryClient = mockOf<IMemoryClient>({
       context: { projectId: 'p1' },
-      recordReflection: vi.fn().mockImplementation(async (input) => {
+      recordReflection: vi.fn().mockImplementation(async input => {
         recorded.push(input);
       }),
-    } as unknown as IMemoryClient;
+    });
 
     const engine = new CognitiveEngine({
       llmClient: new LlmClient({

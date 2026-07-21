@@ -6,11 +6,7 @@ import type { WorktreeManager } from './worktree/worktree-manager.js';
 import { buildFindingCaseKey } from './memory/finding-case-key.js';
 import { logMemorySnapshot } from './utils/memory-snapshot.js';
 import { defaultPromptLoader, type PromptLoader } from '../llm/prompts/loader.js';
-import type {
-  CognitiveContext,
-  CognitiveDecision,
-  CognitiveDepth,
-} from './fix/cognitive-types.js';
+import type { CognitiveContext, CognitiveDecision, CognitiveDepth } from './fix/cognitive-types.js';
 
 const INQUIRY_DECISION_TOOL: ToolDefinition = {
   name: 'inquiry_decision',
@@ -91,13 +87,19 @@ const FINAL_DECISION_TOOL: ToolDefinition = {
 
 const ALREADY_FIXED_CHECK_TOOL: ToolDefinition = {
   name: 'already_fixed_check',
-  description: '判断 finding 描述的问题在代码中是否已经被修复',
+  description:
+    '判断 finding 描述的问题在代码中是否已经被修复。如果提供的聚焦代码不足以判断，可设置 needsMoreContext=true 请求读取完整文件后再判。',
   input_schema: {
     type: 'object',
     properties: {
       alreadyFixed: { type: 'boolean' },
       reason: { type: 'string' },
       evidence: { type: 'string' },
+      needsMoreContext: {
+        type: 'boolean',
+        description:
+          '当聚焦代码窗口太窄、缺少必要上下文（如类型定义、跨函数引用）导致无法判断时设为 true',
+      },
     },
     required: ['alreadyFixed', 'reason'],
     additionalProperties: false,
@@ -215,7 +217,9 @@ export class CognitiveEngine {
     // 显式预检：issue 是否已经被修复，避免对已修复问题生成无效修复方案
     const alreadyFixed = await this.checkAlreadyFixed(enrichedContext);
     if (alreadyFixed.alreadyFixed) {
-      console.log(`[CognitiveEngine] 检测到问题已修复: ${enrichedContext.finding.file}:${enrichedContext.finding.line}`);
+      console.log(
+        `[CognitiveEngine] 检测到问题已修复: ${enrichedContext.finding.file}:${enrichedContext.finding.line}`
+      );
       return {
         action: 'ignore',
         reason: alreadyFixed.reason,
@@ -239,18 +243,18 @@ export class CognitiveEngine {
     const overviewText = context.fileOverview
       ? `文件总行数：${context.fileOverview.lineCount}\n主要符号：\n${context.fileOverview.symbols
           .slice(0, 20)
-          .map((s) => `- ${s.name} (${s.kind}) @ ${s.startLine}`)
+          .map(s => `- ${s.name} (${s.kind}) @ ${s.startLine}`)
           .join('\n')}`
       : '未提供文件概览';
 
     const relatedFindings =
       context.relatedFindings.length > 0
-        ? `同 MR 其他 findings：\n${context.relatedFindings.map((f) => `- ${f.file}:${f.line} ${f.message}`).join('\n')}`
+        ? `同 MR 其他 findings：\n${context.relatedFindings.map(f => `- ${f.file}:${f.line} ${f.message}`).join('\n')}`
         : '无';
 
     const recalledMemories =
       context.recalledMemories.length > 0
-        ? `已召回记忆：\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
+        ? `已召回记忆：\n${context.recalledMemories.map(m => `- ${m}`).join('\n')}`
         : '无';
 
     const prompt = this.promptLoader.load('cognitive-inquiry-task', {
@@ -286,7 +290,9 @@ export class CognitiveEngine {
     console.log(`[CognitiveEngine] enrichContext 查询数量=${inquiry.queries.length}`);
 
     const extraMemories: string[] = [...context.recalledMemories];
-    const extraFileContexts: string[] = context.extraFileContexts ? [...context.extraFileContexts] : [];
+    const extraFileContexts: string[] = context.extraFileContexts
+      ? [...context.extraFileContexts]
+      : [];
 
     for (const q of inquiry.queries) {
       if (q.type === 'project_knowledge' && this.options.recallPlanner) {
@@ -296,7 +302,9 @@ export class CognitiveEngine {
           taskSummary: `${q.target} ${context.finding.message}`,
         });
         const memories = await this.options.recallPlanner.execute(plan);
-        console.log(`[CognitiveEngine] project_knowledge 召回结果数量=${memories.length}, 总字符=${memories.reduce((sum, m) => sum + m.length, 0)}`);
+        console.log(
+          `[CognitiveEngine] project_knowledge 召回结果数量=${memories.length}, 总字符=${memories.reduce((sum, m) => sum + m.length, 0)}`
+        );
         extraMemories.push(...memories);
       }
       if (q.type === 'reviewer_preference' && this.options.memoryClient) {
@@ -304,7 +312,9 @@ export class CognitiveEngine {
           context.mrContext.iid.toString(),
           q.target
         );
-        console.log(`[CognitiveEngine] reviewer_preference 召回结果数量=${items.length}, 总字符=${items.reduce((sum, m) => sum + m.length, 0)}`);
+        console.log(
+          `[CognitiveEngine] reviewer_preference 召回结果数量=${items.length}, 总字符=${items.reduce((sum, m) => sum + m.length, 0)}`
+        );
         extraMemories.push(...items);
       }
       if (q.type === 'file_range' && this.options.worktreeManager) {
@@ -364,7 +374,7 @@ export class CognitiveEngine {
     try {
       const ranges = await manager.searchInFile(filePath, keyword);
       if (ranges.length === 0) return null;
-      const lines = ranges.map((r) => `- ${filePath}:${r.startLine}-${r.endLine}`).join('\n');
+      const lines = ranges.map(r => `- ${filePath}:${r.startLine}-${r.endLine}`).join('\n');
       return `## ${filePath} 中 "${keyword}" 的匹配位置\n${lines}`;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -376,19 +386,62 @@ export class CognitiveEngine {
   /**
    * 显式检查 finding 描述的问题是否已经在当前代码中被修复
    */
-  private async checkAlreadyFixed(context: CognitiveContext): Promise<{
+  async checkAlreadyFixed(context: CognitiveContext): Promise<{
     alreadyFixed: boolean;
     reason: string;
     evidence?: string;
+  }> {
+    // 第一层：用聚焦上下文做轻量判断。prompt 短、噪音少，覆盖大多数情况。
+    const focusedResult = await this.runAlreadyFixedCheck(context, context.fileContent, '聚焦窗口');
+    if (focusedResult.alreadyFixed) {
+      console.log(
+        `[CognitiveEngine] 聚焦窗口判定问题已修复: ${context.finding.file}:${context.finding.line}`
+      );
+      return focusedResult;
+    }
+    if (!focusedResult.needsMoreContext && !context.staleFinding) {
+      console.log(
+        `[CognitiveEngine] 聚焦窗口判定问题未修复: ${context.finding.file}:${context.finding.line}, reason=${focusedResult.reason}`
+      );
+      return focusedResult;
+    }
+
+    // 第二层：聚焦窗口不够，或 finding 来自历史提交时，读完整文件再判一次。
+    console.log(
+      `[CognitiveEngine] 读取完整文件复核: ${context.finding.file}:${context.finding.line}, stale=${context.staleFinding === true}, reason=${focusedResult.reason}`
+    );
+    const fullContent = await this.loadFullFileContentForCheck(context);
+    const fullResult = await this.runAlreadyFixedCheck(context, fullContent, '完整文件');
+    console.log(
+      `[CognitiveEngine] 完整文件复核结果: ${context.finding.file}:${context.finding.line}, alreadyFixed=${fullResult.alreadyFixed}, reason=${fullResult.reason}`
+    );
+    return fullResult;
+  }
+
+  /**
+   * 执行一次 already_fixed_check 工具调用。
+   */
+  private async runAlreadyFixedCheck(
+    context: CognitiveContext,
+    fileContent: string,
+    sourceLabel: string
+  ): Promise<{
+    alreadyFixed: boolean;
+    reason: string;
+    evidence?: string;
+    needsMoreContext?: boolean;
   }> {
     const prompt = this.promptLoader.load('cognitive-already-fixed-task', {
       findingFile: context.finding.file,
       findingLine: String(context.finding.line),
       findingMessage: context.finding.message,
       findingSuggestion: context.finding.suggestion ?? '',
-      fileContent: context.fileContent,
+      fileContent,
       fileOverview: this.formatFileOverview(context.fileOverview),
       extraFileContexts: this.formatExtraFileContexts(context.extraFileContexts),
+      staleWarning: context.staleFinding
+        ? '注意：该 finding 来自落后于当前 MR HEAD 的历史评审提交。必须以当前完整文件为准，不得仅凭旧行号判断问题仍然存在。'
+        : '',
     });
 
     try {
@@ -401,16 +454,44 @@ export class CognitiveEngine {
         alreadyFixed?: boolean;
         reason?: string;
         evidence?: string;
+        needsMoreContext?: boolean;
       };
       return {
         alreadyFixed: input.alreadyFixed === true,
         reason: input.reason ?? '未说明理由',
         evidence: input.evidence,
+        needsMoreContext: input.needsMoreContext === true,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(`[CognitiveEngine] already_fixed_check 调用失败: ${message}`);
+      console.warn(`[CognitiveEngine] already_fixed_check (${sourceLabel}) 调用失败: ${message}`);
       return { alreadyFixed: false, reason: '无法判断问题是否已修复' };
+    }
+  }
+
+  /**
+   * 为 already_fixed_check 加载完整文件内容，避免聚焦窗口太窄导致误判。
+   * 大文件超过阈值时回退到传入的聚焦内容。
+   */
+  private async loadFullFileContentForCheck(context: CognitiveContext): Promise<string> {
+    const manager = this.options.worktreeManager;
+    if (!manager) {
+      return context.fileContent;
+    }
+    try {
+      const resolved = await manager.resolveFilePath(context.finding.file);
+      if (!resolved) {
+        return context.fileContent;
+      }
+      const fullContent = await manager.readFile(resolved);
+      if (typeof fullContent !== 'string' || fullContent.length > 100_000) {
+        return context.fileContent;
+      }
+      return fullContent;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CognitiveEngine] 读取完整文件 ${context.finding.file} 失败: ${message}`);
+      return context.fileContent;
     }
   }
 
@@ -419,7 +500,7 @@ export class CognitiveEngine {
     const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
     const relatedMemories =
       context.recalledMemories.length > 0
-        ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
+        ? `## 相关记忆\n${context.recalledMemories.map(m => `- ${m}`).join('\n')}`
         : '';
 
     const prompt = this.promptLoader.load('cognitive-options-task', {
@@ -452,7 +533,7 @@ export class CognitiveEngine {
     const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
     const relatedMemories =
       context.recalledMemories.length > 0
-        ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
+        ? `## 相关记忆\n${context.recalledMemories.map(m => `- ${m}`).join('\n')}`
         : '';
     const optionsText = options
       .map(
@@ -488,11 +569,9 @@ export class CognitiveEngine {
     const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
     const relatedMemories =
       context.recalledMemories.length > 0
-        ? `## 相关记忆\n${context.recalledMemories.map((m) => `- ${m}`).join('\n')}`
+        ? `## 相关记忆\n${context.recalledMemories.map(m => `- ${m}`).join('\n')}`
         : '';
-    const findingRuleIdLine = context.finding.ruleId
-      ? `- 规则：${context.finding.ruleId}`
-      : '';
+    const findingRuleIdLine = context.finding.ruleId ? `- 规则：${context.finding.ruleId}` : '';
 
     return this.promptLoader.load('cognitive-fast-task', {
       findingFile: context.finding.file,
@@ -513,7 +592,7 @@ export class CognitiveEngine {
     if (!overview) return '';
     const symbols = overview.symbols
       .slice(0, 20)
-      .map((s) => `- ${s.name} (${s.kind}) @ ${s.startLine}`)
+      .map(s => `- ${s.name} (${s.kind}) @ ${s.startLine}`)
       .join('\n');
     return `## 文件概览\n总行数：${overview.lineCount}\n主要符号：\n${symbols || '（未识别到顶层符号）'}\n\n`;
   }
@@ -523,7 +602,10 @@ export class CognitiveEngine {
     return `## 补充上下文\n${contexts.join('\n\n')}\n\n`;
   }
 
-  private parseDecision(input: Record<string, unknown>, context: CognitiveContext): CognitiveDecision {
+  private parseDecision(
+    input: Record<string, unknown>,
+    context: CognitiveContext
+  ): CognitiveDecision {
     try {
       const parsed = input as {
         action: string;
@@ -543,14 +625,18 @@ export class CognitiveEngine {
       const base = this.normalizeBaseDecision(parsed, context);
       // 如果模型明确标记问题已修复，强制按 ignore 处理，避免对已修复代码发起无效修复
       if (parsed.alreadyFixed === true && base.action === 'fix') {
-        console.log(`[CognitiveEngine] 模型返回 alreadyFixed=true 但 action=fix，已归一化为 ignore: ${context.finding.file}:${context.finding.line}`);
+        console.log(
+          `[CognitiveEngine] 模型返回 alreadyFixed=true 但 action=fix，已归一化为 ignore: ${context.finding.file}:${context.finding.line}`
+        );
         return {
           action: 'ignore',
           reason: base.reason,
           alreadyFixed: true,
           replyBody: parsed.replyBody || base.replyBody || '当前代码已满足 Reviewer 的要求',
           analysis: parsed.analysis ?? '问题已修复',
-          consideredOptions: Array.isArray(parsed.consideredOptions) ? parsed.consideredOptions : [],
+          consideredOptions: Array.isArray(parsed.consideredOptions)
+            ? parsed.consideredOptions
+            : [],
           reasoning: parsed.reasoning ?? base.reason,
           confidence: this.normalizeConfidence(parsed.confidence),
         };
@@ -558,9 +644,7 @@ export class CognitiveEngine {
       return {
         ...base,
         analysis: parsed.analysis ?? '未提供分析',
-        consideredOptions: Array.isArray(parsed.consideredOptions)
-          ? parsed.consideredOptions
-          : [],
+        consideredOptions: Array.isArray(parsed.consideredOptions) ? parsed.consideredOptions : [],
         reasoning: parsed.reasoning ?? base.reason,
         confidence: this.normalizeConfidence(parsed.confidence),
       };
@@ -653,8 +737,8 @@ export class CognitiveEngine {
       return {
         needsMoreContext: parsed.needsMoreContext === true,
         queries: (parsed.queries ?? [])
-          .filter((q) => typeof q.type === 'string' && typeof q.target === 'string')
-          .map((q) => ({ type: q.type as string, target: q.target as string })),
+          .filter(q => typeof q.type === 'string' && typeof q.target === 'string')
+          .map(q => ({ type: q.type as string, target: q.target as string })),
         reason: parsed.reason ?? '未说明',
       };
     } catch {
@@ -665,7 +749,7 @@ export class CognitiveEngine {
   private parseOptions(input: Record<string, unknown>): OptionItem[] {
     try {
       const parsed = input as { options?: OptionItem[] };
-      return (parsed.options ?? []).filter((o) => typeof o.description === 'string');
+      return (parsed.options ?? []).filter(o => typeof o.description === 'string');
     } catch {
       return [];
     }

@@ -5,7 +5,7 @@
 2. 你只能使用提供的工具操作 worktree；不能运行任意 shell 命令。
 3. run_script 只能调用 package.json 中白名单内的 npm scripts（lint、typecheck、build、test、compile:packages）。
 4. 修改前必须先 read_file 查看目标文件的当前内容，确认现状后再改；禁止不读文件凭猜测修改。跨文件修改需分别读写相关文件。
-5. 写入协议：局部修改优先用 apply_patch；write_file 整文件覆盖仅限小文件（约 100 行以内）；写入更大的文件必须分段（第一段 overwrite，后续 append，每段约 100 行以内）。
+5. 写入协议：局部修改优先用 apply_patch；write_file 整文件覆盖仅限小文件（约 100 行以内）。写入更大的文件必须分段（第一段 overwrite，后续 append）——分段是为了单次响应不被截断，不是越细越好：每轮应尽量用满输出预算（一轮可连续发起多段 append，合计约 300 行），避免每轮只写一小段导致步数耗尽。
 6. 你必须把修复应用到 finding 指出的目标文件（{{findingFile}}）。如果修改涉及导出/导入，可同步修改相关文件，但核心改动必须在目标文件上。
 7. 调用 write_file 后，如果返回 unchanged=true，说明写入内容和原文件完全一致，没有产生任何变更；此时你必须检查是否写错了文件，并重新修改正确的文件。
 8. 如果 worktree 的运行环境尚未准备好（例如缺少 node_modules、workspace 包未编译、Rust/Python/Go 依赖未安装），你可以先使用 run_setup_command 安装或构建，再读取和修改文件。run_setup_command 仅用于安装/构建，禁止用于 git、find、grep 等查询命令。
