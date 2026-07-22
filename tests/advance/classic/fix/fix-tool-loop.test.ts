@@ -264,6 +264,41 @@ describe('FixToolLoop', () => {
     expect(result.success).toBe(true);
   });
 
+  it('只读探索达到上限后重新回查 already-fixed', async () => {
+    const recheckAlreadyFixed = vi.fn().mockResolvedValue({
+      alreadyFixed: true,
+      reason: '当前代码已经满足 Reviewer 要求',
+      evidence: '已有提交包含实例级生命周期保护',
+    });
+    const readResponses = Array.from({ length: 8 }, (_, index) => ({
+      toolCalls: [
+        {
+          id: String(index + 1),
+          name: 'read_file',
+          input: { relPath: 'src/index.ts', startLine: index * 10 + 1, endLine: index * 10 + 10 },
+        },
+      ],
+    }));
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient(readResponses),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 20,
+      maxReadOnlySteps: 3,
+      readOnlyReminderStep: 2,
+      recheckAlreadyFixed,
+    });
+
+    const result = await loop.run();
+
+    expect(recheckAlreadyFixed).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      success: true,
+      alreadyFixed: true,
+      reason: '当前代码已经满足 Reviewer 要求',
+    });
+  });
   it('可配置 maxStepsWithoutProgress，缩短无进展早退阈值', async () => {
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([

@@ -167,6 +167,54 @@ describe('MaintainerActor', () => {
     );
   });
 
+  it('修复循环同时收到原始 finding 和 Brain 补充方向', async () => {
+    const provider = createMockProvider();
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain();
+    const llmClient = createMockLlmClient([]);
+    const captured: { task?: string; system?: string } = {};
+    vi.spyOn(llmClient, 'completeWithTools').mockImplementation(
+      async (messages, _tools, options) => {
+        captured.task = String(messages[0]?.content ?? '');
+        captured.system = options?.system;
+        return {
+          content: '',
+          toolCalls: [
+            {
+              id: '1',
+              name: 'finish',
+              input: { success: false, reason: '需要继续分析所有生命周期引用' },
+            },
+          ],
+          stopReason: 'tool_use',
+        };
+      }
+    );
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '需要修复',
+      fixDescription: '检查 singleton reset 与 dispose 的多实例影响',
+      analysis: '',
+      consideredOptions: [],
+      reasoning: '',
+      confidence: 'medium',
+    };
+
+    const result = await actor.executeFix(mockMR, mockDiscussion, mockFinding, decision);
+
+    expect(result).toBe(false);
+    expect(captured.task).toContain('变量未使用');
+    expect(captured.task).toContain('删除');
+    expect(captured.system).toContain('检查 singleton reset 与 dispose 的多实例影响');
+  });
   it('commit 被 hook 拒绝时学习提交规范、写入项目记忆并重试', async () => {
     const provider = createMockProvider();
     const commitAndPush = vi

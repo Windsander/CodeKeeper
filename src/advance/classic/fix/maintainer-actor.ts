@@ -294,13 +294,18 @@ export class MaintainerActor {
     finding: ReviewFinding,
     decision: MaintainerDecision
   ): Promise<boolean> {
-    const fixDescription = decision.fixDescription ?? '根据 Reviewer 意见修改代码';
     const syntheticFinding: ReviewFinding = {
       ...finding,
-      message: fixDescription || finding.message,
-      suggestion: fixDescription || finding.suggestion,
       autoFixable: true,
     };
+    const fixGuidance = decision.fixDescription?.trim();
+    const extraSystemPrompt = fixGuidance
+      ? [
+          'MaintainerBrain 提供了以下补充修复方向。它只是实现提示，不能替代或覆盖 Reviewer 的原始 finding：',
+          fixGuidance,
+          '请始终以 Reviewer 原始问题、目标文件和建议为准，结合当前代码验证该方向是否完整。',
+        ].join('\n')
+      : undefined;
 
     console.log(`[MaintainerActor] 执行修复: ${finding.file}:${finding.line}`);
 
@@ -321,6 +326,7 @@ export class MaintainerActor {
         mr,
         memoryClient: this.options.memoryClient,
         recallPlanner: this.options.recallPlanner,
+        extraSystemPrompt,
         recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
       });
 

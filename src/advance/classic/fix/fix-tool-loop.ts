@@ -44,6 +44,10 @@ export interface FixToolLoopOptions {
   staleReminderStep?: number;
   /** 额外系统提示 */
   extraSystemPrompt?: string;
+  /** 连续未产生文件变更的最大步数，默认 8；新读取窗口不会无限延长该上限 */
+  maxReadOnlySteps?: number;
+  /** 触发只读探索提醒的步数阈值，默认 maxReadOnlySteps - 2 */
+  readOnlyReminderStep?: number;
   /** 验证策略，默认 WorkspaceValidationStrategy */
   validationStrategy?: ValidationStrategy;
   /** 可选的 prompt 加载器，默认使用全局 loader */
@@ -74,6 +78,8 @@ export class FixToolLoop {
   private readonly maxStepsWithoutProgress: number;
   private readonly staleReminderStep: number;
   private readonly extraSystemPrompt: string;
+  private readonly maxReadOnlySteps: number;
+  private readonly readOnlyReminderStep: number;
   private readonly registry: ToolRegistry;
   private readonly executor: ToolExecutor;
   private readonly validationStrategy: ValidationStrategy;
@@ -85,7 +91,9 @@ export class FixToolLoop {
   private deletedFiles = new Set<string>();
   private readFilesThisRun = new Set<string>();
   private stepsWithoutProgress = 0;
+  private stepsWithoutFileChange = 0;
   private budgetReminderSent = false;
+  private readOnlyReminderSent = false;
   private baselineResult?: ValidationResult;
   private lastValidationResult?: ValidationResult;
   private fallbackId = 0;
@@ -108,6 +116,10 @@ export class FixToolLoop {
     this.staleReminderStep =
       options.staleReminderStep ?? Math.max(1, this.maxStepsWithoutProgress - 2);
     this.extraSystemPrompt = options.extraSystemPrompt ?? '';
+    this.maxReadOnlySteps =
+      options.maxReadOnlySteps ?? Math.max(8, this.maxStepsWithoutProgress + 3);
+    this.readOnlyReminderStep =
+      options.readOnlyReminderStep ?? Math.max(1, this.maxReadOnlySteps - 2);
     this.promptLoader = options.promptLoader ?? defaultPromptLoader;
     this.recheckAlreadyFixed = options.recheckAlreadyFixed;
     this.registry = new ToolRegistry(FIX_TOOLS);
@@ -233,6 +245,11 @@ export class FixToolLoop {
       const hasFileChange =
         this.appliedFiles.size > prevAppliedCount || this.deletedFiles.size > prevDeletedCount;
       const hasNewRead = this.readFilesThisRun.size > prevReadCount;
+      if (hasFileChange) {
+        this.stepsWithoutFileChange = 0;
+      } else {
+        this.stepsWithoutFileChange++;
+      }
       if (hasFileChange || hasNewRead) {
         this.stepsWithoutProgress = 0;
       } else {
@@ -274,6 +291,25 @@ export class FixToolLoop {
           success: false,
           reason: this.promptLoader.load('fix-tool-loop-stale-failure-reason', {
             steps: String(this.stepsWithoutProgress),
+          }),
+        };
+      }
+
+      if (this.stepsWithoutFileChange === this.readOnlyReminderStep && !this.readOnlyReminderSent) {
+        this.readOnlyReminderSent = true;
+        this.messages.push({
+          role: 'user',
+          content: this.promptLoader.load('fix-tool-loop-read-only-reminder'),
+        });
+      }
+
+      if (this.stepsWithoutFileChange >= this.maxReadOnlySteps) {
+        const rechecked = await this.tryRecheckAlreadyFixed();
+        if (rechecked) return rechecked;
+        return {
+          success: false,
+          reason: this.promptLoader.load('fix-tool-loop-read-only-failure-reason', {
+            steps: String(this.stepsWithoutFileChange),
           }),
         };
       }

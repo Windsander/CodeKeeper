@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildMemoryGraph, parseTopicId } from '../../../../src/advance/classic/memory/graph-builder.js';
 import type { Project } from '../../../../src/electron/shared/types.js';
 import type { EverOSMemoryGetResult } from '../../../../src/advance/classic/memory/everos-api.js';
@@ -41,5 +41,40 @@ describe('buildMemoryGraph', () => {
     const graph = buildMemoryGraph({ projects, getResults: new Map([['proj-a', makeResult()]]) });
     expect(graph.nodes.map((n) => n.id)).toEqual(['system', 'project:proj-a']);
     expect(graph.edges).toHaveLength(1);
+  });
+
+  it('每日增长固定返回最近 14 个连续自然日并补零', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-22T12:00:00.000Z'));
+    try {
+      const result = makeResult();
+      result.episodes = [
+        {
+          id: 'episode-today',
+          session_id: 'reviewer-proj-a-mr-1',
+          timestamp: '2026-07-22T08:00:00.000Z',
+        },
+        {
+          id: 'episode-two-days-ago',
+          session_id: 'reviewer-proj-a-mr-2',
+          timestamp: '2026-07-20T08:00:00.000Z',
+        },
+        {
+          id: 'episode-outside-window',
+          session_id: 'reviewer-proj-a-mr-3',
+          timestamp: '2026-06-01T08:00:00.000Z',
+        },
+      ];
+
+      const graph = buildMemoryGraph({ projects, getResults: new Map([['proj-a', result]]) });
+
+      expect(graph.stats.dailyGrowth).toHaveLength(14);
+      expect(graph.stats.dailyGrowth[0]).toEqual({ date: '2026-07-09', count: 0 });
+      expect(graph.stats.dailyGrowth[11]).toEqual({ date: '2026-07-20', count: 1 });
+      expect(graph.stats.dailyGrowth[12]).toEqual({ date: '2026-07-21', count: 0 });
+      expect(graph.stats.dailyGrowth[13]).toEqual({ date: '2026-07-22', count: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

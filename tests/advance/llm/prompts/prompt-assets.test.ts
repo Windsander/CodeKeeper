@@ -120,10 +120,22 @@ describe('prompt assets', () => {
     expect(defaultPromptLoader.load('fix-tool-loop-truncation-reminder')).toContain('截断');
     expect(defaultPromptLoader.load('fix-tool-loop-no-tool-reminder')).toContain('工具');
     expect(defaultPromptLoader.load('fix-tool-loop-stale-reminder')).toContain('陷入循环');
-    expect(defaultPromptLoader.load('fix-tool-loop-unchanged-finish-reminder')).toContain('没有检测到');
-    expect(defaultPromptLoader.load('fix-tool-loop-stale-failure-reason', { steps: '3' })).toContain('3');
-    expect(defaultPromptLoader.load('fix-tool-loop-validation-failure-reason', { reason: 'r' })).toContain('r');
-    expect(defaultPromptLoader.load('fix-tool-loop-no-change-failure-reason')).toContain('未实际修改');
+    expect(defaultPromptLoader.load('fix-tool-loop-read-only-reminder')).toContain('只读探索');
+    expect(
+      defaultPromptLoader.load('fix-tool-loop-read-only-failure-reason', { steps: '3' })
+    ).toContain('3');
+    expect(defaultPromptLoader.load('fix-tool-loop-unchanged-finish-reminder')).toContain(
+      '没有检测到'
+    );
+    expect(
+      defaultPromptLoader.load('fix-tool-loop-stale-failure-reason', { steps: '3' })
+    ).toContain('3');
+    expect(
+      defaultPromptLoader.load('fix-tool-loop-validation-failure-reason', { reason: 'r' })
+    ).toContain('r');
+    expect(defaultPromptLoader.load('fix-tool-loop-no-change-failure-reason')).toContain(
+      '未实际修改'
+    );
   });
 
   it('maintainer 回复模板 prompt 变量可替换', () => {

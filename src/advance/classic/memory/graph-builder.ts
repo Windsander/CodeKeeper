@@ -431,10 +431,7 @@ function buildStats(
       if (date) dailyMap.set(date, (dailyMap.get(date) ?? 0) + 1);
     }
   }
-  const dailyGrowth = [...dailyMap.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .slice(-14)
-    .map(([date, count]) => ({ date, count }));
+  const dailyGrowth = buildRecentDailyGrowth(dailyMap, 14);
 
   return {
     totalNodes: nodes.length,
@@ -444,6 +441,23 @@ function buildStats(
     activeDays: dailyMap.size,
     dailyGrowth,
   };
+}
+
+/** 构建连续自然日增长数据；无新增的日期也保留为 0，避免图表退化为单日柱。 */
+function buildRecentDailyGrowth(
+  dailyMap: Map<string, number>,
+  days: number,
+  now = new Date()
+): Array<{ date: string; count: number }> {
+  const cursor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  cursor.setUTCDate(cursor.getUTCDate() - (days - 1));
+
+  return Array.from({ length: days }, () => {
+    const date = cursor.toISOString().slice(0, 10);
+    const entry = { date, count: dailyMap.get(date) ?? 0 };
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    return entry;
+  });
 }
 
 function truncate(text: string, max: number): string {
