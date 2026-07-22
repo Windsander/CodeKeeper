@@ -315,6 +315,8 @@ export class ToolExecutor {
         return this.getFileOverview(input);
       case 'search_in_file':
         return this.searchInFile(input);
+      case 'search_workspace':
+        return this.searchWorkspace(input);
       case 'finish':
         return { finished: true };
       default:
@@ -386,6 +388,11 @@ export class ToolExecutor {
       throw new Error(`无法解析文件路径: ${relPath}`);
     }
     return this.worktreeManager.searchInFile(resolved, keyword);
+  }
+
+  private async searchWorkspace(input: Record<string, unknown>): Promise<unknown> {
+    const keyword = this.requireString(input, 'keyword');
+    return this.worktreeManager.searchWorkspace(keyword);
   }
 
   private async writeFile(input: Record<string, unknown>): Promise<{ written: true; unchanged: boolean; appended: boolean }> {

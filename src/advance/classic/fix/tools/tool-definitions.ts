@@ -151,6 +151,19 @@ export const SEARCH_IN_FILE_TOOL: ToolDefinition = {
   },
 };
 
+export const SEARCH_WORKSPACE_TOOL: ToolDefinition = {
+  name: 'search_workspace',
+  description: '在 Git 跟踪文件中搜索关键字，返回跨文件匹配位置。用于查找调用点、dispose、生命周期或共享类型引用。',
+  input_schema: {
+    type: 'object',
+    properties: {
+      keyword: { type: 'string', description: '要搜索的固定字符串或标识符' },
+    },
+    required: ['keyword'],
+    additionalProperties: false,
+  },
+};
+
 export const RUN_SETUP_COMMAND_TOOL: ToolDefinition = {
   name: 'run_setup_command',
   description:
@@ -228,5 +241,6 @@ export const FIX_TOOLS: ToolDefinition[] = [
   RECALL_MEMORY_TOOL,
   GET_FILE_OVERVIEW_TOOL,
   SEARCH_IN_FILE_TOOL,
+  SEARCH_WORKSPACE_TOOL,
   FINISH_TOOL,
 ];

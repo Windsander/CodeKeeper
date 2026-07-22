@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   MaintainerRunner,
   classifyBatchFixItems,
+  hasHeadChangedSinceProcessing,
 } from '../../../../src/advance/classic/runners/maintainer-runner.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type {
@@ -1907,6 +1908,392 @@ describe('MaintainerRunner', () => {
       'src/index.ts:2': { action: 'ignore', alreadyFixed: true },
       'src/other.ts:4': { action: 'ignore', alreadyFixed: true },
     });
+  });
+
+  it('rechecks an unstructured reviewer discussion using its recorded note HEAD', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const finding: ReviewFinding = {
+      severity: 'LOW',
+      file: 'src/app.ts',
+      line: 20,
+      message: 'the old finding was handled by a later commit',
+      suggestion: 'do not modify it again',
+    };
+    const discussion: Discussion = {
+      id: 'd-note-stale-recheck',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 99,
+          author: 'review-bot',
+          body: `LOW\n\n${finding.file}:${finding.line} | ${finding.message} | ${finding.suggestion}`,
+          createdAt: '2026-07-08T00:00:00Z',
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue([finding]),
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      decide: vi.fn(),
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({
+        alreadyFixed: true,
+        reason: 'the problem no longer exists in the current file',
+        evidence: 'a later commit contains the fix',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn(),
+      postSummary: vi.fn(),
+    });
+    const provider = mockOf<GitLabProvider>({ getMRDiff: vi.fn().mockResolvedValue([]) });
+    const worktreeManager = mockOf<WorktreeManager>({
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockImplementation(async file => file),
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
+      readFileWindow: vi.fn().mockResolvedValue({
+        imports: '',
+        snippet: 'current implementation',
+        snippetStartLine: 1,
+        snippetEndLine: 30,
+        totalLines: 30,
+        truncated: false,
+        targetLine: finding.line,
+      }),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      processedDiscussions: {},
+      reviewState: {
+        'feature/test:main': {
+          findingsHash: 'hash',
+          findingsKeys: [`${finding.file}:${finding.line}`],
+          reviewedAt: 2,
+          headSha: 'ffffffff',
+          summaryNoteId: discussion.notes[0].id,
+          reviewNoteIds: [discussion.notes[0].id],
+          reviewNoteHeadShas: { [String(discussion.notes[0].id)]: 'a1b2c3d4' },
+        },
+      },
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {
+            [`${finding.file}:${finding.line}`]: {
+              action: 'fix',
+              reason: 'previous fix attempt failed',
+              failedAttempts: 3,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+          lastHumanNoteAt: 0,
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/project',
+      undefined,
+      'standard',
+      'ffffffff'
+    );
+
+    expect(brain.recheckAlreadyFixed).toHaveBeenCalledOnce();
+    expect(brain.decide).not.toHaveBeenCalled();
+    expect(actor.postSummary).not.toHaveBeenCalled();
+    expect(state.maintainerThreadState?.[discussion.id]?.decisions).toMatchObject({
+      [`${finding.file}:${finding.line}`]: { action: 'ignore', alreadyFixed: true },
+    });
+    expect(state.maintainerThreadState?.[discussion.id]?.lastProcessedHeadSha).toBe('ffffffff');
+  });
+
+  it('reruns an exhausted stale fix with the full current file', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const finding: ReviewFinding = {
+      severity: 'LOW',
+      file: 'src/app.ts',
+      line: 20,
+      message: 'the current implementation still needs a fix',
+      suggestion: 'apply the updated fix',
+    };
+    const discussion: Discussion = {
+      id: 'd-stale-fix-retry',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 101,
+          author: 'review-bot',
+          body: `LOW\n\n${finding.file}:${finding.line} | ${finding.message} | ${finding.suggestion}`,
+          createdAt: '2026-07-08T00:00:00Z',
+          resolved: false,
+        },
+      ],
+    };
+    const fullFile = 'export function currentImplementation() {\n  return true;\n}\n';
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue([finding]),
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({
+        alreadyFixed: false,
+        reason: 'the finding still applies',
+      }),
+      decide: vi.fn().mockResolvedValue({
+        action: 'fix',
+        reason: 'the latest file can now be fixed',
+        fixDescription: 'update the current implementation',
+        scope: 'local',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn().mockResolvedValue(true),
+      postSummary: vi.fn(),
+    });
+    const provider = mockOf<GitLabProvider>({ getMRDiff: vi.fn().mockResolvedValue([]) });
+    const worktreeManager = mockOf<WorktreeManager>({
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockResolvedValue(finding.file),
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
+      readFileWindow: vi.fn().mockResolvedValue({
+        imports: '',
+        snippet: 'return false;',
+        snippetStartLine: 18,
+        snippetEndLine: 22,
+        totalLines: 30,
+        truncated: true,
+        targetLine: finding.line,
+      }),
+      readFile: vi.fn().mockResolvedValue(fullFile),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      processedDiscussions: {},
+      reviewState: {
+        'feature/test:main': {
+          findingsHash: 'hash',
+          findingsKeys: [`${finding.file}:${finding.line}`],
+          reviewedAt: 2,
+          headSha: 'ffffffff',
+          summaryNoteId: discussion.notes[0].id,
+          reviewNoteIds: [discussion.notes[0].id],
+          reviewNoteHeadShas: { [String(discussion.notes[0].id)]: 'a1b2c3d4' },
+        },
+      },
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {
+            [`${finding.file}:${finding.line}`]: {
+              action: 'fix',
+              reason: 'previous attempts made no progress',
+              failedAttempts: 3,
+              fixSucceeded: false,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+          lastHumanNoteAt: 0,
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/project',
+      undefined,
+      'standard',
+      'ffffffff'
+    );
+
+    expect(brain.recheckAlreadyFixed).toHaveBeenCalledOnce();
+    expect(worktreeManager.readFile).toHaveBeenCalledWith(finding.file);
+    expect(brain.decide).toHaveBeenCalledWith(
+      expect.objectContaining({ fileContent: fullFile, staleFinding: true })
+    );
+    expect(actor.applyDecision).toHaveBeenCalledOnce();
+    expect(state.maintainerThreadState?.[discussion.id]?.decisions).toMatchObject({
+      [`${finding.file}:${finding.line}`]: {
+        action: 'fix',
+        failedAttempts: 0,
+        fixSucceeded: true,
+      },
+    });
+  });
+
+  it('replaces a stale clarification decision instead of repeating it', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const finding: ReviewFinding = {
+      severity: 'LOW',
+      file: 'src/app.ts',
+      line: 58,
+      message: 'verify whether the exported type is still misleading',
+      suggestion: 'use the current file as the source of truth',
+    };
+    const discussion: Discussion = {
+      id: 'd-stale-ask-recheck',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 102,
+          author: 'review-bot',
+          body: `LOW\n\n${finding.file}:${finding.line} | ${finding.message} | ${finding.suggestion}`,
+          createdAt: '2026-07-08T00:00:00Z',
+          resolved: false,
+        },
+      ],
+    };
+    const fullFile = 'export interface PublicParams { value: string }\n';
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue([finding]),
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({
+        alreadyFixed: false,
+        reason: 'a fresh decision is required',
+      }),
+      decide: vi.fn().mockResolvedValue({
+        action: 'ignore',
+        alreadyFixed: true,
+        reason: 'the full current file disproves the old comment mismatch',
+        replyBody: 'the current declaration and comment are consistent',
+        scope: 'local',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn().mockResolvedValue(true),
+      postSummary: vi.fn(),
+    });
+    const provider = mockOf<GitLabProvider>({ getMRDiff: vi.fn().mockResolvedValue([]) });
+    const worktreeManager = mockOf<WorktreeManager>({
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockResolvedValue(finding.file),
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
+      readFileWindow: vi.fn().mockResolvedValue({
+        imports: '',
+        snippet: 'export interface PublicParams',
+        snippetStartLine: 55,
+        snippetEndLine: 60,
+        totalLines: 80,
+        truncated: true,
+        targetLine: finding.line,
+      }),
+      readFile: vi.fn().mockResolvedValue(fullFile),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      processedDiscussions: {},
+      reviewState: {
+        'feature/test:main': {
+          findingsHash: 'hash',
+          findingsKeys: [`${finding.file}:${finding.line}`],
+          reviewedAt: 2,
+          headSha: 'ffffffff',
+          summaryNoteId: discussion.notes[0].id,
+          reviewNoteIds: [discussion.notes[0].id],
+          reviewNoteHeadShas: { [String(discussion.notes[0].id)]: 'a1b2c3d4' },
+        },
+      },
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {
+            [`${finding.file}:${finding.line}`]: {
+              action: 'ask',
+              reason: 'the file content was unavailable',
+              question: 'please provide the full file',
+              failedAttempts: 0,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+          lastHumanNoteAt: 0,
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/project',
+      undefined,
+      'standard',
+      'ffffffff'
+    );
+
+    expect(brain.recheckAlreadyFixed).toHaveBeenCalledOnce();
+    expect(brain.decide).toHaveBeenCalledWith(
+      expect.objectContaining({ fileContent: fullFile, staleFinding: true })
+    );
+    expect(actor.applyDecision).toHaveBeenCalledWith(
+      mockMR,
+      discussion,
+      finding,
+      expect.objectContaining({ action: 'ignore', alreadyFixed: true }),
+      state
+    );
+    expect(state.maintainerThreadState?.[discussion.id]?.decisions).toMatchObject({
+      [`${finding.file}:${finding.line}`]: {
+        action: 'ignore',
+        alreadyFixed: true,
+        failedAttempts: 0,
+      },
+    });
+  });
+
+});
+
+
+describe('hasHeadChangedSinceProcessing', () => {
+  it('rechecks exhausted failures after the MR HEAD changes', () => {
+    const discussion: Discussion = {
+      id: 'd-head-changed',
+      resolvable: true,
+      resolved: false,
+      notes: [],
+    };
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {
+            'src/app.ts:20': {
+              action: 'fix',
+              reason: 'no progress',
+              failedAttempts: 3,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+          lastProcessedHeadSha: 'a1b2c3d4',
+        },
+      },
+    });
+
+    expect(hasHeadChangedSinceProcessing(discussion, state, 'ffffffff')).toBe(true);
+    expect(hasHeadChangedSinceProcessing(discussion, state, 'a1b2c3d4')).toBe(false);
   });
 });
 

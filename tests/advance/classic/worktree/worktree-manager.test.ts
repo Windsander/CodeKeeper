@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { SimpleGit } from 'simple-git';
 import { WorktreeManager, WorktreeError } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 
 describe('WorktreeManager.validate', () => {
@@ -43,6 +44,25 @@ describe('WorktreeError', () => {
     const err = new WorktreeError('checkout', new Error('branch not found'));
     expect(err.stage).toBe('checkout');
     expect(err.message).toContain('branch not found');
+  });
+});
+
+describe('WorktreeManager workspace search', () => {
+  it('parses bounded matches from Git tracked files', async () => {
+    const raw = vi
+      .fn()
+      .mockResolvedValue('src/app.ts:12:facade.dispose();\nsrc/facade.ts:30:dispose() {}\n');
+    const manager = new WorktreeManager({
+      projectId: 'p1',
+      rootPath: '/tmp/project',
+      remoteUrl: 'https://example.com/project.git',
+      git: { raw } as unknown as SimpleGit,
+    });
+
+    const matches = await manager.searchWorkspace('dispose', 1);
+
+    expect(raw).toHaveBeenCalledWith(['grep', '-n', '-I', '-F', '--', 'dispose']);
+    expect(matches).toEqual([{ file: 'src/app.ts', line: 12, content: 'facade.dispose();' }]);
   });
 });
 

@@ -90,6 +90,7 @@ export interface MaintainerThreadState {
   lastSummaryAt?: number;
   /** 上一次发布 summary 的内容哈希，用于去重 */
   lastSummaryHash?: string;
+  lastProcessedHeadSha?: string;
 }
 
 /**
@@ -116,6 +117,7 @@ export interface MrAgentState {
       summaryNoteId?: number;
       /** 已记录到记忆的 Agent 评论 note ID，避免 summary/补充评论被重复记录 */
       reviewNoteIds?: number[];
+      reviewNoteHeadShas?: Record<string, string>;
       /** 上一次追加评审评论的 note ID，用于检测追加评论是否被删除 */
       lastAppendNoteId?: number;
       /** 上一次追加评审对应的 findings hash，用于避免重复追加 */

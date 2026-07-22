@@ -631,7 +631,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     // RoleAgent 在 EverOS 中以 user sender 写入，但 agent_id 带有 role 前缀；
     // 收集 owner 时需避免把这类 id 同时当作真实用户。
     const isAgentLikeOwnerId = (ownerId: string): boolean =>
-      /^(reviewer|maintainer|archiver)-/.test(ownerId);
+      /^(reviewer|maintainer|archiver)(-|$)/.test(ownerId);
 
     // 单个 owner 查询失败时不应导致整张图谱加载失败，返回空结果并记录警告
     const safeEverosMemoryGet = async (
@@ -705,7 +705,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       if (!projectResult) {
         continue;
       }
-      for (const userId of knownUsers) {
+      const episodeOwners = new Set([...knownUsers, ...knownAgents]);
+      for (const userId of episodeOwners) {
         const episodeRes = await safeEverosMemoryGet({
           everosUrl: ctx.everosUrl,
           appId: 'codekeeper-advance',
@@ -726,9 +727,14 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         mergeResult(projectResult, profileRes);
 
         // 从 episodes 里也收集用户，避免 agent_case 为空时遗漏真实用户
-        const episodeOwners = extractOwnersFromGetResult(episodeRes);
-        for (const uid of episodeOwners.users) {
-          if (!isAgentLikeOwnerId(uid)) knownUsers.add(uid);
+        const discoveredOwners = extractOwnersFromGetResult(episodeRes);
+        for (const uid of discoveredOwners.users) {
+          if (isAgentLikeOwnerId(uid)) {
+            knownAgents.add(uid);
+          } else {
+            knownUsers.add(uid);
+          }
+          episodeOwners.add(uid);
         }
       }
     }

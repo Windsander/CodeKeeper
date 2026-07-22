@@ -331,6 +331,13 @@ export class CognitiveEngine {
           extraFileContexts.push(ctx);
         }
       }
+      if (q.type === 'workspace_search' && this.options.worktreeManager) {
+        const ctx = await this.searchWorkspaceContext(q.target);
+        if (ctx) {
+          console.log(`[CognitiveEngine] workspace_search 上下文长度=${ctx.length}`);
+          extraFileContexts.push(ctx);
+        }
+      }
       // file_history 由调用方在组装 CognitiveContext 时提供，或后续 Runner 补充
     }
 
@@ -379,6 +386,23 @@ export class CognitiveEngine {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`[CognitiveEngine] 搜索文件 ${target} 失败: ${message}`);
+      return null;
+    }
+  }
+
+  private async searchWorkspaceContext(target: string): Promise<string | null> {
+    const manager = this.options.worktreeManager;
+    const keyword = target.trim();
+    if (!manager || !keyword) return null;
+
+    try {
+      const matches = await manager.searchWorkspace(keyword);
+      if (matches.length === 0) return null;
+      const lines = matches.map(match => `- ${match.file}:${match.line} ${match.content}`).join('\n');
+      return `## 工作区中 ${keyword} 的匹配位置\n${lines}`;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[CognitiveEngine] 搜索工作区 ${keyword} 失败: ${message}`);
       return null;
     }
   }
@@ -548,6 +572,7 @@ export class CognitiveEngine {
       findingMessage: context.finding.message,
       findingSuggestion: context.finding.suggestion ?? '',
       options: optionsText,
+      fileContent: context.fileContent,
       fileOverview: overviewText,
       extraFileContexts: extraContextsText,
       relatedMemories,

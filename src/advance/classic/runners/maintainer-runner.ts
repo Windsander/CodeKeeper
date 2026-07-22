@@ -30,7 +30,7 @@ import {
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { focusedContextToString } from '../fix/focused-context-streamer.js';
 import { isDiscussionPending, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
-import { isCiReviewBody, parseStructuredCiReview } from './shared/ci-review-parser.js';
+import { parseStructuredCiReview } from './shared/ci-review-parser.js';
 
 function logMemoryUsage(label: string): void {
   const usage = process.memoryUsage();
@@ -94,6 +94,35 @@ function isReviewCommitStale(
   const review = reviewCommit.toLowerCase();
   const head = currentHeadSha.toLowerCase();
   return !head.startsWith(review) && !review.startsWith(head);
+}
+
+function extractReviewCommit(body: string): string | undefined {
+  return body.match(/\bcommit\s+([0-9a-f]{7,40})\b/i)?.[1]?.toLowerCase();
+}
+
+function getDiscussionReviewCommit(
+  mr: MergeRequest,
+  discussion: Discussion,
+  firstNoteId: number,
+  state: MrAgentState,
+  structuredCommit?: string
+): string | undefined {
+  if (structuredCommit) return structuredCommit;
+  if (discussion.position?.headSha) return discussion.position.headSha;
+
+  const reviewState = state.reviewState?.[`${mr.sourceBranch}:${mr.targetBranch}`];
+  return reviewState?.reviewNoteHeadShas?.[String(firstNoteId)];
+}
+
+export function hasHeadChangedSinceProcessing(
+  discussion: Discussion,
+  state: MrAgentState,
+  currentHeadSha: string | undefined
+): boolean {
+  if (!currentHeadSha || discussion.resolved || !discussion.resolvable) return false;
+  if (state.interactiveThreads?.[discussion.id]?.status === 'awaiting-reply') return false;
+  const processedHead = state.maintainerThreadState?.[discussion.id]?.lastProcessedHeadSha;
+  return Boolean(processedHead && isReviewCommitStale(processedHead, currentHeadSha));
 }
 
 /**
@@ -265,41 +294,45 @@ export class MaintainerRunner extends BaseRoleRunner {
         );
       });
 
+      let currentHeadSha: string | undefined;
+      try {
+        currentHeadSha = (await provider.getMRShaInfo(mr.iid)).headSha;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[MaintainerRunner] MR !${mr.iid} current HEAD unavailable; stale recheck skipped: ${message}`
+        );
+      }
+
       const pendingDiscussions = discussions.filter(d => {
-        const pending = isDiscussionPending(d, state);
+        const headChanged = hasHeadChangedSinceProcessing(d, state, currentHeadSha);
+        const pending = isDiscussionPending(d, state) || headChanged;
         if (!pending) {
           const processed = state.processedDiscussions?.[d.id];
           console.log(
-            `[MaintainerRunner] discussion ${d.id} 跳过: resolved=${d.resolved}, resolvable=${d.resolvable}, interactive=${state.interactiveThreads[d.id]?.status ?? 'none'}, processed=${processed ? `${processed.noteCount}/${d.notes.length}` : 'no'}`
+            `[MaintainerRunner] discussion ${d.id} skipped: resolved=${d.resolved}, resolvable=${d.resolvable}, interactive=${state.interactiveThreads[d.id]?.status ?? 'none'}, processed=${processed ? `${processed.noteCount}/${d.notes.length}` : 'no'}`
+          );
+        } else if (headChanged) {
+          console.log(
+            `[MaintainerRunner] discussion ${d.id} has a new MR HEAD; rechecking historical findings`
           );
         }
         return pending;
       });
 
       console.log(
-        `[MaintainerRunner] MR !${mr.iid} 过滤后待处理 discussion 数量: ${pendingDiscussions.length}`
+        `[MaintainerRunner] MR !${mr.iid} pending discussions: ${pendingDiscussions.length}`
       );
 
       if (pendingDiscussions.length === 0) {
-        console.log(`[MaintainerRunner] MR !${mr.iid} 没有待处理的 discussion，跳过`);
+        console.log(`[MaintainerRunner] MR !${mr.iid} has no pending discussions`);
         await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
 
       console.log(
-        `[MaintainerRunner] MR !${mr.iid} 有 ${pendingDiscussions.length} 个待处理 discussion`
+        `[MaintainerRunner] MR !${mr.iid} processing ${pendingDiscussions.length} discussions`
       );
-      let currentHeadSha: string | undefined;
-      if (pendingDiscussions.some(discussion => isCiReviewBody(discussion.notes[0]?.body ?? ''))) {
-        try {
-          currentHeadSha = (await provider.getMRShaInfo(mr.iid)).headSha;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.warn(
-            `[MaintainerRunner] 获取 MR !${mr.iid} 当前 HEAD 失败，跳过 stale 检测: ${message}`
-          );
-        }
-      }
       for (const discussion of pendingDiscussions) {
         console.log(
           `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
@@ -352,6 +385,10 @@ export class MaintainerRunner extends BaseRoleRunner {
         noteCount: discussion.notes.length,
         processedAt: Date.now(),
       };
+      const threadState = state.maintainerThreadState?.[discussion.id];
+      if (threadState && currentHeadSha) {
+        threadState.lastProcessedHeadSha = currentHeadSha;
+      }
     };
 
     const firstNote = discussion.notes[0];
@@ -436,6 +473,13 @@ export class MaintainerRunner extends BaseRoleRunner {
 
     // CI Review 使用结构化解析，避免把规则确认项、优点或折叠区说明混成普通 finding。
     const ciReview = parseStructuredCiReview(firstNote.body, { projectRootPath });
+    const reviewCommit = getDiscussionReviewCommit(
+      mr,
+      discussion,
+      firstNote.id,
+      state,
+      ciReview?.commitSha ?? extractReviewCommit(firstNote.body)
+    );
 
     // 先解析 finding，用解析结果区分「纯统计报告」与「含可操作 finding 的混合报告」：
     // 只有完全解析不出可操作 finding 时才可能是纯统计报告；
@@ -447,7 +491,10 @@ export class MaintainerRunner extends BaseRoleRunner {
           position: discussion.position,
           isSummary: firstNote.body.includes('CodeKeeper Advance MR 评审 Agent'),
         });
-    const staleFinding = isReviewCommitStale(ciReview?.commitSha, currentHeadSha);
+    const staleFinding = isReviewCommitStale(
+      reviewCommit ?? threadState.lastProcessedHeadSha,
+      currentHeadSha
+    );
 
     if (ciReview) {
       console.log(
@@ -731,7 +778,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         existing?.action === 'fix' &&
         !existing.fixSucceeded &&
         existing.failedAttempts < MAX_FIX_RETRY_ATTEMPTS;
-      if (existing && !needsRetry && !hasNewHumanNote) {
+      if (existing && !staleFinding && !needsRetry && !hasNewHumanNote) {
         console.log(
           `[MaintainerRunner] finding ${key} 已有历史决策且无人工新回复，跳过: action=${existing.action}`
         );
@@ -752,9 +799,12 @@ export class MaintainerRunner extends BaseRoleRunner {
         return;
       }
 
+      const decisionContent = staleFinding
+        ? await this.readFullFileForStaleDecision(worktreeManager, finding, fileContent)
+        : fileContent;
       const decision = await brain.decide({
         finding,
-        fileContent,
+        fileContent: decisionContent,
         originalComment: firstNote.body,
         mrIid: mr.iid,
         userId: firstNote.author,
@@ -769,6 +819,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       // 人工新回复触发的重评估：若结论与历史一致，不重复回复，仅刷新状态
       if (
         existing &&
+        !staleFinding &&
         !needsRetry &&
         decision.action === existing.action &&
         (decision.alreadyFixed ?? false) === (existing.alreadyFixed ?? false)
@@ -794,8 +845,10 @@ export class MaintainerRunner extends BaseRoleRunner {
         deleteFile: decision.deleteFile,
         failedAttempts:
           decision.action === 'fix' && !applied
-            ? (existing?.failedAttempts ?? 0) + 1
-            : (existing?.failedAttempts ?? 0),
+            ? (staleFinding ? 0 : (existing?.failedAttempts ?? 0)) + 1
+            : staleFinding
+              ? 0
+              : (existing?.failedAttempts ?? 0),
         fixSucceeded: decision.action === 'fix' ? applied : undefined,
         decidedAt: Date.now(),
       };
@@ -882,7 +935,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         console.log(`[MaintainerRunner] stale finding ${key} 已在当前代码中解决，静默收敛`);
         continue;
       }
-      const shouldReuse = existing && !hasNewHumanNote && !needsRetry;
+      const shouldReuse = existing && !staleFinding && !hasNewHumanNote && !needsRetry;
 
       if (shouldReuse) {
         console.log(`[MaintainerRunner] finding ${key} 复用历史决策: action=${existing.action}`);
@@ -908,9 +961,12 @@ export class MaintainerRunner extends BaseRoleRunner {
         continue;
       }
 
+      const decisionContent = staleFinding
+        ? await this.readFullFileForStaleDecision(worktreeManager, finding, focusedContent)
+        : focusedContent;
       const decision = await brain.decide({
         finding,
-        fileContent: focusedContent,
+        fileContent: decisionContent,
         originalComment: firstNote.body,
         mrIid: mr.iid,
         userId: firstNote.author,
@@ -929,8 +985,9 @@ export class MaintainerRunner extends BaseRoleRunner {
         replyBody: decision.replyBody,
         question: decision.question,
         deleteFile: decision.deleteFile,
-        failedAttempts: existing?.action === 'fix' ? (existing.failedAttempts ?? 0) : 0,
-        fixSucceeded: existing?.fixSucceeded,
+        failedAttempts:
+          staleFinding || existing?.action !== 'fix' ? 0 : (existing.failedAttempts ?? 0),
+        fixSucceeded: staleFinding ? undefined : existing?.fixSucceeded,
         decidedAt: Date.now(),
       };
 
@@ -1175,6 +1232,28 @@ export class MaintainerRunner extends BaseRoleRunner {
       lastHumanNoteAt: 0,
     };
     return state.maintainerThreadState[discussionId];
+  }
+
+  private async readFullFileForStaleDecision(
+    worktreeManager: WorktreeManager,
+    finding: ReviewFinding,
+    fallback: import('../fix/focused-context-builder.js').FocusedContext
+  ): Promise<string | import('../fix/focused-context-builder.js').FocusedContext> {
+    try {
+      const resolved = await worktreeManager.resolveFilePath(finding.file);
+      if (!resolved) return fallback;
+      const content = worktreeManager.readFile(resolved);
+      console.log(
+        `[MaintainerRunner] stale finding ${finding.file}:${finding.line} 已读取完整文件 path=${resolved} lines=${content.split(/\r?\n/).length} chars=${content.length}`
+      );
+      return content;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[MaintainerRunner] unable to load full stale file ${finding.file}: ${message}`
+      );
+      return fallback;
+    }
   }
 
   private async recheckStaleFindingIfNeeded(

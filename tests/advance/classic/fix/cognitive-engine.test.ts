@@ -185,11 +185,13 @@ describe('CognitiveEngine', () => {
       execute: vi.fn().mockResolvedValue(['项目约定：未使用变量应删除']),
     });
 
+    const completeDecision = vi.spyOn(llmClient, 'completeDecision');
     const engine = new CognitiveEngine({ llmClient, recallPlanner });
     const decision = await engine.decide(makeContext(), 'standard');
 
     expect(decision.action).toBe('fix');
     expect(decision.analysis).toBe('b 未使用');
+    expect(completeDecision.mock.calls[3]?.[1]).toContain('const b = 2;');
   });
 
   it('fast 模式返回 alreadyFixed ignore 决策', async () => {
@@ -409,6 +411,54 @@ describe('CognitiveEngine', () => {
     expect(decision.action).toBe('ignore');
     expect(decision.alreadyFixed).toBe(true);
     expect(decision.replyBody).toContain('完整文件中存在未注入 tracker 时不抛异常的测试');
+  });
+
+  it('cross-file finding can enrich already-fixed checks with workspace search results', async () => {
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'inquiry_decision',
+                input: {
+                  needsMoreContext: true,
+                  queries: [{ type: 'workspace_search', target: 'dispose' }],
+                  reason: 'the cleanup method may live in another file',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'already_fixed_check',
+                input: {
+                  alreadyFixed: true,
+                  reason: 'the facade cleanup now resets the dependency',
+                  evidence: 'src/facade.ts:30 calls facade.dispose()',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const searchWorkspace = vi.fn().mockResolvedValue([
+      { file: 'src/facade.ts', line: 30, content: 'facade.dispose();' },
+    ]);
+    const worktreeManager = mockOf<WorktreeManager>({ searchWorkspace });
+
+    const engine = new CognitiveEngine({ llmClient, worktreeManager });
+    const decision = await engine.decide(makeContext(), 'standard');
+
+    expect(searchWorkspace).toHaveBeenCalledWith('dispose');
+    expect(decision.action).toBe('ignore');
+    expect(decision.alreadyFixed).toBe(true);
+    expect(decision.replyBody).toContain('src/facade.ts:30');
   });
 
   it('fast 模式返回 alreadyFixed=true 但 action=fix 时归一化为 ignore', async () => {

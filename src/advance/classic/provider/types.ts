@@ -125,6 +125,7 @@ export interface Discussion {
     newLine?: number;
     oldPath?: string;
     oldLine?: number;
+    headSha?: string;
   };
 }
 

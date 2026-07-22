@@ -32,6 +32,9 @@ function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): Wo
     readFileRange: vi.fn().mockResolvedValue('range-content'),
     getFileOverview: vi.fn().mockResolvedValue({ lineCount: 100, symbols: [] }),
     searchInFile: vi.fn().mockResolvedValue([{ startLine: 5, endLine: 5 }]),
+    searchWorkspace: vi.fn().mockResolvedValue([
+      { file: 'src/facade.ts', line: 30, content: 'facade.dispose();' },
+    ]),
     writeFile: vi.fn().mockReturnValue(undefined),
     removeFile: vi.fn().mockResolvedValue(undefined),
     applyPatch: vi.fn().mockResolvedValue(true),
@@ -114,6 +117,24 @@ describe('ToolExecutor', () => {
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
     expect(parsed.data).toEqual([{ startLine: 5, endLine: 5 }]);
+  });
+
+  it('search_workspace 返回跨文件匹配位置', async () => {
+    const worktree = createMockWorktreeManager();
+    const executor = new ToolExecutor({ worktreeManager: worktree });
+
+    const result = await executor.execute({
+      id: '1',
+      name: 'search_workspace',
+      input: { keyword: 'dispose' },
+    });
+
+    const parsed = JSON.parse(result.content);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toEqual([
+      { file: 'src/facade.ts', line: 30, content: 'facade.dispose();' },
+    ]);
+    expect(worktree.searchWorkspace).toHaveBeenCalledWith('dispose');
   });
 
   it('write_file 调用 worktreeManager.writeFile', async () => {

@@ -295,7 +295,10 @@ export class MaintainerBrain {
       decision = await engine.decide(
         {
           finding,
-          fileContent: this.buildFocusedFileContent(focusedContext),
+          fileContent:
+            staleFinding && typeof fileContent === 'string'
+              ? fileContent
+              : this.buildFocusedFileContent(focusedContext),
           originalComment: originalComment ?? '',
           mrContext: mrContext ?? {
             iid: mrIid,
@@ -400,6 +403,7 @@ export class MaintainerBrain {
         extraFileContexts: [],
         projectContext: this.options.projectContext,
         soulContent: this.options.soulContent,
+        staleFinding: true,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

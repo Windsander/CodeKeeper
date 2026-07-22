@@ -362,6 +362,10 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       // 更新评审状态，避免周期性轮询导致重复 summary/记忆
       state.reviewState ??= {};
+      const reviewNoteHeadShas = { ...(previousReview?.reviewNoteHeadShas ?? {}) };
+      for (const noteId of reviewNoteIds) {
+        reviewNoteHeadShas[String(noteId)] = headSha;
+      }
       state.reviewState[stateKey] = {
         findingsHash,
         findingsKeys,
@@ -369,6 +373,7 @@ export class ReviewerRunner extends BaseRoleRunner {
         headSha,
         summaryNoteId,
         reviewNoteIds: [...(previousReview?.reviewNoteIds ?? []), ...reviewNoteIds],
+        reviewNoteHeadShas,
         lastAppendNoteId,
         lastAppendFindingsHash,
       };

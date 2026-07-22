@@ -380,17 +380,27 @@ describe('EverOSMcpServer finding case tools', () => {
       },
     });
 
-    expect(everosMemoryAdd).toHaveBeenCalledTimes(1);
-    expect(everosMemoryAdd).toHaveBeenCalledWith(
+    expect(everosMemoryAdd).not.toHaveBeenCalled();
+    expect(everosMemoryAddMessages).toHaveBeenCalledTimes(1);
+    expect(everosMemoryAddMessages).toHaveBeenCalledWith(
       'http://127.0.0.1:9999',
       expect.objectContaining({
         appId: ctx.appId,
         projectId: ctx.projectId,
         sessionId: ctx.sessionId,
-        senderId: 'maintainer',
-        role: 'assistant',
-        content: expect.stringContaining('[CASE:case:proj-1:mr-1:src_a_ts:10:rule-any]'),
-      })
+      }),
+      [
+        expect.objectContaining({
+          senderId: 'maintainer',
+          role: 'user',
+          content: '系统记录以下维护记忆，请将其纳入项目记忆。',
+        }),
+        expect.objectContaining({
+          senderId: 'maintainer',
+          role: 'assistant',
+          content: expect.stringContaining('[CASE:case:proj-1:mr-1:src_a_ts:10:rule-any]'),
+        }),
+      ]
     );
     expect(everosMemoryFlush).toHaveBeenCalledTimes(1);
     expect(everosMemoryFlush).toHaveBeenCalledWith(

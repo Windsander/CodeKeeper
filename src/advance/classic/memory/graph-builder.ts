@@ -84,7 +84,7 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
   for (const [userId, projectSet] of profileProjects) {
     // RoleAgent 的 profile 已经在 processProfile 中直接挂到 agent 节点，
     // 不再按用户 profile 的跨项目逻辑处理，避免又创建出 user:reviewer-xxx 节点。
-    if (/^(reviewer|maintainer|archiver)-/.test(userId)) continue;
+    if (/^(reviewer|maintainer|archiver)(-|$)/.test(userId)) continue;
 
     const profileNodeId = `profile:${userId}`;
     const node = nodes.get(profileNodeId);
@@ -150,7 +150,7 @@ export function parseTopicId(sessionId: string): { topicId: string; label: strin
  * 图谱层据此将其渲染为 agent 节点，而非 user 节点。
  */
 function inferEpisodeOwnerGroup(ownerId: string): 'user' | 'agent' {
-  if (/^(reviewer|maintainer|archiver)-/.test(ownerId)) {
+  if (/^(reviewer|maintainer|archiver)(-|$)/.test(ownerId)) {
     return 'agent';
   }
   return 'user';
@@ -323,7 +323,7 @@ function processProfile(
   if (!userId || userId === SYSTEM_USER_ID) return;
 
   // RoleAgent 的 profile 也按 agent 分组，避免同一 id 同时出现 user/agent 两个节点
-  const isAgent = /^(reviewer|maintainer|archiver)-/.test(userId);
+  const isAgent = /^(reviewer|maintainer|archiver)(-|$)/.test(userId);
   const ownerGroup = isAgent ? 'agent' : 'user';
   const ownerNodeId = `${ownerGroup}:${userId}`;
 

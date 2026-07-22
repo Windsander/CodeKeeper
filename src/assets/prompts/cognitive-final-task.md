@@ -8,6 +8,9 @@
 ## 候选方案
 {{options}}
 
+## 当前文件内容
+{{fileContent}}
+
 {{fileOverview}}
 {{extraFileContexts}}
 {{relatedMemories}}

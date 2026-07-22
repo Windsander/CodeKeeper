@@ -46,3 +46,9 @@
   "evidence": "具体证据（如第 X 行已包含 ...）",
   "needsMoreContext": true|false
 }
+
+
+## Additional constraints
+
+- For findings about unused code, dead code, missing call sites, or placeholder definitions, seeing only the reported function, method, or interface definition is not evidence that the problem is fixed. Require a real call site, removal of the definition, or other direct evidence that eliminates the reported problem.
+- `alreadyFixed=true` means the problem described by the finding no longer exists. It does not mean that the reviewer's suggestion was partially adopted or that the code merely looks reasonable. If evidence is insufficient, return `alreadyFixed=false` and explain what context is still needed.

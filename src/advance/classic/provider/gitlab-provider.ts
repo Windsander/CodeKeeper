@@ -301,6 +301,7 @@ export class GitLabProvider implements IGitProvider {
                 newLine: position.new_line,
                 oldPath: position.old_path,
                 oldLine: position.old_line,
+                headSha: position.head_sha,
               }
             : undefined,
         };

@@ -16,6 +16,7 @@ const mockListMergeRequests = vi.fn();
 const mockGetMergeRequest = vi.fn();
 const mockGetMergeRequestChanges = vi.fn();
 const mockGetMergeRequestNotes = vi.fn();
+const mockGetMergeRequestDiscussions = vi.fn();
 const mockCreateNote = vi.fn();
 const mockListMembers = vi.fn();
 const mockListLabels = vi.fn();
@@ -27,6 +28,7 @@ vi.mock('../../../../src/gitlab/client', () => ({
     getMergeRequest: mockGetMergeRequest,
     getMergeRequestChanges: mockGetMergeRequestChanges,
     getMergeRequestNotes: mockGetMergeRequestNotes,
+    getMergeRequestDiscussions: mockGetMergeRequestDiscussions,
     createNote: mockCreateNote,
     listMembers: mockListMembers,
     listLabels: mockListLabels,
@@ -278,6 +280,46 @@ describe('GitLabProvider', () => {
 
       expect(branches).toEqual(['main', 'develop']);
       expect(mockListProtectedBranches).toHaveBeenCalled();
+    });
+  });
+
+
+  describe('getDiscussions', () => {
+    it('keeps the review headSha from discussion position', async () => {
+      mockGetMergeRequestDiscussions.mockResolvedValue([
+        {
+          id: 'discussion-1',
+          resolvable: true,
+          resolved: false,
+          notes: [
+            {
+              id: 10,
+              body: 'stale review finding',
+              author: { username: 'reviewer', name: 'Reviewer' },
+              created_at: '2026-07-08T00:00:00Z',
+              resolved: false,
+              system: false,
+            },
+          ],
+          position: {
+            base_sha: 'base-sha',
+            head_sha: 'review-head-sha',
+            start_sha: 'start-sha',
+            position_type: 'text',
+            new_path: 'src/app.ts',
+            new_line: 20,
+          },
+        },
+      ]);
+
+      const provider = new GitLabProvider(gitlabConfig);
+      const discussions = await provider.getDiscussions(42);
+
+      expect(discussions[0].position).toMatchObject({
+        newPath: 'src/app.ts',
+        newLine: 20,
+        headSha: 'review-head-sha',
+      });
     });
   });
 

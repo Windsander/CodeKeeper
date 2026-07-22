@@ -132,6 +132,9 @@ export class MaintainerActor {
     }
 
     const body = `${sections.join('\n\n')}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`;
+    console.log(
+      `[MaintainerActor] discussion ${discussion.id} 汇总回复 counts=fixed:${fixedItems.length},alreadyFixed:${alreadyFixedItems.length},failed:${failedItems.length},asked:${askedItems.length},ignored:${ignoredItems.length}`
+    );
 
     try {
       await this.options.provider.addDiscussionNote(mr.iid, discussion.id, body);

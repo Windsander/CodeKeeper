@@ -53,6 +53,9 @@ export async function readDiscussionFileContent(
 
     console.log(`[readDiscussionFileContent] 阶段=readWindow 读取 ${resolvedPath}:${finding.line}`);
     const result = await worktreeManager.readFileWindow(resolvedPath, finding);
+    console.log(
+      `[readDiscussionFileContent] readWindow 结果 file=${resolvedPath} range=${result.snippetStartLine}-${result.snippetEndLine} total=${result.totalLines} truncated=${result.truncated} chars=${result.snippet.length}`
+    );
     logMemoryUsage('readWindow 后');
     return result;
   } catch (err) {

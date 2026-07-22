@@ -31,6 +31,12 @@ export interface RunScriptResult {
   reason?: string;
 }
 
+export interface WorkspaceSearchMatch {
+  file: string;
+  line: number;
+  content: string;
+}
+
 export interface WorktreeManagerOptions {
   /** 项目唯一标识 */
   projectId: string;
@@ -332,6 +338,43 @@ export class WorktreeManager {
       }
     }
     return ranges;
+  }
+
+  /** 在 Git 跟踪文件中搜索固定字符串，限制返回数量避免上下文膨胀 */
+  async searchWorkspace(keyword: string, maxResults = 20): Promise<WorkspaceSearchMatch[]> {
+    const normalizedKeyword = keyword.trim();
+    if (!normalizedKeyword || maxResults <= 0) return [];
+
+    try {
+      const output = await this.getGit().raw([
+        'grep',
+        '-n',
+        '-I',
+        '-F',
+        '--',
+        normalizedKeyword,
+      ]);
+      return output
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .slice(0, maxResults)
+        .flatMap(line => {
+          const match = line.match(/^(.+?):(\d+):(.*)$/);
+          if (!match) return [];
+          return [
+            {
+              file: match[1].replace(/\\/g, '/'),
+              line: Number.parseInt(match[2], 10),
+              content: match[3].trim(),
+            },
+          ];
+        });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const exitCode = (err as { exitCode?: number }).exitCode;
+      if (exitCode === 1 || /exit code 1|not found|no matches/i.test(message)) return [];
+      throw err;
+    }
   }
 
   /** 写入工作区内的相对路径文件；mode=append 时追加到文件末尾，用于分段写入大文件 */
