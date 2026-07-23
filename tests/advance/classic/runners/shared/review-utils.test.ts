@@ -13,6 +13,7 @@ import {
   SEVERITY_META,
   isAgentAuthoredNote,
   isMaintainerAuthoredNote,
+  isMaintainerNoFixExplanationNote,
 } from '../../../../../src/advance/classic/runners/shared/review-utils.js';
 import type { MergeRequest, ReviewResult, ReviewFinding } from '../../../../../src/advance/classic/provider/types.js';
 
@@ -175,5 +176,18 @@ describe('isMaintainerAuthoredNote', () => {
 
   it('Reviewer 签名返回 false', () => {
     expect(isMaintainerAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent*')).toBe(false);
+  });
+});
+
+describe('isMaintainerNoFixExplanationNote', () => {
+  const footer = '---\n*生成于 2026/07/22 · CodeKeeper Advance MR 维护 Agent · bot*';
+
+  it('识别无需重复修改和忽略说明', () => {
+    expect(isMaintainerNoFixExplanationNote(`✅ 已修复（无需重复修改）：\n- src/app.ts:1: 已处理\n\n${footer}`)).toBe(true);
+    expect(isMaintainerNoFixExplanationNote(`📝 已忽略：\n- src/app.ts:1: 无需修改\n\n${footer}`)).toBe(true);
+  });
+
+  it('普通提问不算最终无需修复说明', () => {
+    expect(isMaintainerNoFixExplanationNote(`❓ 请补充文件内容\n\n${footer}`)).toBe(false);
   });
 });

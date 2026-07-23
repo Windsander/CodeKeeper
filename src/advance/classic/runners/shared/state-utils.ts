@@ -5,11 +5,26 @@
  * 记录已发布的 discussion 信息。
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Project } from '../../../types.js';
 import { getArchiveRoot } from '../../../types.js';
 import type { ReviewFinding, MergeRequest } from '../../provider/types.js';
+import type {
+  MemoryFinding,
+  MemoryFindingCase,
+  MemoryReviewComment,
+  ProjectKnowledgeItem,
+} from '../../memory/types.js';
 
 /**
  * 已发布 discussion 的记录项
@@ -35,6 +50,194 @@ export interface InteractiveThread {
   question: string;
   /** 关联文件路径 */
   filePath?: string;
+}
+
+/** Discussion 远端回复与 resolve 的持久化投递状态。 */
+export interface DiscussionDeliveryState {
+  /** 已持久化的期望回复正文，重试时必须复用 */
+  replyBody: string;
+  /** 期望回复正文的稳定哈希 */
+  replyHash: string;
+  /** 回复发布状态 */
+  replyStatus: 'pending' | 'posted' | 'failed';
+  /** Git 平台返回的 note ID */
+  replyNoteId?: number;
+  /** 本次回复完成后是否需要 resolve */
+  resolveRequired: boolean;
+  /** resolve 状态 */
+  resolveStatus: 'not-required' | 'pending' | 'resolved' | 'failed';
+  /** 累计远端投递尝试次数 */
+  attempts: number;
+  /** 最近一次投递错误 */
+  lastError?: string;
+  /** 回复成功后是否应进入等待人工回复状态 */
+  awaitingReply?: boolean;
+  /** 等待回复时展示的提问正文 */
+  question?: string;
+  /** 等待回复关联的文件路径 */
+  filePath?: string;
+  /** 最近一次状态更新时间 */
+  updatedAt: number;
+}
+
+/** MR 级普通评论的可恢复投递状态。 */
+export interface ReviewCommentDeliveryState {
+  body: string;
+  bodyHash: string;
+  status: 'pending' | 'posted' | 'failed';
+  noteId?: number;
+  attempts: number;
+  lastError?: string;
+  updatedAt: number;
+}
+
+export interface ReviewerReviewMemoryPayload {
+  mrIid: number;
+  title: string;
+  findingsCount: number;
+  summary: string;
+  findings: MemoryFinding[];
+  comments: MemoryReviewComment[];
+  mrAuthor?: string;
+}
+
+export interface ReviewerMemoryState {
+  review?: {
+    key: string;
+    status: 'pending' | 'recorded' | 'failed';
+    payload: ReviewerReviewMemoryPayload;
+    attempts: number;
+    lastError?: string;
+    updatedAt: number;
+  };
+  findingCases?: {
+    key: string;
+    status: 'pending' | 'recorded' | 'failed';
+    cases: MemoryFindingCase[];
+    attempts: number;
+    lastError?: string;
+    updatedAt: number;
+  };
+}
+
+export interface ArchiverState {
+  sourceFingerprint: string;
+  items: Record<
+    string,
+    {
+      item: ProjectKnowledgeItem;
+      status: 'pending' | 'recorded' | 'failed';
+      attempts: number;
+      lastError?: string;
+      updatedAt: number;
+    }
+  >;
+  updatedAt: number;
+}
+
+/** 状态文件的写入方，用于隔离独立 Role Agent 之间的字段覆盖。 */
+export type StateOwner = 'reviewer' | 'maintainer' | 'archiver' | 'all';
+
+const STATE_LOCK_TIMEOUT_MS = 10_000;
+const STATE_LOCK_STALE_MS = 60_000;
+
+function createEmptyState(): MrAgentState {
+  return { version: 1, discussions: {}, interactiveThreads: {} };
+}
+
+function normalizeState(parsed: MrAgentState): MrAgentState {
+  parsed.version ??= 1;
+  parsed.interactiveThreads ??= {};
+  parsed.processedDiscussions ??= {};
+  parsed.reviewState ??= {};
+  parsed.maintainerThreadState ??= {};
+  parsed.reviewerThreadState ??= {};
+  parsed.reviewCommentDelivery ??= {};
+  return parsed;
+}
+
+function readStateFile(path: string): MrAgentState | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const raw = readFileSync(path, 'utf-8');
+    const parsed = JSON.parse(raw) as MrAgentState;
+    if (!parsed || typeof parsed !== 'object' || !parsed.discussions) return undefined;
+    return normalizeState(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+function readLatestState(project: Project): MrAgentState {
+  const path = getStatePath(project);
+  const current = readStateFile(path);
+  if (current) return current;
+  const backup = readStateFile(`${path}.bak`);
+  return backup ?? createEmptyState();
+}
+
+function mergeOwnedState(
+  latest: MrAgentState,
+  incoming: MrAgentState,
+  owner: Exclude<StateOwner, 'all'>
+): MrAgentState {
+  const merged = normalizeState({ ...latest });
+  merged.version = incoming.version ?? merged.version;
+
+  if (owner === 'reviewer') {
+    merged.discussions = incoming.discussions;
+    if (incoming.reviewState !== undefined) merged.reviewState = incoming.reviewState;
+    if (incoming.reviewerThreadState !== undefined) {
+      merged.reviewerThreadState = incoming.reviewerThreadState;
+    }
+    if (incoming.reviewCommentDelivery !== undefined) {
+      merged.reviewCommentDelivery = incoming.reviewCommentDelivery;
+    }
+  } else if (owner === 'maintainer') {
+    if (incoming.interactiveThreads !== undefined) {
+      merged.interactiveThreads = incoming.interactiveThreads;
+    }
+    if (incoming.processedDiscussions !== undefined) {
+      merged.processedDiscussions = incoming.processedDiscussions;
+    }
+    if (incoming.maintainerThreadState !== undefined) {
+      merged.maintainerThreadState = incoming.maintainerThreadState;
+    }
+  } else if (incoming.archiverState !== undefined) {
+    merged.archiverState = incoming.archiverState;
+  }
+
+  return normalizeState(merged);
+}
+
+/** 获取跨进程状态目录锁；异常退出留下的陈旧锁会自动回收。 */
+function acquireStateLock(lockPath: string): void {
+  const deadline = Date.now() + STATE_LOCK_TIMEOUT_MS;
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+  while (Date.now() < deadline) {
+    try {
+      // mkdir 是跨平台的原子创建操作，避免文件锁释放时的 close/unlink 竞态。
+      mkdirSync(lockPath);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST') throw error;
+
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > STATE_LOCK_STALE_MS) {
+          rmSync(lockPath, { recursive: true, force: true });
+          continue;
+        }
+      } catch {
+        // 锁刚被其他进程释放，直接进入下一轮尝试。
+      }
+
+      Atomics.wait(waitBuffer, 0, 0, 25);
+    }
+  }
+
+  throw new Error(`获取状态文件锁超时: ${lockPath}`);
 }
 
 /**
@@ -90,6 +293,8 @@ export interface MaintainerThreadState {
   lastSummaryAt?: number;
   /** 上一次发布 summary 的内容哈希，用于去重 */
   lastSummaryHash?: string;
+  /** 当前或最近一次远端回复投递状态 */
+  delivery?: DiscussionDeliveryState;
   lastProcessedHeadSha?: string;
 }
 
@@ -122,10 +327,26 @@ export interface MrAgentState {
       lastAppendNoteId?: number;
       /** 上一次追加评审对应的 findings hash，用于避免重复追加 */
       lastAppendFindingsHash?: string;
+      memory?: ReviewerMemoryState;
     }
   >;
   /** Reviewer 对自己开的 discussion thread 的回复追踪，避免重复回复 */
-  reviewerThreadState?: Record<string, { lastRepliedAt: number }>;
+  reviewerThreadState?: Record<
+    string,
+    {
+      lastRepliedAt: number;
+      delivery?: DiscussionDeliveryState;
+      pendingTargetNoteId?: number;
+      pendingTargetCreatedAt?: number;
+    }
+  >;
+  /** Reviewer MR summary/追加评论的可恢复投递状态。 */
+  reviewCommentDelivery?: Record<
+    string,
+    { summary?: ReviewCommentDeliveryState; append?: ReviewCommentDeliveryState }
+  >;
+  /** Archiver 项目知识批次的可恢复状态。 */
+  archiverState?: ArchiverState;
 }
 
 export function getStatePath(project: Project): string {
@@ -135,37 +356,41 @@ export function getStatePath(project: Project): string {
 
 export function loadState(project: Project): MrAgentState {
   const path = getStatePath(project);
-  if (!existsSync(path)) {
-    return { version: 1, discussions: {}, interactiveThreads: {} };
-  }
-  try {
-    const raw = readFileSync(path, 'utf-8');
-    const parsed = JSON.parse(raw) as MrAgentState;
-    if (!parsed || typeof parsed !== 'object' || !parsed.discussions) {
-      return { version: 1, discussions: {}, interactiveThreads: {} };
-    }
-    if (!parsed.interactiveThreads) {
-      parsed.interactiveThreads = {};
-    }
-    if (!parsed.processedDiscussions) {
-      parsed.processedDiscussions = {};
-    }
-    if (!parsed.reviewState) {
-      parsed.reviewState = {};
-    }
-    if (!parsed.maintainerThreadState) {
-      parsed.maintainerThreadState = {};
-    }
-    return parsed;
-  } catch {
-    return { version: 1, discussions: {}, interactiveThreads: {} };
-  }
+  const current = readStateFile(path);
+  if (current) return current;
+  return readStateFile(`${path}.bak`) ?? createEmptyState();
 }
 
-export function saveState(project: Project, state: MrAgentState): void {
+/** 原子保存状态，并在正式文件损坏时保留上一版备份。 */
+export function saveState(project: Project, state: MrAgentState, owner: StateOwner = 'all'): void {
   const path = getStatePath(project);
+  const tempPath = `${path}.tmp-${process.pid}`;
+  const backupPath = `${path}.bak`;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(state, null, 2), 'utf-8');
+  const lockPath = `${path}.lock`;
+  acquireStateLock(lockPath);
+
+  try {
+    const latest = readLatestState(project);
+    const nextState =
+      owner === 'all' ? normalizeState({ ...state }) : mergeOwnedState(latest, state, owner);
+    const serialized = JSON.stringify(nextState, null, 2);
+    writeFileSync(tempPath, serialized, 'utf-8');
+
+    // 只有当前正式文件可解析时才更新备份，避免坏文件覆盖掉可恢复的备份。
+    if (readStateFile(path)) copyFileSync(path, backupPath);
+
+    try {
+      renameSync(tempPath, path);
+    } catch {
+      // Windows 某些文件锁场景无法直接 rename 覆盖，退化为有备份保护的写入。
+      writeFileSync(path, serialized, 'utf-8');
+    } finally {
+      rmSync(tempPath, { force: true });
+    }
+  } finally {
+    rmSync(lockPath, { recursive: true, force: true });
+  }
 }
 
 export function getDiscussionStateKey(mr: MergeRequest): string {

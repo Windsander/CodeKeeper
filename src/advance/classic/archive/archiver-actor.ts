@@ -12,6 +12,11 @@ export class ArchiverActor {
 
   async storeKnowledge(items: ProjectKnowledgeItem[]): Promise<void> {
     if (items.length === 0) return;
-    await this.options.memoryClient.recordProjectKnowledge(items);
+    await this.options.memoryClient.recordProjectKnowledge(
+      items.map(item => ({
+        ...item,
+        content: `[ARCHIVER_ITEM:${item.id}]\n${item.content}`,
+      }))
+    );
   }
 }

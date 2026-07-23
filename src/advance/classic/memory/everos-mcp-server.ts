@@ -193,7 +193,7 @@ export interface EverOSMcpServerOptions {
   port?: number;
   /** 失败记忆写入队列；提供后，写入失败会自动落库重试 */
   queue?: IMemoryWriteQueue;
-  /** 当 record_review 产生新的 user/agent owner 时回调，用于更新项目 owner 注册表 */
+  /** 记忆写入产生新的 user/agent owner 时回调，用于更新项目 owner 注册表 */
   onMemoryOwners?: (
     projectId: string,
     owners: Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }>
@@ -657,6 +657,7 @@ export class EverOSMcpServer {
       agentDisplayName: 'Reviewer Finding Case',
       sessionId: `finding-cases-${ctx.projectId}`,
     };
+    this.registerAgentOwner(caseCtx);
     const messages: EverOSAddMessage[] = cases.map(c => ({
       senderId: 'reviewer-case',
       role: 'assistant',
@@ -721,6 +722,7 @@ export class EverOSMcpServer {
     items: ProjectKnowledgeItem[]
   ): Promise<void> {
     if (items.length === 0) return;
+    this.registerAgentOwner(ctx);
     const sanitized = items.map(item => ({
       ...item,
       content: this.sanitizer.sanitize(item.content),
@@ -730,7 +732,9 @@ export class EverOSMcpServer {
     try {
       await this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content);
     } catch (err) {
-      logger.error({ err, sessionId: ctx.sessionId }, 'record_project_knowledge 后台记忆写入失败');
+      // persistSingleMessage 已将 add/flush 失败入队；继续抛出让 MCP 调用方知道本次尚未完成。
+      logger.error({ err, sessionId: ctx.sessionId }, 'record_project_knowledge 后台记忆写入失败，已入队重试');
+      throw err;
     }
   }
 
@@ -738,6 +742,7 @@ export class EverOSMcpServer {
     args: { context: MemoryContext } & Record<string, unknown>
   ): Promise<void> {
     const ctx = args.context;
+    this.registerAgentOwner(ctx);
     const content = `Maintainer 在 MR !${String(args.mrIid ?? 0)} 尝试修复 ${String(args.file ?? '')}:${String(args.line ?? 0)}，结果=${args.success === true ? '成功' : '失败'}，理由=${String(args.reason ?? '')}`;
 
     try {
@@ -751,6 +756,7 @@ export class EverOSMcpServer {
     args: { context: MemoryContext } & Record<string, unknown>
   ): Promise<void> {
     const ctx = args.context;
+    this.registerAgentOwner(ctx);
     const discussionId = String(args.discussionId ?? '');
     const userId = sanitizeEverOSId(String(args.userId ?? ''));
     const decision = String(args.decision ?? '');
@@ -781,6 +787,7 @@ export class EverOSMcpServer {
     args: { context: MemoryContext } & Record<string, unknown>
   ): Promise<void> {
     const ctx = args.context;
+    this.registerAgentOwner(ctx);
     const caseKey = String(args.caseKey ?? '');
     const reflection = String(args.reflection ?? '');
     const outcome = String(args.outcome ?? '');
@@ -845,6 +852,16 @@ export class EverOSMcpServer {
       { sessionId: ctx.sessionId, durationMs: Date.now() - start },
       '单条记忆后台写入完成'
     );
+  }
+
+  private registerAgentOwner(ctx: MemoryContext): void {
+    this.onMemoryOwners?.(ctx.projectId, [
+      {
+        ownerId: sanitizeEverOSId(ctx.agentId),
+        ownerType: 'agent',
+        displayName: ctx.agentDisplayName,
+      },
+    ]);
   }
 
   private async handleRecallForReview(args: {

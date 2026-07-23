@@ -68,6 +68,15 @@ export function isMaintainerAuthoredNote(body: string): boolean {
   return body.includes(`CodeKeeper Advance ${MAINTAINER_ROLE_LABEL}`);
 }
 
+/** 判断 Maintainer note 是否已经给出“无需修复/已经修复”的最终说明。 */
+export function isMaintainerNoFixExplanationNote(body: string): boolean {
+  if (!isMaintainerAuthoredNote(body)) return false;
+  return (
+    /✅[\s\S]{0,120}(?:已修复|已经修复|已处理|无需修复|无需修改)/.test(body) ||
+    /📝[\s\S]{0,120}(?:已忽略|决定忽略)/.test(body)
+  );
+}
+
 /**
  * 自动化 bot 作者的命名模式。
  *

@@ -208,9 +208,9 @@ describe('MaintainerActor', () => {
       confidence: 'medium',
     };
 
-    const result = await actor.executeFix(mockMR, mockDiscussion, mockFinding, decision);
+    const result = await actor.executeFix(mockMR, mockDiscussion, mockFinding, decision, createState());
 
-    expect(result).toBe(false);
+    expect(result.codeApplied).toBe(false);
     expect(captured.task).toContain('变量未使用');
     expect(captured.task).toContain('删除');
     expect(captured.system).toContain('检查 singleton reset 与 dispose 的多实例影响');
@@ -282,7 +282,7 @@ describe('MaintainerActor', () => {
       createState()
     );
 
-    expect(ok).toBe(true);
+    expect(ok.codeApplied).toBe(true);
     expect(commitAndPush).toHaveBeenCalledTimes(2);
     // 第一次用朴素默认信息，第二次用按规范生成的信息
     expect(commitAndPush.mock.calls[0][1]).toContain('变量未使用');
@@ -350,7 +350,7 @@ describe('MaintainerActor', () => {
       createState()
     );
 
-    expect(ok).toBe(false);
+    expect(ok.codeApplied).toBe(false);
     expect(commitAndPush).toHaveBeenCalledTimes(1);
   });
 
@@ -421,7 +421,7 @@ describe('MaintainerActor', () => {
       createState()
     );
 
-    expect(ok).toBe(true);
+    expect(ok.codeApplied).toBe(true);
     expect(commitAndPush).toHaveBeenCalledTimes(2);
     expect(commitAndPush.mock.calls[1][1]).toBe('fix: 删除未使用变量');
     expect(memoryClient.recordProjectKnowledge).toHaveBeenCalled();
@@ -459,7 +459,7 @@ describe('MaintainerActor', () => {
 
     const ok = await actor.applyDecision(mockMR, mockDiscussion, finding, decision, createState());
 
-    expect(ok).toBe(true);
+    expect(ok.codeApplied).toBe(true);
     expect(worktreeManager.removeFile).toHaveBeenCalledWith(finding.file);
     expect(worktreeManager.commitAndPush).toHaveBeenCalledWith(
       'feature/test',
@@ -610,6 +610,40 @@ describe('MaintainerActor', () => {
       ],
     });
     expect(worktreeManager.commitAndPush).not.toHaveBeenCalled();
+  });
+
+  it('汇总全部为无需修复项时逐项回复并 resolve discussion', async () => {
+    const provider = createMockProvider();
+    const actor = new MaintainerActor({
+      provider,
+      llmClient: createMockLlmClient([]),
+      worktreeManager: createMockWorktreeManager(),
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+
+    await actor.postSummary(
+      mockMR,
+      mockDiscussion,
+      [],
+      [],
+      [],
+      [{ fileLine: 'src/facade.ts:20', reason: '实例生命周期互不影响，无需修改' }],
+      [{ fileLine: 'src/app.ts:10', reason: '后续提交已经覆盖该问题' }],
+      createState()
+    );
+
+    expect(provider.addDiscussionNote).toHaveBeenCalledWith(
+      mockMR.iid,
+      mockDiscussion.id,
+      expect.stringContaining('src/app.ts:10: 后续提交已经覆盖该问题')
+    );
+    expect(provider.addDiscussionNote).toHaveBeenCalledWith(
+      mockMR.iid,
+      mockDiscussion.id,
+      expect.stringContaining('src/facade.ts:20: 实例生命周期互不影响，无需修改')
+    );
+    expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
   });
 });
 

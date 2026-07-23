@@ -14,6 +14,8 @@ import { RecallPlanner } from '../memory/recall-planner.js';
 import { buildEverOSAgentId } from '../memory/types.js';
 import { buildFindingCaseKey } from '../memory/finding-case-key.js';
 import { loadState, saveState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
+import { isReviewCommentDeliveryPending } from './shared/review-comment-delivery.js';
+import { deliverDiscussionReply } from './shared/discussion-delivery.js';
 import {
   formatAgentFooter,
   isAgentAuthoredNote,
@@ -142,6 +144,7 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       const stateKey = getDiscussionStateKey(mr);
       state.discussions[stateKey] ??= [];
+      const previousReview = state.reviewState?.[stateKey];
       let memoryClient: MemoryClient | undefined;
       if (mcpUrl) {
         memoryClient = new MemoryClient({
@@ -158,6 +161,9 @@ export class ReviewerRunner extends BaseRoleRunner {
           console.error(`[ReviewerRunner] MR !${mr.iid} MemoryClient 连接失败: ${message}`);
           memoryClient = undefined;
         }
+      }
+      if (memoryClient) {
+        await this.retryPendingReviewMemory(memoryClient, project, state, stateKey);
       }
       const recallPlanner = memoryClient
         ? new RecallPlanner({ llmClient: this.llmClient, memoryClient })
@@ -176,7 +182,6 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       const findingsHash = computeFindingsHash(result.findings);
       const findingsKeys = result.findings.map((f) => getFindingKey(f));
-      const previousReview = state.reviewState?.[stateKey];
       const headSha = shaInfo?.headSha ?? '';
       const mrUpdatedAt = new Date(mr.updatedAt).getTime();
 
@@ -192,6 +197,25 @@ export class ReviewerRunner extends BaseRoleRunner {
         console.error(`[ReviewerRunner] 获取 MR !${mr.iid} 评论失败: ${message}`);
       }
 
+      const summaryStillExists = previousReview?.summaryNoteId
+        ? comments.some(c => c.id === previousReview.summaryNoteId)
+        : false;
+      const threadRiskLevels = new Set<ReviewFinding['severity']>(
+        reviewerConfig.threadRiskLevels ?? ['CRITICAL', 'HIGH']
+      );
+      const postedFindingKeys = new Set(
+        (state.discussions[stateKey] ?? []).map(d => d.findingKey)
+      );
+      const missingThreadFindings = result.findings.filter(
+        finding =>
+          threadRiskLevels.has(finding.severity) &&
+          !postedFindingKeys.has(getFindingKey(finding))
+      );
+      const reviewDelivery = state.reviewCommentDelivery?.[stateKey];
+      const hasPendingReviewDelivery =
+        isReviewCommentDeliveryPending(reviewDelivery?.summary) ||
+        isReviewCommentDeliveryPending(reviewDelivery?.append);
+
       const lastReviewedAt = previousReview?.reviewedAt ?? 0;
       const recordedNoteIds = new Set(previousReview?.reviewNoteIds ?? []);
       const newComments = comments.filter((c) => {
@@ -206,14 +230,16 @@ export class ReviewerRunner extends BaseRoleRunner {
         !findingsChanged &&
         !Number.isNaN(mrUpdatedAt) &&
         mrUpdatedAt <= previousReview.reviewedAt &&
-        newComments.length === 0
+        newComments.length === 0 &&
+        summaryStillExists &&
+        missingThreadFindings.length === 0 &&
+        !hasPendingReviewDelivery
       ) {
         console.log(`[ReviewerRunner] MR !${mr.iid} 无新 commit、无新发现、无新评论，跳过`);
         await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
 
-      const postedFindingKeys = new Set((state.discussions[stateKey] ?? []).map((d) => d.findingKey));
       const newFindings = previousReview
         ? result.findings.filter(
             (f) =>
@@ -239,9 +265,6 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       // 如果之前保存的 summary note 已经被删除，则重新发 summary，而不是追加补充评审
       const previousSummaryNoteId = previousReview?.summaryNoteId;
-      const summaryStillExists = previousSummaryNoteId
-        ? comments.some((c) => c.id === previousSummaryNoteId)
-        : false;
       const shouldPostSummary = !previousReview || !summaryStillExists;
 
       const newFindingsHash = computeFindingsHash(newFindingsToPost);
@@ -264,13 +287,18 @@ export class ReviewerRunner extends BaseRoleRunner {
             shaInfo,
             stateKey,
             state,
+            comments,
           });
           reviewNoteIds.push(id);
           summaryNoteId = id;
           lastAppendNoteId = undefined;
           lastAppendFindingsHash = undefined;
         } else if (shouldAppend) {
-          const id = await actor.appendSupplementaryReview(mr, newFindingsToPost);
+          const id = await actor.appendSupplementaryReview(mr, newFindingsToPost, {
+            stateKey,
+            state,
+            comments,
+          });
           reviewNoteIds.push(id);
           lastAppendNoteId = id;
           lastAppendFindingsHash = newFindingsHash;
@@ -280,9 +308,9 @@ export class ReviewerRunner extends BaseRoleRunner {
           console.log(`[ReviewerRunner] MR !${mr.iid} 无发现问题，跳过发布评论`);
         }
 
-        // 为新增 CRITICAL/HIGH finding 开 threads（已有 findingKey 的不会重复创建）
-        if (newFindingsToPost.length > 0) {
-          await actor.createFindingThreads(mr, newFindingsToPost, {
+        // 每轮都补齐当前 CRITICAL/HIGH finding threads；只依赖新增 finding 会永久漏掉上轮失败项。
+        if (missingThreadFindings.length > 0) {
+          await actor.createFindingThreads(mr, result.findings, {
             diffs,
             shaInfo,
             stateKey,
@@ -290,38 +318,6 @@ export class ReviewerRunner extends BaseRoleRunner {
           });
         }
 
-        // 把新增 finding 记录为 EverOS case，供后续去重和跨 RoleAgent 检索
-        if (memoryClient && newFindingsToPost.length > 0) {
-          try {
-            const cases = newFindingsToPost.map((f) => {
-              const key = buildFindingCaseKey({
-                projectId: project.id,
-                mrIid: mr.iid,
-                file: f.file,
-                line: f.line,
-                ruleId: f.ruleId,
-              });
-              const posted = state.discussions[stateKey]?.find((d) => d.findingKey === getFindingKey(f));
-              return {
-                key,
-                mrIid: mr.iid,
-                file: f.file,
-                line: f.line,
-                severity: f.severity,
-                ruleId: f.ruleId,
-                message: f.message,
-                suggestion: f.suggestion,
-                status: 'open' as const,
-                discussionId: posted?.discussionId,
-              };
-            });
-            await memoryClient.recordFindingCases(cases);
-            console.log(`[ReviewerRunner] MR !${mr.iid} 已记录 ${cases.length} 个 finding case 到 EverOS`);
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            console.error(`[ReviewerRunner] MR !${mr.iid} 记录 finding case 失败: ${message}`);
-          }
-        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] MR !${mr.iid} 发布评论失败: ${message}`);
@@ -329,34 +325,158 @@ export class ReviewerRunner extends BaseRoleRunner {
         continue;
       }
 
-      if (memoryClient) {
-        try {
-          // 只有在首次评审、HEAD 变化、发现变化或有新评论时才写入记忆，
-          // 避免 MR 仅被无关更新（如标题编辑）触发时重复生成 episode。
-          const shouldRecordMemory =
-            !previousReview || headChanged || findingsChanged || newComments.length > 0;
+      // 先持久化本轮记忆意图，再调用 EverOS；失败时由下一轮补偿，不再被最终 reviewState 覆盖。
+      const shouldRecordMemory =
+        !previousReview || headChanged || findingsChanged || newComments.length > 0;
+      const reviewMemoryPayload = {
+        mrIid: mr.iid,
+        title: mr.title,
+        findingsCount: result.findings.length,
+        summary: result.summary,
+        findings: result.findings.map(finding => ({
+          severity: finding.severity,
+          file: finding.file,
+          line: finding.line,
+          message: finding.message,
+          suggestion: finding.suggestion,
+          ruleId: finding.ruleId,
+          autoFixable: finding.autoFixable,
+        })),
+        comments: newComments.map(comment => ({
+          author: comment.author,
+          body: comment.body,
+          createdAt: comment.createdAt,
+        })),
+        mrAuthor: mr.author,
+      };
+      const reviewMemoryKey = `${headSha}:${findingsHash}:${newComments.map(c => c.id).join(',')}`;
+      const memoryState = { ...(previousReview?.memory ?? {}) };
+      if (
+        shouldRecordMemory &&
+        (!memoryState.review ||
+          memoryState.review.key !== reviewMemoryKey ||
+          memoryState.review.status !== 'recorded')
+      ) {
+        memoryState.review = {
+          key: reviewMemoryKey,
+          status: 'pending',
+          payload: reviewMemoryPayload,
+          attempts: 0,
+          updatedAt: Date.now(),
+        };
+      }
 
-          if (shouldRecordMemory) {
-            await memoryClient.recordReview({
-              mrIid: mr.iid,
-              title: mr.title,
-              findingsCount: result.findings.length,
-              summary: result.summary,
-              findings: result.findings,
-              comments: newComments.map((c) => ({
-                author: c.author,
-                body: c.body,
-                createdAt: c.createdAt,
-              })),
-              mrAuthor: mr.author,
-            });
-            console.log(`[ReviewerRunner] MR !${mr.iid} 记忆写入请求已提交（EverOS 后台异步处理）`);
-          } else {
-            console.log(`[ReviewerRunner] MR !${mr.iid} 无新 commit/新发现/新评论，跳过记忆写入`);
+      let currentCases: Array<{
+        key: string;
+        mrIid: number;
+        file: string;
+        line: number;
+        severity: string;
+        ruleId?: string;
+        message: string;
+        suggestion?: string;
+        status: 'open';
+        discussionId?: string;
+      }> = [];
+      if (newFindingsToPost.length > 0) {
+        currentCases = newFindingsToPost.map(finding => {
+          const key = buildFindingCaseKey({
+            projectId: project.id,
+            mrIid: mr.iid,
+            file: finding.file,
+            line: finding.line,
+            ruleId: finding.ruleId,
+          });
+          const posted = state.discussions[stateKey]?.find(
+            discussion => discussion.findingKey === getFindingKey(finding)
+          );
+          return {
+            key,
+            mrIid: mr.iid,
+            file: finding.file,
+            line: finding.line,
+            severity: finding.severity,
+            ruleId: finding.ruleId,
+            message: finding.message,
+            suggestion: finding.suggestion,
+            status: 'open' as const,
+            discussionId: posted?.discussionId,
+          };
+        });
+        const casesKey = currentCases.map(item => item.key).sort().join('|');
+        if (
+          !memoryState.findingCases ||
+          memoryState.findingCases.key !== casesKey ||
+          memoryState.findingCases.status !== 'recorded'
+        ) {
+          memoryState.findingCases = {
+            key: casesKey,
+            status: 'pending',
+            cases: currentCases,
+            attempts: 0,
+            updatedAt: Date.now(),
+          };
+        }
+      }
+
+      state.reviewState ??= {};
+      state.reviewState[stateKey] = {
+        ...(previousReview ?? {
+          findingsHash,
+          findingsKeys,
+          reviewedAt: 0,
+        }),
+        memory: memoryState,
+      };
+      saveState(project, state, 'reviewer');
+
+      if (memoryClient) {
+        const pendingCases = memoryState.findingCases;
+        if (pendingCases && pendingCases.status !== 'recorded') {
+          pendingCases.status = 'pending';
+          pendingCases.attempts += 1;
+          pendingCases.lastError = undefined;
+          pendingCases.updatedAt = Date.now();
+          saveState(project, state, 'reviewer');
+          try {
+            await memoryClient.recordFindingCases(pendingCases.cases);
+            pendingCases.status = 'recorded';
+            pendingCases.lastError = undefined;
+            pendingCases.updatedAt = Date.now();
+            console.log(`[ReviewerRunner] MR !${mr.iid} 已记录 ${pendingCases.cases.length} 个 finding case 到 EverOS`);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            pendingCases.status = 'failed';
+            pendingCases.lastError = message;
+            pendingCases.updatedAt = Date.now();
+            console.error(`[ReviewerRunner] MR !${mr.iid} 记录 finding case 失败: ${message}`);
           }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error(`[ReviewerRunner] MR !${mr.iid} 记忆写入失败: ${message}`);
+          saveState(project, state, 'reviewer');
+        }
+
+        const pendingReview = memoryState.review;
+        if (pendingReview && pendingReview.status !== 'recorded') {
+          pendingReview.status = 'pending';
+          pendingReview.attempts += 1;
+          pendingReview.lastError = undefined;
+          pendingReview.updatedAt = Date.now();
+          saveState(project, state, 'reviewer');
+          try {
+            await memoryClient.recordReview(pendingReview.payload);
+            pendingReview.status = 'recorded';
+            pendingReview.lastError = undefined;
+            pendingReview.updatedAt = Date.now();
+            console.log(`[ReviewerRunner] MR !${mr.iid} 记忆写入请求已提交（EverOS 后台异步处理）`);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            pendingReview.status = 'failed';
+            pendingReview.lastError = message;
+            pendingReview.updatedAt = Date.now();
+            console.error(`[ReviewerRunner] MR !${mr.iid} 记忆写入失败: ${message}`);
+          }
+          saveState(project, state, 'reviewer');
+        } else if (!shouldRecordMemory) {
+          console.log(`[ReviewerRunner] MR !${mr.iid} 无新 commit/新发现/新评论，跳过记忆写入`);
         }
       }
 
@@ -376,12 +496,24 @@ export class ReviewerRunner extends BaseRoleRunner {
         reviewNoteHeadShas,
         lastAppendNoteId,
         lastAppendFindingsHash,
+        memory: memoryState,
       };
+      saveState(project, state, 'reviewer');
 
       // 处理别人对 Reviewer 自己开的 discussion threads / summary 评论的新回复
       try {
         const discussions = await provider.getDiscussions(mr.iid);
-        await this.handleThreadReplies(mr, discussions, result.findings, state, provider, brain, reviewerName, previousReview);
+        await this.handleThreadReplies(
+          mr,
+          discussions,
+          result.findings,
+          state,
+          provider,
+          brain,
+          reviewerName,
+          previousReview,
+          project
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] MR !${mr.iid} 处理 discussion 回复失败: ${message}`);
@@ -392,7 +524,7 @@ export class ReviewerRunner extends BaseRoleRunner {
 
     // 持久化 MR 评审状态，否则下一轮轮询会丢失 reviewState/discussions 记录，
     // 导致对同一 MR 重复发布 summary 和重复写入记忆。
-    saveState(project, state);
+    saveState(project, state, 'reviewer');
   }
 
   /**
@@ -410,7 +542,8 @@ export class ReviewerRunner extends BaseRoleRunner {
     provider: GitLabProvider,
     brain: ReviewerBrain,
     reviewerName: string,
-    previousReview?: NonNullable<MrAgentState['reviewState']>[string]
+    previousReview?: NonNullable<MrAgentState['reviewState']>[string],
+    project?: Project
   ): Promise<void> {
     const reviewerThreads = discussions.filter(
       (d) =>
@@ -431,8 +564,42 @@ export class ReviewerRunner extends BaseRoleRunner {
     const baselineTime = previousReview?.reviewedAt ?? 0;
 
     for (const discussion of reviewerThreads) {
-      const threadState = state.reviewerThreadState?.[discussion.id];
-      const lastRepliedAt = threadState?.lastRepliedAt ?? baselineTime;
+      state.reviewerThreadState ??= {};
+      const threadState = (state.reviewerThreadState[discussion.id] ??= {
+        lastRepliedAt: baselineTime,
+      });
+
+      if (threadState.pendingTargetNoteId !== undefined && threadState.delivery) {
+        const pendingResult = await deliverDiscussionReply({
+          provider,
+          mr,
+          discussion,
+          body: threadState.delivery.replyBody,
+          resolve: false,
+          delivery: threadState.delivery,
+          setDelivery: delivery => {
+            threadState.delivery = delivery;
+          },
+          checkpoint: () => {
+            if (project) saveState(project, state, 'reviewer');
+          },
+        });
+        if (pendingResult.pending) {
+          console.warn(
+            `[ReviewerRunner] discussion ${discussion.id} 上次回复仍待重试: ${pendingResult.error ?? '未知错误'}`
+          );
+          continue;
+        }
+        threadState.lastRepliedAt = Math.max(
+          threadState.lastRepliedAt,
+          threadState.pendingTargetCreatedAt ?? 0
+        );
+        threadState.pendingTargetNoteId = undefined;
+        threadState.pendingTargetCreatedAt = undefined;
+        if (project) saveState(project, state, 'reviewer');
+      }
+
+      const lastRepliedAt = threadState.lastRepliedAt;
 
       const targetNotes = discussion.notes
         .filter((note) => {
@@ -460,9 +627,9 @@ export class ReviewerRunner extends BaseRoleRunner {
         createdAt: n.createdAt,
       }));
 
-      let latestRepliedAt = lastRepliedAt;
       const replyFooter = formatAgentFooter(REVIEWER_ROLE_LABEL, reviewerName);
       for (const note of targetNotes) {
+        const noteTs = new Date(note.createdAt).getTime();
         const decision = await brain.replyToComment({
           mr,
           originalFindings,
@@ -476,24 +643,40 @@ export class ReviewerRunner extends BaseRoleRunner {
 
         if (!decision.shouldReply || !decision.replyBody?.trim()) {
           console.log(`[ReviewerRunner] discussion ${discussion.id} 的回复判断: ${decision.reason}`);
+          threadState.lastRepliedAt = Math.max(threadState.lastRepliedAt, noteTs);
+          if (project) saveState(project, state, 'reviewer');
           continue;
         }
 
         const replyBody = `${decision.replyBody}\n\n${replyFooter}`;
-        try {
-          await provider.addDiscussionNote(mr.iid, discussion.id, replyBody);
-          console.log(`[ReviewerRunner] 已回复 discussion ${discussion.id}: ${decision.reason}`);
-          const noteTs = new Date(note.createdAt).getTime();
-          if (noteTs > latestRepliedAt) latestRepliedAt = noteTs;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(`[ReviewerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
+        threadState.pendingTargetNoteId = note.id;
+        threadState.pendingTargetCreatedAt = noteTs;
+        if (project) saveState(project, state, 'reviewer');
+        const replyResult = await deliverDiscussionReply({
+          provider,
+          mr,
+          discussion,
+          body: replyBody,
+          resolve: false,
+          delivery: threadState.delivery,
+          setDelivery: delivery => {
+            threadState.delivery = delivery;
+          },
+          checkpoint: () => {
+          if (project) saveState(project, state, 'reviewer');
+          },
+        });
+        if (replyResult.pending) {
+          console.error(
+            `[ReviewerRunner] 回复 discussion ${discussion.id} 失败，保留待重试状态: ${replyResult.error ?? '未知错误'}`
+          );
+          break;
         }
-      }
-
-      if (latestRepliedAt > lastRepliedAt) {
-        state.reviewerThreadState ??= {};
-        state.reviewerThreadState[discussion.id] = { lastRepliedAt: latestRepliedAt };
+        console.log(`[ReviewerRunner] 已回复 discussion ${discussion.id}: ${decision.reason}`);
+        threadState.lastRepliedAt = Math.max(threadState.lastRepliedAt, noteTs);
+        threadState.pendingTargetNoteId = undefined;
+        threadState.pendingTargetCreatedAt = undefined;
+        if (project) saveState(project, state, 'reviewer');
       }
     }
   }
@@ -529,6 +712,59 @@ export class ReviewerRunner extends BaseRoleRunner {
     );
 
     return checks.filter((c) => !c.exists).map((c) => c.finding);
+  }
+
+  private async retryPendingReviewMemory(
+    memoryClient: MemoryClient,
+    project: Project,
+    state: MrAgentState,
+    stateKey: string
+  ): Promise<void> {
+    const reviewState = state.reviewState?.[stateKey];
+    const memoryState = reviewState?.memory;
+    if (!memoryState) return;
+
+    if (memoryState.findingCases && memoryState.findingCases.status !== 'recorded') {
+      const pending = memoryState.findingCases;
+      pending.status = 'pending';
+      pending.attempts += 1;
+      pending.lastError = undefined;
+      pending.updatedAt = Date.now();
+      saveState(project, state, 'reviewer');
+      try {
+        await memoryClient.recordFindingCases(pending.cases);
+        pending.status = 'recorded';
+        pending.updatedAt = Date.now();
+        console.log(`[ReviewerRunner] 已补偿写入 ${pending.cases.length} 个待处理 finding case`);
+      } catch (error) {
+        pending.status = 'failed';
+        pending.lastError = error instanceof Error ? error.message : String(error);
+        pending.updatedAt = Date.now();
+        console.warn(`[ReviewerRunner] 补偿 finding case 写入失败: ${pending.lastError}`);
+      }
+      saveState(project, state, 'reviewer');
+    }
+
+    if (memoryState.review && memoryState.review.status !== 'recorded') {
+      const pending = memoryState.review;
+      pending.status = 'pending';
+      pending.attempts += 1;
+      pending.lastError = undefined;
+      pending.updatedAt = Date.now();
+      saveState(project, state, 'reviewer');
+      try {
+        await memoryClient.recordReview(pending.payload);
+        pending.status = 'recorded';
+        pending.updatedAt = Date.now();
+        console.log(`[ReviewerRunner] 已补偿写入待处理 Reviewer 记忆`);
+      } catch (error) {
+        pending.status = 'failed';
+        pending.lastError = error instanceof Error ? error.message : String(error);
+        pending.updatedAt = Date.now();
+        console.warn(`[ReviewerRunner] 补偿 Reviewer 记忆写入失败: ${pending.lastError}`);
+      }
+      saveState(project, state, 'reviewer');
+    }
   }
 }
 

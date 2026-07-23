@@ -14,5 +14,8 @@ describe('ArchiverActor', () => {
     const actor = new ArchiverActor({ memoryClient });
     await actor.storeKnowledge([{ id: 'k1', category: 'stack', sourceFiles: [], content: 'TS', confidence: 'high', createdAt: '2026-01-01' }]);
     expect(memoryClient.recordProjectKnowledge).toHaveBeenCalledWith(expect.any(Array));
+    expect(memoryClient.recordProjectKnowledge).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'k1', content: '[ARCHIVER_ITEM:k1]\nTS' }),
+    ]);
   });
 });

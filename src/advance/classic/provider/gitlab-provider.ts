@@ -318,8 +318,9 @@ export class GitLabProvider implements IGitProvider {
   /**
    * 在指定 discussion 下追加 note
    */
-  async addDiscussionNote(iid: number, discussionId: string, body: string): Promise<void> {
-    await this.client.addDiscussionNote(iid, discussionId, body);
+  async addDiscussionNote(iid: number, discussionId: string, body: string): Promise<number> {
+    const note = await this.client.addDiscussionNote(iid, discussionId, body);
+    return note.id;
   }
 
   /**

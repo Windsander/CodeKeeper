@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   MaintainerRunner,
+  buildSummaryStateHash,
   classifyBatchFixItems,
   hasHeadChangedSinceProcessing,
+  runDiscussionTasks,
 } from '../../../../src/advance/classic/runners/maintainer-runner.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type {
@@ -50,6 +52,61 @@ const mockDiscussion: Discussion = {
     },
   ],
 };
+
+describe('runDiscussionTasks', () => {
+  it('单条 discussion 异常不会阻断后续 discussion', async () => {
+    const processed: string[] = [];
+    const errors: string[] = [];
+
+    await runDiscussionTasks(
+      ['first', 'second', 'third'],
+      async item => {
+        processed.push(item);
+        if (item === 'second') throw new Error('second discussion failed');
+      },
+      (item, error) => {
+        errors.push(`${item}:${error instanceof Error ? error.message : String(error)}`);
+      }
+    );
+
+    expect(processed).toEqual(['first', 'second', 'third']);
+    expect(errors).toEqual(['second:second discussion failed']);
+  });
+});
+
+describe('buildSummaryStateHash', () => {
+  it('忽略动态说明变化，避免同一处理状态重复发布汇总', () => {
+    const firstHash = buildSummaryStateHash(
+      ['src/app.ts:10'],
+      ['packages/example-core/src/parser.ts:22 — 第一次修复失败'],
+      [{ fileLine: 'src/app.ts:14' }],
+      [{ fileLine: 'src/app.ts:18' }],
+      [{ fileLine: 'src/app.ts:20' }]
+    );
+    const secondHash = buildSummaryStateHash(
+      ['src/app.ts:10'],
+      ['packages/example-core/src/parser.ts:22 — 第二次修复失败，原因不同'],
+      [{ fileLine: 'src/app.ts:14' }],
+      [{ fileLine: 'src/app.ts:18' }],
+      [{ fileLine: 'src/app.ts:20' }]
+    );
+
+    expect(secondHash).toBe(firstHash);
+  });
+
+  it('处理状态类别变化时生成不同哈希', () => {
+    const ignoredHash = buildSummaryStateHash(
+      [],
+      [],
+      [],
+      [{ fileLine: 'src/app.ts:10' }],
+      []
+    );
+    const fixedHash = buildSummaryStateHash(['src/app.ts:10'], [], [], [], []);
+
+    expect(fixedHash).not.toBe(ignoredHash);
+  });
+});
 
 const mockFinding: ReviewFinding = {
   severity: 'MEDIUM',
@@ -542,9 +599,23 @@ describe('MaintainerRunner', () => {
       },
     });
 
+    const repliedDiscussion: Discussion = {
+      ...mockDiscussion,
+      notes: [
+        ...mockDiscussion.notes,
+        {
+          id: 2,
+          author: 'maintainer-bot',
+          body: '✅ 已修复：当前代码已满足要求\n\n---\n*生成于 2026/07/08 · CodeKeeper Advance MR 维护 Agent · Maintainer*',
+          createdAt: '2026-07-08T01:00:00Z',
+          resolved: false,
+        },
+      ],
+    };
+
     await runner.processDiscussion(
       mockMR,
-      mockDiscussion,
+      repliedDiscussion,
       provider,
       brain,
       actor,
@@ -621,6 +692,13 @@ describe('MaintainerRunner', () => {
           author: 'reviewer-bot',
           body: '重扫后仍认为有问题\n\n---\n*生成于 2026/07/09 · CodeKeeper Advance MR 评审 Agent · 小评*',
           createdAt: '2026-07-09T00:00:00Z',
+          resolved: false,
+        },
+        {
+          id: 3,
+          author: 'maintainer-bot',
+          body: '✅ 已修复：当前代码已满足要求\n\n---\n*生成于 2026/07/09 · CodeKeeper Advance MR 维护 Agent · Maintainer*',
+          createdAt: '2026-07-09T01:00:00Z',
           resolved: false,
         },
       ],
@@ -782,7 +860,7 @@ describe('MaintainerRunner', () => {
     expect(state.processedDiscussions?.['d-1']).toBeDefined();
   });
 
-  it('批量统计报告（如 ESLint 全局报告）被识别后静默跳过，不修复不回复', async () => {
+  it('明确的 ESLint 统计报告在 finding 解析前确定性跳过', async () => {
     const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
 
     const provider = mockOf<GitLabProvider>({
@@ -871,14 +949,16 @@ describe('MaintainerRunner', () => {
       '/project'
     );
 
-    expect(brain.isStatisticalReport).toHaveBeenCalled();
+    expect(brain.parseFindings).not.toHaveBeenCalled();
+    expect(brain.isStatisticalReport).not.toHaveBeenCalled();
+    expect(provider.getMRDiff).not.toHaveBeenCalled();
     expect(brain.enrichFindingsWithCases).not.toHaveBeenCalled();
     expect(actor.applyDecision).not.toHaveBeenCalled();
     expect(state.processedDiscussions?.['d-report']).toBeDefined();
     expect(state.maintainerThreadState?.['d-report']?.statisticalReport).toBe(true);
   });
 
-  it('批量统计报告（如 ESLint 全局报告）被识别后静默跳过，不修复不回复', async () => {
+  it('格式不完整的聚合报告仍通过 LLM 语义判定后跳过', async () => {
     const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
 
     const provider = mockOf<GitLabProvider>({
@@ -942,7 +1022,7 @@ describe('MaintainerRunner', () => {
         {
           id: 1,
           author: 'ci-bot',
-          body: 'ESLint Report\nSeverity    Count\nError    0\nWarning    2724\n\nTop rules\nRule    Count\nno-console    1251\n\nTop files\nFile    Errors    Warnings\nsrc/app/core.ts    0    203\nsrc/app/gateway.ts    0    188\nsrc/app/auth.ts    0    123',
+          body: 'Lint 统计\n\nTop files\nFile    Errors    Warnings\nsrc/app/core.ts    0    203\nsrc/app/gateway.ts    0    188\nsrc/app/auth.ts    0    123',
           createdAt: '2026-07-08T00:00:00Z',
           resolved: false,
         },
@@ -974,7 +1054,7 @@ describe('MaintainerRunner', () => {
     expect(state.maintainerThreadState?.['d-report']?.statisticalReport).toBe(true);
   });
 
-  it('空格分隔的 ESLint 全局报告解析为聚合条目后判定静默跳过', async () => {
+  it('空格分隔的 ESLint 全局报告在解析前确定性跳过', async () => {
     const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
 
     // 解析为聚合条目后命中纯统计报告闸，不再拉取 MR diff
@@ -1062,7 +1142,8 @@ describe('MaintainerRunner', () => {
       '/project'
     );
 
-    expect(brain.isStatisticalReport).toHaveBeenCalledWith(reportDiscussion.notes[0].body);
+    expect(brain.parseFindings).not.toHaveBeenCalled();
+    expect(brain.isStatisticalReport).not.toHaveBeenCalled();
     expect(provider.getMRDiff).not.toHaveBeenCalled();
     expect(actor.applyDecision).not.toHaveBeenCalled();
     expect(state.maintainerThreadState?.['d-report-pre']?.statisticalReport).toBe(true);
@@ -1163,7 +1244,27 @@ describe('MaintainerRunner', () => {
         {
           id: 1,
           author: 'ci-bot',
-          body: 'CI Review 报告（统计 + 分析）',
+          body: [
+            'ESLint Report',
+            'Severity    Count',
+            'Error    0',
+            'Warning    20',
+            '',
+            'Top rules',
+            'Rule    Count',
+            'no-console    12',
+            '',
+            'Top files',
+            'File    Errors    Warnings',
+            'src/app/core.ts    0    8',
+            'src/app/gateway.ts    0    7',
+            '',
+            '⚠️ 发现项',
+            '',
+            '🔴 **高** (1)',
+            '',
+            'src/app/tracker.ts:35 · 规则 TEST-COVERAGE no-op 测试未验证真正的 noop 状态。**建议**：在测试准备阶段显式重置 tracker。',
+          ].join('\n'),
           createdAt: '2026-07-08T00:00:00Z',
           resolved: false,
         },
@@ -1807,7 +1908,13 @@ describe('MaintainerRunner', () => {
 
     expect(brain.decide).not.toHaveBeenCalled();
     expect(brain.recheckAlreadyFixed).not.toHaveBeenCalled();
-    expect(actor.applyDecision).not.toHaveBeenCalled();
+    expect(actor.applyDecision).toHaveBeenCalledWith(
+      mockMR,
+      discussion,
+      expect.objectContaining({ file: deletedFile, line: 1 }),
+      expect.objectContaining({ action: 'ignore', alreadyFixed: true }),
+      state
+    );
     expect(actor.postSummary).not.toHaveBeenCalled();
     expect(
       state.maintainerThreadState?.['d-stale-deleted']?.decisions[`${deletedFile}:1`]
@@ -1903,14 +2010,26 @@ describe('MaintainerRunner', () => {
     expect(brain.recheckAlreadyFixed).toHaveBeenCalledTimes(2);
     expect(brain.decide).not.toHaveBeenCalled();
     expect(actor.applyDecision).not.toHaveBeenCalled();
-    expect(actor.postSummary).not.toHaveBeenCalled();
+    expect(actor.postSummary).toHaveBeenCalledWith(
+      mockMR,
+      discussion,
+      [],
+      [],
+      [],
+      [],
+      [
+        { fileLine: 'src/index.ts:2', reason: '后续提交已满足原 finding' },
+        { fileLine: 'src/other.ts:4', reason: '后续提交已满足原 finding' },
+      ],
+      state
+    );
     expect(state.maintainerThreadState?.['d-stale-recheck']?.decisions).toMatchObject({
       'src/index.ts:2': { action: 'ignore', alreadyFixed: true },
       'src/other.ts:4': { action: 'ignore', alreadyFixed: true },
     });
   });
 
-  it('rechecks an unstructured reviewer discussion using its recorded note HEAD', async () => {
+  it('首条 Reviewer note 作者无法识别为 bot 时仍执行 stale already-fixed 复核', async () => {
     const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
     const finding: ReviewFinding = {
       severity: 'LOW',
@@ -1926,9 +2045,16 @@ describe('MaintainerRunner', () => {
       notes: [
         {
           id: 99,
-          author: 'review-bot',
+          author: 'GITLAB_TOKEN',
           body: `LOW\n\n${finding.file}:${finding.line} | ${finding.message} | ${finding.suggestion}`,
           createdAt: '2026-07-08T00:00:00Z',
+          resolved: false,
+        },
+        {
+          id: 100,
+          author: 'developer',
+          body: `✅ CodeKeeper Maintainer 已根据 Reviewer 的意见自动修复并推送至本分支。\n\n请 Reviewer 复核变更。\n\n---\n*生成于 2026/7/14 · CodeKeeper Advance MR 维护 Agent · maintainer*`,
+          createdAt: '2026-07-14T00:00:00Z',
           resolved: false,
         },
       ],
@@ -1980,10 +2106,11 @@ describe('MaintainerRunner', () => {
       maintainerThreadState: {
         [discussion.id]: {
           decisions: {
-            [`${finding.file}:${finding.line}`]: {
+            [`${finding.file}:12`]: {
               action: 'fix',
-              reason: 'previous fix attempt failed',
-              failedAttempts: 3,
+              reason: '旧行号对应的问题此前已经修复',
+              failedAttempts: 0,
+              fixSucceeded: true,
               decidedAt: 1,
             },
           },
@@ -2011,6 +2138,17 @@ describe('MaintainerRunner', () => {
     expect(brain.recheckAlreadyFixed).toHaveBeenCalledOnce();
     expect(brain.decide).not.toHaveBeenCalled();
     expect(actor.postSummary).not.toHaveBeenCalled();
+    expect(actor.applyDecision).toHaveBeenCalledWith(
+      mockMR,
+      discussion,
+      finding,
+      expect.objectContaining({
+        action: 'ignore',
+        alreadyFixed: true,
+        replyBody: 'a later commit contains the fix',
+      }),
+      state
+    );
     expect(state.maintainerThreadState?.[discussion.id]?.decisions).toMatchObject({
       [`${finding.file}:${finding.line}`]: { action: 'ignore', alreadyFixed: true },
     });

@@ -206,8 +206,8 @@ export interface IGitProvider {
   /** resolve 或 unresolve 指定 discussion */
   resolveDiscussion(iid: number, discussionId: string, resolved?: boolean): Promise<void>;
 
-  /** 在指定 discussion 下追加 note */
-  addDiscussionNote(iid: number, discussionId: string, body: string): Promise<void>;
+  /** 在指定 discussion 下追加 note，返回创建的 note ID */
+  addDiscussionNote(iid: number, discussionId: string, body: string): Promise<number>;
 
   /** 获取指定 MR 的评审评论（已过滤系统 note 和 bot） */
   getReviewerComments(iid: number): Promise<ReviewerComment[]>;

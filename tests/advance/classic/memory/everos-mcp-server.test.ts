@@ -140,6 +140,67 @@ describe('EverOSMcpServer 失败入队', () => {
   });
 });
 
+describe('EverOSMcpServer owner 注册', () => {
+  it('项目知识和 finding case 写入会登记所属 Agent', async () => {
+    vi.mocked(everosMemoryAddMessages).mockReset().mockResolvedValue(undefined);
+    vi.mocked(everosMemoryFlush).mockReset().mockResolvedValue(undefined);
+    const onMemoryOwners = vi.fn();
+    const server = new EverOSMcpServer({
+      everosUrl: 'http://127.0.0.1:9999',
+      onMemoryOwners,
+    });
+    const url = await server.start();
+    const client = new Client({ name: 'owner-test', version: '0.1.0' });
+    const transport = new SSEClientTransport(new URL('/sse', url));
+    await client.connect(transport);
+
+    const archiverCtx = makeCtx({ agentId: 'archiver', agentDisplayName: 'Archiver' });
+    await client.callTool({
+      name: 'record_project_knowledge',
+      arguments: {
+        context: archiverCtx,
+        items: [
+          {
+            id: 'knowledge-example',
+            category: 'architecture',
+            sourceFiles: ['src/example.ts'],
+            content: '示例架构知识',
+            confidence: 'high',
+            createdAt: '2026-07-20T00:00:00.000Z',
+          },
+        ],
+      },
+    });
+    await client.callTool({
+      name: 'record_finding_cases',
+      arguments: {
+        context: makeCtx(),
+        cases: [
+          {
+            key: 'case:example',
+            mrIid: 1,
+            file: 'src/example.ts',
+            line: 12,
+            severity: 'HIGH',
+            message: '示例问题',
+            status: 'open',
+          },
+        ],
+      },
+    });
+
+    expect(onMemoryOwners).toHaveBeenCalledWith('proj-1', [
+      expect.objectContaining({ ownerId: 'archiver', ownerType: 'agent' }),
+    ]);
+    expect(onMemoryOwners).toHaveBeenCalledWith('proj-1', [
+      expect.objectContaining({ ownerId: 'reviewer-case', ownerType: 'agent' }),
+    ]);
+
+    await transport.close();
+    await server.stop();
+  });
+});
+
 describe('buildReviewMemoryMessages', () => {
   it('没有评论且提供 MR 作者时，锚点使用 MR 作者而不是 system，并不注册 system owner', () => {
     const ctx = makeCtx();

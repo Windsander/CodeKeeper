@@ -1,7 +1,15 @@
 import type { GitLabProvider } from '../provider/gitlab-provider.js';
 import { buildDiffPosition, getFindingKey } from '../provider/discussion-mapper.js';
-import type { MergeRequest, MrDiff, MrShaInfo, ReviewFinding, ReviewResult } from '../provider/types.js';
+import type {
+  MergeRequest,
+  MrDiff,
+  MrShaInfo,
+  ReviewFinding,
+  ReviewResult,
+  ReviewerComment,
+} from '../provider/types.js';
 import { saveState, type MrAgentState } from '../runners/shared/state-utils.js';
+import { deliverReviewComment } from '../runners/shared/review-comment-delivery.js';
 import type { Project } from '../../types.js';
 import {
   formatFindingThreadComment,
@@ -25,6 +33,7 @@ export interface PostReviewOptions {
   shaInfo?: MrShaInfo;
   stateKey?: string;
   state?: MrAgentState;
+  comments?: ReviewerComment[];
 }
 
 /**
@@ -48,15 +57,13 @@ export class ReviewerActor {
     const comment = formatReviewComment(mr, result, this.options.reviewerName);
     let noteId: number;
     try {
-      noteId = await this.options.provider.postReviewComment(mr.iid, comment);
+      noteId = await this.postComment(mr, comment, options, 'summary');
       console.log(`[ReviewerActor] 已在 MR !${mr.iid} 发表 summary 评论`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[ReviewerActor] 在 MR !${mr.iid} 发表 summary 评论失败: ${message}`);
       throw error;
     }
-
-    await this.createFindingThreads(mr, result.findings, options);
     return noteId;
   }
 
@@ -64,13 +71,17 @@ export class ReviewerActor {
    * 追加补充评审评论（MR 有更新或发现新问题时）
    * 返回补充评论的 note ID
    */
-  async appendSupplementaryReview(mr: MergeRequest, newFindings: ReviewFinding[]): Promise<number> {
+  async appendSupplementaryReview(
+    mr: MergeRequest,
+    newFindings: ReviewFinding[],
+    options?: PostReviewOptions
+  ): Promise<number> {
     if (newFindings.length === 0) {
       throw new Error('无新增发现项时不应追加补充评审');
     }
     const body = formatSupplementaryReviewComment(mr, newFindings, this.options.reviewerName);
     try {
-      const noteId = await this.options.provider.postReviewComment(mr.iid, body);
+      const noteId = await this.postComment(mr, body, options, 'append');
       console.log(`[ReviewerActor] 已在 MR !${mr.iid} 追加补充评审`);
       return noteId;
     } catch (error) {
@@ -130,6 +141,37 @@ export class ReviewerActor {
     }
 
     state.discussions[stateKey] = posted;
-    saveState(this.options.project, state);
+    saveState(this.options.project, state, 'reviewer');
+  }
+
+  private async postComment(
+    mr: MergeRequest,
+    body: string,
+    options: PostReviewOptions | undefined,
+    kind: 'summary' | 'append'
+  ): Promise<number> {
+    if (!options?.state || !options.stateKey || !options.comments) {
+      return this.options.provider.postReviewComment(mr.iid, body);
+    }
+
+    options.state.reviewCommentDelivery ??= {};
+    const deliveryState = (options.state.reviewCommentDelivery[options.stateKey] ??= {});
+    const result = await deliverReviewComment({
+      provider: this.options.provider,
+      mr,
+      body,
+      comments: options.comments,
+      delivery: deliveryState[kind],
+      setDelivery: delivery => {
+        deliveryState[kind] = delivery;
+      },
+      checkpoint: () => {
+        if (this.options.project) saveState(this.options.project, options.state!, 'reviewer');
+      },
+    });
+    if (!result.posted || result.noteId === undefined) {
+      throw new Error(result.error ?? `Reviewer ${kind} 评论投递未完成`);
+    }
+    return result.noteId;
   }
 }

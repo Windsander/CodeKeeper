@@ -7,6 +7,11 @@ import type { CognitiveDecision } from './cognitive-types.js';
 import type { MrAgentState } from '../runners/shared/state-utils.js';
 import type { IMemoryClient } from '../memory/types.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
+import type { DiscussionDeliveryResult } from '../runners/shared/discussion-delivery.js';
+import {
+  deliverDiscussionReply,
+  isDiscussionDeliveryPending,
+} from '../runners/shared/discussion-delivery.js';
 import { FixToolLoop } from './fix-tool-loop.js';
 import { formatAgentFooter, MAINTAINER_ROLE_LABEL } from '../runners/shared/review-utils.js';
 import { basename } from 'node:path';
@@ -27,6 +32,17 @@ export interface MaintainerActorOptions {
   memoryClient?: IMemoryClient;
   /** 可选的记忆查询规划器 */
   recallPlanner?: RecallPlanner;
+  /** 远端副作用状态变化后的即时 checkpoint */
+  checkpoint?: () => void;
+}
+
+export interface MaintainerActionResult {
+  codeApplied: boolean;
+  replyPosted: boolean;
+  resolved: boolean;
+  awaitingReply: boolean;
+  pending: boolean;
+  error?: string;
 }
 
 /**
@@ -55,36 +71,38 @@ export class MaintainerActor {
     finding: ReviewFinding,
     decision: MaintainerDecision,
     state: MrAgentState
-  ): Promise<boolean> {
+  ): Promise<MaintainerActionResult> {
     switch (decision.action) {
       case 'fix': {
         if (decision.deleteFile) {
-          const success = await this.executeDeleteFileFix(mr, discussion, finding, decision);
-          if (!success) {
+          const result = await this.executeDeleteFileFix(mr, discussion, finding, decision, state);
+          if (!result.codeApplied) {
             const question = defaultPromptLoader.load('maintainer-delete-failed-ask', {
               file: finding.file,
             });
-            await this.ask(mr, discussion, question, finding.file, state);
+            decision.question = question;
+            const askResult = await this.ask(mr, discussion, question, finding.file, state);
+            return this.mergeActionResults(result, askResult, false);
           }
-          return success;
+          return result;
         }
-        const success = await this.executeFix(mr, discussion, finding, decision);
-        if (!success) {
+        const result = await this.executeFix(mr, discussion, finding, decision, state);
+        if (!result.codeApplied) {
           const question = defaultPromptLoader.load('maintainer-fix-failed-ask', {
             fileLine: `${finding.file}:${finding.line}`,
           });
-          await this.ask(mr, discussion, question, finding.file, state);
+          decision.question = question;
+          const askResult = await this.ask(mr, discussion, question, finding.file, state);
+          return this.mergeActionResults(result, askResult, false);
         }
-        return success;
+        return result;
       }
       case 'ask': {
         const question = decision.question ?? defaultPromptLoader.load('maintainer-ask-clarify');
-        await this.ask(mr, discussion, question, finding.file, state);
-        return true;
+        return this.ask(mr, discussion, question, finding.file, state);
       }
       case 'ignore': {
-        await this.ignore(mr, discussion, decision.reason ?? '无需处理', decision);
-        return true;
+        return this.ignore(mr, discussion, decision.reason ?? '无需处理', decision, state);
       }
     }
   }
@@ -101,7 +119,7 @@ export class MaintainerActor {
     ignoredItems: Array<{ fileLine: string; reason: string }>,
     alreadyFixedItems: Array<{ fileLine: string; reason: string }>,
     state: MrAgentState
-  ): Promise<void> {
+  ): Promise<DiscussionDeliveryResult> {
     const sections: string[] = [];
 
     if (fixedItems.length > 0) {
@@ -128,7 +146,7 @@ export class MaintainerActor {
 
     if (sections.length === 0) {
       console.log(`[MaintainerActor] discussion ${discussion.id} 没有任何处理结果，跳过回复`);
-      return;
+      return { replyPosted: false, resolved: false, pending: false };
     }
 
     const body = `${sections.join('\n\n')}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`;
@@ -136,21 +154,60 @@ export class MaintainerActor {
       `[MaintainerActor] discussion ${discussion.id} 汇总回复 counts=fixed:${fixedItems.length},alreadyFixed:${alreadyFixedItems.length},failed:${failedItems.length},asked:${askedItems.length},ignored:${ignoredItems.length}`
     );
 
-    try {
-      await this.options.provider.addDiscussionNote(mr.iid, discussion.id, body);
+    // 已修复、已确认无需重复修改、已忽略都属于终态；无失败/待澄清项时 resolve。
+    const completedItems = fixedItems.length + alreadyFixedItems.length + ignoredItems.length;
+    const shouldResolve = completedItems > 0 && failedItems.length === 0 && askedItems.length === 0;
+    const pendingQuestion = askedItems[0];
+    const result = await this.deliverReply(
+      mr,
+      discussion,
+      body,
+      shouldResolve,
+      state,
+      pendingQuestion
+        ? { question: pendingQuestion.text, filePath: pendingQuestion.fileLine.split(':')[0] }
+        : undefined
+    );
 
-      // 只有在全部处理完成且没有待澄清/失败项时才 resolve
-      if (fixedItems.length > 0 && failedItems.length === 0 && askedItems.length === 0) {
-        await this.options.provider.resolveDiscussion(mr.iid, discussion.id);
-        console.log(`[MaintainerActor] 汇总 discussion ${discussion.id} 已全部修复并 resolve`);
-      } else if (askedItems.length > 0) {
-        this.setAwaitingReply(state, discussion.id, askedItems[0].text, askedItems[0].fileLine);
-        console.log(`[MaintainerActor] 汇总 discussion ${discussion.id} 有待澄清项，等待回复`);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[MaintainerActor] 回复 discussion ${discussion.id} 失败: ${message}`);
+    if (result.replyPosted && askedItems.length > 0) {
+      this.setAwaitingReply(state, discussion.id, askedItems[0].text, askedItems[0].fileLine);
+      this.options.checkpoint?.();
+      console.log(`[MaintainerActor] 汇总 discussion ${discussion.id} 有待澄清项，等待回复`);
+    } else if (result.resolved) {
+      console.log(`[MaintainerActor] 汇总 discussion ${discussion.id} 已全部处理并 resolve`);
     }
+
+    return result;
+  }
+
+  /** 发布非 finding 场景或超时收尾所需的普通 discussion 回复。 */
+  async postReply(
+    mr: MergeRequest,
+    discussion: Discussion,
+    body: string,
+    state: MrAgentState,
+    resolve = false
+  ): Promise<DiscussionDeliveryResult> {
+    return this.deliverReply(mr, discussion, body, resolve, state);
+  }
+
+  /** 恢复上一次已记录但尚未完成的远端投递。 */
+  async retryPendingDelivery(
+    mr: MergeRequest,
+    discussion: Discussion,
+    state: MrAgentState
+  ): Promise<DiscussionDeliveryResult | null> {
+    const threadState = state.maintainerThreadState?.[discussion.id];
+    if (!isDiscussionDeliveryPending(threadState?.delivery)) return null;
+    const delivery = threadState?.delivery;
+    if (!delivery) return null;
+    return this.deliverReply(
+      mr,
+      discussion,
+      delivery.replyBody,
+      delivery.resolveRequired,
+      state
+    );
   }
 
   /**
@@ -292,8 +349,9 @@ export class MaintainerActor {
     mr: MergeRequest,
     discussion: Discussion,
     finding: ReviewFinding,
-    decision: MaintainerDecision
-  ): Promise<boolean> {
+    decision: MaintainerDecision,
+    state: MrAgentState
+  ): Promise<MaintainerActionResult> {
     const syntheticFinding: ReviewFinding = {
       ...finding,
       autoFixable: true,
@@ -340,12 +398,12 @@ export class MaintainerActor {
         decision.alreadyFixed = true;
         decision.reason = fixResult.reason;
         decision.replyBody = fixResult.evidence || fixResult.reason;
-        await this.ignore(mr, discussion, decision.reason, decision);
-        return true;
+        const delivery = await this.ignore(mr, discussion, decision.reason, decision, state);
+        return this.withDeliveryResult(true, delivery);
       }
 
       if (!fixResult.success) {
-        return false;
+        return this.emptyActionResult(false, fixResult.reason);
       }
 
       console.log(`[MaintainerActor] 阶段=commit-push 提交并推送修复到分支: ${mr.sourceBranch}`);
@@ -355,30 +413,25 @@ export class MaintainerActor {
         () => buildDefaultFixMessage(finding)
       );
 
-      try {
-        await this.options.provider.resolveDiscussion(mr.iid, discussion.id);
-
-        const cognitive = decision as CognitiveDecision;
-        const reasoningSection = cognitive.reasoning
-          ? `\n\n**问题分析**\n${cognitive.analysis ?? '未提供'}\n\n**考虑过的方案**\n${cognitive.consideredOptions?.map((o: string) => `- ${o}`).join('\n') ?? '无'}\n\n**最终决策**\n${cognitive.reasoning}`
-          : '';
-
-        await this.options.provider.addDiscussionNote(
-          mr.iid,
-          discussion.id,
-          `✅ ${this.options.maintainerName} 已根据 Reviewer 的意见自动修复并推送至本分支。${reasoningSection}\n\n请 Reviewer 复核变更。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`
-        );
+      const cognitive = decision as CognitiveDecision;
+      const reasoningSection = cognitive.reasoning
+        ? `\n\n**问题分析**\n${cognitive.analysis ?? '未提供'}\n\n**考虑过的方案**\n${cognitive.consideredOptions?.map((o: string) => `- ${o}`).join('\n') ?? '无'}\n\n**最终决策**\n${cognitive.reasoning}`
+        : '';
+      const delivery = await this.deliverReply(
+        mr,
+        discussion,
+        `✅ ${this.options.maintainerName} 已根据 Reviewer 的意见自动修复并推送至本分支。${reasoningSection}\n\n请 Reviewer 复核变更。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`,
+        true,
+        state
+      );
+      if (delivery.resolved) {
         console.log(`[MaintainerActor] 已修复并 resolve discussion ${discussion.id}`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[MaintainerActor] resolve discussion ${discussion.id} 失败: ${message}`);
       }
-
-      return true;
+      return this.withDeliveryResult(true, delivery);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[MaintainerActor] 修复异常: ${reason}`);
-      return false;
+      return this.emptyActionResult(false, reason);
     }
   }
 
@@ -390,8 +443,9 @@ export class MaintainerActor {
     mr: MergeRequest,
     discussion: Discussion,
     finding: ReviewFinding,
-    decision: MaintainerDecision
-  ): Promise<boolean> {
+    decision: MaintainerDecision,
+    state: MrAgentState
+  ): Promise<MaintainerActionResult> {
     console.log(`[MaintainerActor] 执行删除文件修复: ${finding.file}`);
 
     try {
@@ -407,7 +461,7 @@ export class MaintainerActor {
       const resolvedPath = await this.options.worktreeManager.resolveFilePath(finding.file);
       if (!resolvedPath) {
         console.warn(`[MaintainerActor] 无法解析文件路径: ${finding.file}`);
-        return false;
+        return this.emptyActionResult(false, `无法解析文件路径: ${finding.file}`);
       }
 
       console.log(`[MaintainerActor] 阶段=delete 删除文件: ${resolvedPath}`);
@@ -421,30 +475,25 @@ export class MaintainerActor {
         () => `chore: 移除不应上传的文件 ${basename(finding.file)}`
       );
 
-      try {
-        await this.options.provider.resolveDiscussion(mr.iid, discussion.id);
-
-        const cognitive = decision as CognitiveDecision;
-        const reasoningSection = cognitive.reasoning
-          ? `\n\n**问题分析**\n${cognitive.analysis ?? '未提供'}\n\n**考虑过的方案**\n${cognitive.consideredOptions?.map((o: string) => `- ${o}`).join('\n') ?? '无'}\n\n**最终决策**\n${cognitive.reasoning}`
-          : '';
-
-        await this.options.provider.addDiscussionNote(
-          mr.iid,
-          discussion.id,
-          `✅ ${this.options.maintainerName} 已根据 Reviewer 的意见删除文件 \`${finding.file}\` 并推送至本分支。${reasoningSection}\n\n请 Reviewer 复核变更。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`
-        );
+      const cognitive = decision as CognitiveDecision;
+      const reasoningSection = cognitive.reasoning
+        ? `\n\n**问题分析**\n${cognitive.analysis ?? '未提供'}\n\n**考虑过的方案**\n${cognitive.consideredOptions?.map((o: string) => `- ${o}`).join('\n') ?? '无'}\n\n**最终决策**\n${cognitive.reasoning}`
+        : '';
+      const delivery = await this.deliverReply(
+        mr,
+        discussion,
+        `✅ ${this.options.maintainerName} 已根据 Reviewer 的意见删除文件 \`${finding.file}\` 并推送至本分支。${reasoningSection}\n\n请 Reviewer 复核变更。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`,
+        true,
+        state
+      );
+      if (delivery.resolved) {
         console.log(`[MaintainerActor] 已删除文件并 resolve discussion ${discussion.id}`);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error(`[MaintainerActor] resolve discussion ${discussion.id} 失败: ${message}`);
       }
-
-      return true;
+      return this.withDeliveryResult(true, delivery);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[MaintainerActor] 删除文件修复异常: ${reason}`);
-      return false;
+      return this.emptyActionResult(false, reason);
     }
   }
 
@@ -454,55 +503,123 @@ export class MaintainerActor {
     question: string,
     filePath: string,
     state: MrAgentState
-  ): Promise<void> {
-    try {
-      await this.options.provider.addDiscussionNote(
-        mr.iid,
-        discussion.id,
-        `${question}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`
-      );
+  ): Promise<MaintainerActionResult> {
+    const result = await this.deliverReply(
+      mr,
+      discussion,
+      `${question}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`,
+      false,
+      state,
+      { question, filePath }
+    );
+    if (result.replyPosted) {
       this.setAwaitingReply(state, discussion.id, question, filePath);
+      this.options.checkpoint?.();
       console.log(`[MaintainerActor] 已在 discussion ${discussion.id} 提出澄清问题`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[MaintainerActor] 提出澄清问题失败: ${message}`);
     }
+    return this.withDeliveryResult(false, result, result.replyPosted);
   }
 
   private async ignore(
     mr: MergeRequest,
     discussion: Discussion,
     reason: string,
-    decision: MaintainerDecision
-  ): Promise<void> {
-    const { maintainerName, provider } = this.options;
-    try {
-      const isAlreadyFixed = decision.alreadyFixed === true;
-      let body: string;
-      if (isAlreadyFixed) {
-        body =
-          defaultPromptLoader.load('maintainer-already-fixed-reply', {
-            maintainerName,
-            replyBody: decision.replyBody || reason,
-          }) + `\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`;
-      } else {
-        body =
-          defaultPromptLoader.load('maintainer-ignore-reply', {
-            maintainerName,
-            reason,
-          }) + `\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`;
-      }
-      await provider.addDiscussionNote(mr.iid, discussion.id, body);
-      if (isAlreadyFixed) {
-        await provider.resolveDiscussion(mr.iid, discussion.id);
-        console.log(`[MaintainerActor] 已标记 discussion ${discussion.id} 为已修复并 resolve`);
-      } else {
-        console.log(`[MaintainerActor] 已忽略 discussion ${discussion.id}`);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[MaintainerActor] 回复 discussion ${discussion.id} 失败: ${message}`);
+    decision: MaintainerDecision,
+    state: MrAgentState
+  ): Promise<MaintainerActionResult> {
+    const { maintainerName } = this.options;
+    const isAlreadyFixed = decision.alreadyFixed === true;
+    const body = isAlreadyFixed
+      ? defaultPromptLoader.load('maintainer-already-fixed-reply', {
+          maintainerName,
+          replyBody: decision.replyBody || reason,
+        }) + `\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+      : defaultPromptLoader.load('maintainer-ignore-reply', {
+          maintainerName,
+          reason,
+        }) + `\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`;
+    const result = await this.deliverReply(mr, discussion, body, true, state);
+    if (result.resolved) {
+      console.log(
+        `[MaintainerActor] 已说明 discussion ${discussion.id} ${isAlreadyFixed ? '当前已修复' : '无需修复'}并 resolve`
+      );
     }
+    return this.withDeliveryResult(true, result);
+  }
+
+  private getMaintainerThreadState(state: MrAgentState, discussionId: string) {
+    state.maintainerThreadState ??= {};
+    state.maintainerThreadState[discussionId] ??= {
+      decisions: {},
+      lastReviewerNoteAt: 0,
+      lastHumanNoteAt: 0,
+    };
+    return state.maintainerThreadState[discussionId];
+  }
+
+  private async deliverReply(
+    mr: MergeRequest,
+    discussion: Discussion,
+    body: string,
+    resolve: boolean,
+    state: MrAgentState,
+    awaitingReply?: { question: string; filePath: string }
+  ): Promise<DiscussionDeliveryResult> {
+    const threadState = this.getMaintainerThreadState(state, discussion.id);
+    return deliverDiscussionReply({
+      provider: this.options.provider,
+      mr,
+      discussion,
+      body,
+      resolve,
+      awaitingReply,
+      delivery: threadState.delivery,
+      setDelivery: delivery => {
+        threadState.delivery = delivery;
+      },
+      checkpoint: () => this.options.checkpoint?.(),
+    });
+  }
+
+  private withDeliveryResult(
+    codeApplied: boolean,
+    delivery: DiscussionDeliveryResult,
+    awaitingReply = false
+  ): MaintainerActionResult {
+    return {
+      codeApplied,
+      replyPosted: delivery.replyPosted,
+      resolved: delivery.resolved,
+      awaitingReply,
+      pending: delivery.pending,
+      error: delivery.error,
+    };
+  }
+
+  private emptyActionResult(codeApplied: boolean, error?: string): MaintainerActionResult {
+    return {
+      codeApplied,
+      replyPosted: false,
+      resolved: false,
+      awaitingReply: false,
+      pending: false,
+      error,
+    };
+  }
+
+  private mergeActionResults(
+    codeResult: MaintainerActionResult,
+    replyResult: MaintainerActionResult,
+    resolved: boolean
+  ): MaintainerActionResult {
+    return {
+      codeApplied: codeResult.codeApplied,
+      replyPosted: replyResult.replyPosted,
+      resolved: resolved && replyResult.resolved,
+      awaitingReply: replyResult.awaitingReply,
+      pending: codeResult.pending || replyResult.pending,
+      error: replyResult.error ?? codeResult.error,
+    };
   }
 
   private setAwaitingReply(
@@ -512,6 +629,7 @@ export class MaintainerActor {
     fileLine: string
   ): void {
     const filePath = fileLine.split(':')[0];
+    state.interactiveThreads ??= {};
     state.interactiveThreads[discussionId] = {
       status: 'awaiting-reply',
       askedAt: Date.now(),

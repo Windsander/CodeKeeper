@@ -248,6 +248,40 @@ describe('isDiscussionPending', () => {
     expect(isDiscussionPending(d, state)).toBe(false);
   });
 
+  it('全部无需修复但远端最终说明被删除时重新进入流程', () => {
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer-bot', body: '发现两个问题', createdAt: '2026-07-20T00:00:00Z' },
+      ],
+    });
+    const state = makeState({
+      processedDiscussions: { 'd-1': { noteCount: 2, processedAt: 1 } },
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/app.ts:10': {
+              action: 'ignore',
+              alreadyFixed: true,
+              reason: '当前实现已满足要求',
+              failedAttempts: 0,
+              decidedAt: 1,
+            },
+            'src/facade.ts:20': {
+              action: 'ignore',
+              reason: '该项无需修改',
+              failedAttempts: 0,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+          lastSummaryHash: 'old-summary',
+        },
+      },
+    });
+
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
   it('有 Maintainer 回复但无任何处理记录时放行重新评估', () => {
     // 旧版本对含真实 finding 的评论只发过轻松回复，未记录任何决策，
     // 不能因为有一条 Maintainer note 就永久跳过
@@ -367,6 +401,36 @@ describe('isDiscussionPending', () => {
       },
     });
     expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('有具体 file:line 但尚无 Maintainer 回复时不被旧状态压过', () => {
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'reviewer-bot',
+          body: 'packages/example-core/src/parser.ts:22 存在类型问题',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      processedDiscussions: { 'd-1': { noteCount: 1, processedAt: 1 } },
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'packages/example-core/src/parser.ts:22': {
+              action: 'fix',
+              reason: '历史修复尝试未成功',
+              failedAttempts: 3,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+
+    expect(isDiscussionPending(d, state)).toBe(true);
   });
 
   it('存在失败且未达重试上限的 fix 时，即使最后一条是 Maintainer 最终回复也进入流程', () => {

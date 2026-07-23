@@ -6,7 +6,13 @@
 
 import type { Discussion, ReviewerComment } from '../../provider/types.js';
 import type { MrAgentState, MaintainerFindingDecision, MaintainerThreadState } from './state-utils.js';
-import { isMaintainerAuthoredNote, isAgentAuthoredNote, isBotAuthor } from './review-utils.js';
+import {
+  isMaintainerAuthoredNote,
+  isMaintainerNoFixExplanationNote,
+  isAgentAuthoredNote,
+  isBotAuthor,
+} from './review-utils.js';
+import { isDiscussionDeliveryPending } from './discussion-delivery.js';
 
 /** 单条 finding 最大自动修复重试次数 */
 const MAX_FIX_RETRY_ATTEMPTS = 3;
@@ -55,6 +61,13 @@ function isHumanNote(note: ReviewerComment): boolean {
   );
 }
 
+/** 判断 discussion 正文是否包含可定位到文件和行号的 finding。 */
+function hasConcreteFindingReference(discussion: Discussion): boolean {
+  return discussion.notes.some(note =>
+    /[A-Za-z0-9_.@*~-]+(?:\/[A-Za-z0-9_.@*~-]+)+:\d+\b/.test(note.body)
+  );
+}
+
 /**
  * 判断该 discussion 是否有「已处理」的证据。
  *
@@ -72,6 +85,24 @@ function hasProcessingEvidence(threadState: MaintainerThreadState | undefined): 
   );
 }
 
+/** 判断所有 finding 是否都已判定为无需修复，且远端 note 已逐项说明。 */
+function hasCompleteNoFixExplanation(
+  discussion: Discussion,
+  decisions: Record<string, MaintainerFindingDecision>
+): boolean {
+  const entries = Object.entries(decisions);
+  if (entries.length === 0 || entries.some(([, decision]) => decision.action !== 'ignore')) {
+    return true;
+  }
+
+  const explanationNotes = discussion.notes.filter(note =>
+    isMaintainerNoFixExplanationNote(note.body)
+  );
+  if (explanationNotes.length === 0) return false;
+  if (entries.length === 1) return true;
+  return entries.every(([fileLine]) => explanationNotes.some(note => note.body.includes(fileLine)));
+}
+
 /**
  * 判断 discussion 是否应该被 Maintainer 处理
  *
@@ -82,11 +113,13 @@ export function isDiscussionPending(
   discussion: Discussion,
   state: Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'>
 ): boolean {
-  if (discussion.resolved || !discussion.resolvable) {
+  const threadState = state.maintainerThreadState?.[discussion.id];
+  const hasPendingDelivery = isDiscussionDeliveryPending(threadState?.delivery);
+  if ((discussion.resolved || !discussion.resolvable) && !hasPendingDelivery) {
     return false;
   }
+  if (hasPendingDelivery) return true;
 
-  const threadState = state.maintainerThreadState?.[discussion.id];
   const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState.decisions) : false;
 
   const lastHumanNoteAt = getLatestNoteTime(discussion.notes, isHumanNote);
@@ -114,6 +147,23 @@ export function isDiscussionPending(
   const lastMaintainerNoteAt = getLatestNoteTime(discussion.notes, (note) =>
     isMaintainerAuthoredNote(note.body)
   );
+
+  // 旧状态可能只记录了 noteCount 或历史决策，但实际尚未成功发布 Maintainer 回复。
+  // 只要正文包含明确的 file:line，就必须重新进入流程；纯统计报告通常没有行号，
+  // 仍由统计报告分支静默跳过。
+  if (lastMaintainerNoteAt === 0 && hasConcreteFindingReference(discussion)) {
+    return true;
+  }
+
+  // 所有 finding 都已判定无需修复，但远端没有对应说明（可能从未发布或被清理）：
+  // 必须重新进入流程补发逐项结论并 resolve，不能只依赖本地决策状态静默跳过。
+  if (
+    threadState &&
+    !hasCompleteNoFixExplanation(discussion, threadState.decisions) &&
+    !hasPendingRetry
+  ) {
+    return true;
+  }
 
   // 如果 Maintainer 已经回复/提问过，且之后没有新的人工 note：
   // - 有处理证据（决策记忆/统计报告/非 finding 记录）→ 跳过，防重复回复与自我追问；

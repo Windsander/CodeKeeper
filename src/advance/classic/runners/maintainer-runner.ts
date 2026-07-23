@@ -10,7 +10,7 @@ import { LlmClient } from '../../llm/client.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';
-import { MaintainerActor } from '../fix/maintainer-actor.js';
+import { MaintainerActor, type MaintainerActionResult } from '../fix/maintainer-actor.js';
 import { CognitiveEngine } from '../cognitive-engine.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { RecallPlanner } from '../memory/recall-planner.js';
@@ -25,12 +25,18 @@ import {
   isAgentAuthoredNote,
   isBotAuthor,
   isMaintainerAuthoredNote,
+  isMaintainerNoFixExplanationNote,
   MAINTAINER_ROLE_LABEL,
 } from './shared/review-utils.js';
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { focusedContextToString } from '../fix/focused-context-streamer.js';
 import { isDiscussionPending, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
 import { parseStructuredCiReview } from './shared/ci-review-parser.js';
+import {
+  deliverDiscussionReply,
+  isDiscussionDeliveryPending,
+  type DiscussionDeliveryResult,
+} from './shared/discussion-delivery.js';
 
 function logMemoryUsage(label: string): void {
   const usage = process.memoryUsage();
@@ -57,19 +63,36 @@ export function buildMaintainerMrSessionId(projectId: string, mrIid: number): st
 /** 单条 finding 最大自动修复重试次数 */
 const MAX_FIX_RETRY_ATTEMPTS = 3;
 
+function normalizeMaintainerActionResult(
+  result: MaintainerActionResult | boolean | undefined
+): MaintainerActionResult {
+  if (typeof result === 'object' && result !== null) return result;
+  const codeApplied = result === true;
+  return {
+    codeApplied,
+    replyPosted: false,
+    resolved: false,
+    awaitingReply: false,
+    pending: false,
+  };
+}
+
 function getFindingKey(finding: ReviewFinding): string {
   return `${finding.file}:${finding.line}`;
 }
 
 /**
- * 获取 discussion 中最近一条「人工」note 的时间戳（毫秒）。
+ * 获取 discussion 中最近一条「人工追评」note 的时间戳（毫秒）。
  *
- * 人工 note 指非任何 Agent（评审/维护）、也非自动化 bot 发布的 note。
+ * discussion 首条 note 是问题来源，不属于后续追评，即使其作者名无法识别为 bot
+ * （例如令牌账号或自定义 Reviewer 用户名），也不能据此阻止 stale finding 复核。
+ * 人工追评指首条之后、非任何 Agent（评审/维护）、也非自动化 bot 发布的 note。
  * 只有人工新回复才可能带来改变已有结论的新信息；
  * Agent/bot 自动重扫或补发的 note 不含新信息，不应触发重评估。
  */
 function getLastHumanNoteAt(discussion: Discussion): number {
   return discussion.notes
+    .slice(1)
     .filter(note => !isAgentAuthoredNote(note.body) && !isBotAuthor(note.author))
     .reduce((max, note) => {
       const t = new Date(note.createdAt).getTime();
@@ -84,6 +107,29 @@ function simpleHash(text: string): string {
     h |= 0;
   }
   return String(h);
+}
+
+/**
+ * 构建稳定的 summary 状态哈希。
+ *
+ * 仅使用 finding 定位和处理状态参与去重，不把 LLM 生成的自然语言说明纳入哈希，
+ * 避免同一批 finding 每轮换一种措辞就被误判为新结果并重复发布汇总。
+ */
+export function buildSummaryStateHash(
+  fixedItems: string[],
+  failedItems: string[],
+  askedItems: Array<{ fileLine: string }>,
+  ignoredItems: Array<{ fileLine: string }>,
+  alreadyFixedItems: Array<{ fileLine: string }>
+): string {
+  const stateKeys = [
+    ...fixedItems.map(fileLine => `fixed:${fileLine}`),
+    ...failedItems.map(item => `failed:${item.split(' — ')[0]}`),
+    ...askedItems.map(item => `ask:${item.fileLine}`),
+    ...ignoredItems.map(item => `ignored:${item.fileLine}`),
+    ...alreadyFixedItems.map(item => `already-fixed:${item.fileLine}`),
+  ].sort();
+  return simpleHash(JSON.stringify(stateKeys));
 }
 
 function isReviewCommitStale(
@@ -123,6 +169,26 @@ export function hasHeadChangedSinceProcessing(
   if (state.interactiveThreads?.[discussion.id]?.status === 'awaiting-reply') return false;
   const processedHead = state.maintainerThreadState?.[discussion.id]?.lastProcessedHeadSha;
   return Boolean(processedHead && isReviewCommitStale(processedHead, currentHeadSha));
+}
+
+/**
+ * 顺序处理一组 discussion，并隔离单条 discussion 的异常。
+ *
+ * Maintainer 的记忆写入可能早于回复或修复工具完成；单条异常不能因此中断同一 MR
+ * 的后续 discussion，否则会出现“记忆持续增长但只有第一条有回复”的假象。
+ */
+export async function runDiscussionTasks<T>(
+  items: T[],
+  task: (item: T) => Promise<void>,
+  onError: (item: T, error: unknown) => void
+): Promise<void> {
+  for (const item of items) {
+    try {
+      await task(item);
+    } catch (error) {
+      onError(item, error);
+    }
+  }
 }
 
 /**
@@ -285,6 +351,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         maintainerName,
         memoryClient,
         recallPlanner,
+        checkpoint: () => saveState(project, state, 'maintainer'),
       });
 
       console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
@@ -333,7 +400,9 @@ export class MaintainerRunner extends BaseRoleRunner {
       console.log(
         `[MaintainerRunner] MR !${mr.iid} processing ${pendingDiscussions.length} discussions`
       );
-      for (const discussion of pendingDiscussions) {
+      await runDiscussionTasks(
+        pendingDiscussions,
+        async discussion => {
         console.log(
           `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
         );
@@ -349,14 +418,24 @@ export class MaintainerRunner extends BaseRoleRunner {
           state,
           project.rootPath,
           memoryClient,
-          cognitiveDepth,
-          currentHeadSha
-        );
-      }
+           cognitiveDepth,
+           currentHeadSha
+         );
+         saveState(project, state, 'maintainer');
+         },
+        (discussion, error) => {
+          // 记忆写入可能已经在异常前完成，因此不能据此推断回复也已成功发布。
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(
+            `[MaintainerRunner] discussion ${discussion.id} 处理异常，继续处理后续 discussion: ${message}`
+          );
+          saveState(project, state, 'maintainer');
+        }
+      );
       await memoryClient?.disconnect().catch(() => undefined);
     }
 
-    saveState(project, state);
+    saveState(project, state, 'maintainer');
   }
 
   /**
@@ -397,6 +476,29 @@ export class MaintainerRunner extends BaseRoleRunner {
       return;
     }
 
+    const threadState = this.getMaintainerThreadState(state, discussion.id);
+    const pendingDelivery = await this.retryPendingDiscussionDelivery(
+      actor,
+      provider,
+      mr,
+      discussion,
+      state
+    );
+    if (pendingDelivery) {
+      if (pendingDelivery.replyPosted && !pendingDelivery.resolved) {
+        this.restoreInteractiveThread(state, discussion.id);
+      }
+      recordProcessed();
+      if (pendingDelivery.pending) {
+        console.warn(
+          `[MaintainerRunner] discussion ${discussion.id} 远端投递仍待重试: ${pendingDelivery.error ?? '未知错误'}`
+        );
+      } else {
+        console.log(`[MaintainerRunner] discussion ${discussion.id} 已恢复未完成的远端投递`);
+      }
+      return;
+    }
+
     // 如果本 discussion 正在交互式等待 Reviewer 回复，先处理新回复
     const existingThread = state.interactiveThreads?.[discussion.id];
     if (existingThread?.status === 'awaiting-reply') {
@@ -433,14 +535,26 @@ export class MaintainerRunner extends BaseRoleRunner {
                 const timeoutDays = Math.round(
                   INTERACTIVE_REPLY_TIMEOUT_MS / (24 * 60 * 60 * 1000)
                 );
-                await provider.addDiscussionNote(
-                  mr.iid,
-                  discussion.id,
-                  `⏳ 已超过 ${timeoutDays} 天未收到回复，暂时搁置该问题。如仍需处理，请直接回复本讨论。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+                const timeoutResult = await this.postDiscussionReply(
+                  actor,
+                  provider,
+                  mr,
+                  discussion,
+                  `⏳ 已超过 ${timeoutDays} 天未收到回复，暂时搁置该问题。如仍需处理，请直接回复本讨论。\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`,
+                  state
                 );
+                if (!timeoutResult.replyPosted) {
+                  console.warn(
+                    `[MaintainerRunner] discussion ${discussion.id} 超时收尾说明待重试: ${timeoutResult.error ?? '未知错误'}`
+                  );
+                  recordProcessed();
+                  return;
+                }
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 console.error(`[MaintainerRunner] 发布交互超时收尾说明失败: ${message}`);
+                recordProcessed();
+                return;
               }
             }
             delete state.interactiveThreads[discussion.id];
@@ -469,8 +583,6 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
     }
 
-    const threadState = this.getMaintainerThreadState(state, discussion.id);
-
     // CI Review 使用结构化解析，避免把规则确认项、优点或折叠区说明混成普通 finding。
     const ciReview = parseStructuredCiReview(firstNote.body, { projectRootPath });
     const reviewCommit = getDiscussionReviewCommit(
@@ -480,6 +592,19 @@ export class MaintainerRunner extends BaseRoleRunner {
       state,
       ciReview?.commitSha ?? extractReviewCommit(firstNote.body)
     );
+
+    // 明确的机器统计报告必须在 finding 解析前截断。
+    // 否则 Top files 表格会被解析成一批 line:1 的文件级 finding；一旦后续 LLM
+    // 保守地判成「非统计报告」，这些计数行就会错误进入修复循环。
+    // 混合报告若包含具体 file:line 定位，不会命中此确定性闸门，仍按正常 finding 处理。
+    if (!ciReview && this.isClearlyStatisticalReportBody(firstNote.body)) {
+      console.log(
+        `[MaintainerRunner] discussion ${discussion.id} 结构化识别为纯统计报告，解析前静默跳过`
+      );
+      threadState.statisticalReport = true;
+      recordProcessed();
+      return;
+    }
 
     // 先解析 finding，用解析结果区分「纯统计报告」与「含可操作 finding 的混合报告」：
     // 只有完全解析不出可操作 finding 时才可能是纯统计报告；
@@ -693,11 +818,19 @@ export class MaintainerRunner extends BaseRoleRunner {
               ? decision.question
               : '我没有完全理解这条评论的意图，能否补充一下需要处理的具体文件或修改方式？';
             try {
-              await provider.addDiscussionNote(
-                mr.iid,
-                discussion.id,
-                `${question}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+              const replyResult = await this.postDiscussionReply(
+                actor,
+                provider,
+                mr,
+                discussion,
+                `${question}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`,
+                state
               );
+              if (!replyResult.replyPosted) {
+                console.warn(
+                  `[MaintainerRunner] 回复 discussion ${discussion.id} 待重试: ${replyResult.error ?? '未知错误'}`
+                );
+              }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               console.error(`[MaintainerRunner] 回复 discussion ${discussion.id} 失败: ${message}`);
@@ -709,12 +842,21 @@ export class MaintainerRunner extends BaseRoleRunner {
           // 对 Agent 发起的汇总/赞扬类非 finding 评论，不发布轻松回复，避免尬回。
           if (decision.replyBody?.trim() && !isFirstNoteFromAgent) {
             try {
-              await provider.addDiscussionNote(
-                mr.iid,
-                discussion.id,
-                `${decision.replyBody}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+              const replyResult = await this.postDiscussionReply(
+                actor,
+                provider,
+                mr,
+                discussion,
+                `${decision.replyBody}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`,
+                state
               );
-              console.log(`[MaintainerRunner] 已向 discussion ${discussion.id} 发布轻松回复`);
+              if (replyResult.replyPosted) {
+                console.log(`[MaintainerRunner] 已向 discussion ${discussion.id} 发布轻松回复`);
+              } else {
+                console.warn(
+                  `[MaintainerRunner] discussion ${discussion.id} 轻松回复待重试: ${replyResult.error ?? '未知错误'}`
+                );
+              }
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
               console.error(`[MaintainerRunner] 发布轻松回复失败: ${message}`);
@@ -761,16 +903,20 @@ export class MaintainerRunner extends BaseRoleRunner {
         lastHumanNoteAt === 0
       );
       if (staleRecheck?.alreadyFixed) {
-        threadState.decisions[key] = {
+        const staleDecision = {
           action: 'ignore',
           alreadyFixed: true,
           reason: staleRecheck.reason,
           replyBody: staleRecheck.evidence || staleRecheck.reason,
+        } as const;
+        threadState.decisions[key] = {
+          ...staleDecision,
           failedAttempts: 0,
           decidedAt: Date.now(),
         };
         threadState.lastHumanNoteAt = lastHumanNoteAt;
-        console.log(`[MaintainerRunner] stale finding ${key} 已在当前代码中解决，静默收敛`);
+        await actor.applyDecision(mr, discussion, finding, staleDecision, state);
+        console.log(`[MaintainerRunner] stale finding ${key} 已在当前代码中解决，已回复并 resolve`);
         recordProcessed();
         return;
       }
@@ -778,10 +924,36 @@ export class MaintainerRunner extends BaseRoleRunner {
         existing?.action === 'fix' &&
         !existing.fixSucceeded &&
         existing.failedAttempts < MAX_FIX_RETRY_ATTEMPTS;
-      if (existing && !staleFinding && !needsRetry && !hasNewHumanNote) {
+      const noFixExplanationMissing =
+        existing?.action === 'ignore' &&
+        !this.hasNoFixExplanationForItems(discussion, [`${finding.file}:${finding.line}`]);
+      if (existing && !staleFinding && !needsRetry && !hasNewHumanNote && !noFixExplanationMissing) {
         console.log(
           `[MaintainerRunner] finding ${key} 已有历史决策且无人工新回复，跳过: action=${existing.action}`
         );
+        threadState.lastHumanNoteAt = lastHumanNoteAt;
+        recordProcessed();
+        return;
+      }
+      if (
+        existing?.action === 'ignore' &&
+        noFixExplanationMissing &&
+        !staleFinding &&
+        !hasNewHumanNote
+      ) {
+        await actor.applyDecision(
+          mr,
+          discussion,
+          finding,
+          {
+            action: 'ignore',
+            alreadyFixed: existing.alreadyFixed,
+            reason: existing.reason,
+            replyBody: existing.replyBody,
+          },
+          state
+        );
+        console.log(`[MaintainerRunner] finding ${key} 的远端无需修复说明缺失，已补发并 resolve`);
         threadState.lastHumanNoteAt = lastHumanNoteAt;
         recordProcessed();
         return;
@@ -833,7 +1005,10 @@ export class MaintainerRunner extends BaseRoleRunner {
         return;
       }
 
-      const applied = await actor.applyDecision(mr, discussion, finding, decision, state);
+      const actionResult = normalizeMaintainerActionResult(
+        await actor.applyDecision(mr, discussion, finding, decision, state)
+      );
+      const codeApplied = actionResult.codeApplied;
 
       // 记录本次决策，用于下次轮询去重
       threadState.decisions[key] = {
@@ -844,19 +1019,23 @@ export class MaintainerRunner extends BaseRoleRunner {
         question: decision.question,
         deleteFile: decision.deleteFile,
         failedAttempts:
-          decision.action === 'fix' && !applied
+          decision.action === 'fix' && !codeApplied
             ? (staleFinding ? 0 : (existing?.failedAttempts ?? 0)) + 1
             : staleFinding
               ? 0
               : (existing?.failedAttempts ?? 0),
-        fixSucceeded: decision.action === 'fix' ? applied : undefined,
+        fixSucceeded: decision.action === 'fix' ? codeApplied : undefined,
+        lastFailureReason:
+          decision.action === 'fix' && !codeApplied
+            ? actionResult.error ?? existing?.lastFailureReason
+            : undefined,
         decidedAt: Date.now(),
       };
       threadState.lastHumanNoteAt = lastHumanNoteAt;
 
       if (
         cognitiveDepth === 'deep' &&
-        applied &&
+        codeApplied &&
         decision.action === 'fix' &&
         decision.fixDescription
       ) {
@@ -932,7 +1111,11 @@ export class MaintainerRunner extends BaseRoleRunner {
           failedAttempts: 0,
           decidedAt: Date.now(),
         };
-        console.log(`[MaintainerRunner] stale finding ${key} 已在当前代码中解决，静默收敛`);
+        alreadyFixedItems.push({
+          fileLine: key,
+          reason: staleRecheck.evidence || staleRecheck.reason,
+        });
+        console.log(`[MaintainerRunner] stale finding ${key} 已在当前代码中解决，加入汇总说明`);
         continue;
       }
       const shouldReuse = existing && !staleFinding && !hasNewHumanNote && !needsRetry;
@@ -1119,8 +1302,12 @@ export class MaintainerRunner extends BaseRoleRunner {
       failedItems.push(...classified.failedItems);
     }
 
-    const summaryHash = simpleHash(
-      JSON.stringify({ fixedItems, failedItems, askedItems, ignoredItems, alreadyFixedItems })
+    const summaryHash = buildSummaryStateHash(
+      fixedItems,
+      failedItems,
+      askedItems,
+      ignoredItems,
+      alreadyFixedItems
     );
     const hasResults =
       fixedItems.length > 0 ||
@@ -1129,9 +1316,14 @@ export class MaintainerRunner extends BaseRoleRunner {
       ignoredItems.length > 0 ||
       alreadyFixedItems.length > 0;
     const summaryChanged = summaryHash !== threadState.lastSummaryHash;
+    const noFixItems = [...ignoredItems, ...alreadyFixedItems];
+    const noFixExplanationComplete = this.hasNoFixExplanationForItems(
+      discussion,
+      noFixItems.map(item => item.fileLine)
+    );
 
-    if (hasResults && summaryChanged) {
-      await actor.postSummary(
+    if (hasResults && (summaryChanged || !noFixExplanationComplete)) {
+      const summaryResult = await actor.postSummary(
         mr,
         discussion,
         fixedItems,
@@ -1141,8 +1333,14 @@ export class MaintainerRunner extends BaseRoleRunner {
         alreadyFixedItems,
         state
       );
-      threadState.lastSummaryHash = summaryHash;
-      threadState.lastSummaryAt = Date.now();
+      if (!summaryResult || summaryResult.replyPosted) {
+        threadState.lastSummaryHash = summaryHash;
+        threadState.lastSummaryAt = Date.now();
+      } else {
+        console.warn(
+          `[MaintainerRunner] discussion ${discussion.id} summary 投递未完成，保留 hash 以便下轮重试: ${summaryResult.error ?? '未知错误'}`
+        );
+      }
     } else {
       console.log(
         `[MaintainerRunner] discussion ${discussion.id} summary 无变化或无需发布，跳过（hasResults=${hasResults}, changed=${summaryChanged}）`
@@ -1224,6 +1422,85 @@ export class MaintainerRunner extends BaseRoleRunner {
   /**
    * 获取/初始化 discussion 级别的 Maintainer 状态
    */
+  private async postDiscussionReply(
+    actor: MaintainerActor,
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    discussion: Discussion,
+    body: string,
+    state: MrAgentState,
+    resolve = false
+  ): Promise<DiscussionDeliveryResult> {
+    if (typeof actor.postReply === 'function') {
+      return actor.postReply(mr, discussion, body, state, resolve);
+    }
+    return this.deliverDiscussionReplyDirect(provider, mr, discussion, body, resolve, state);
+  }
+
+  private async retryPendingDiscussionDelivery(
+    actor: MaintainerActor,
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    discussion: Discussion,
+    state: MrAgentState
+  ): Promise<DiscussionDeliveryResult | null> {
+    if (typeof actor.retryPendingDelivery === 'function') {
+      return actor.retryPendingDelivery(mr, discussion, state);
+    }
+    const delivery = state.maintainerThreadState?.[discussion.id]?.delivery;
+    if (!isDiscussionDeliveryPending(delivery) || !delivery) return null;
+    return this.deliverDiscussionReplyDirect(
+      provider,
+      mr,
+      discussion,
+      delivery.replyBody,
+      delivery.resolveRequired,
+      state
+    );
+  }
+
+  private async deliverDiscussionReplyDirect(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    discussion: Discussion,
+    body: string,
+    resolve: boolean,
+    state: MrAgentState
+  ): Promise<DiscussionDeliveryResult> {
+    const threadState = this.getMaintainerThreadState(state, discussion.id);
+    return deliverDiscussionReply({
+      provider,
+      mr,
+      discussion,
+      body,
+      resolve,
+      delivery: threadState.delivery,
+      setDelivery: delivery => {
+        threadState.delivery = delivery;
+      },
+      checkpoint: () => undefined,
+    });
+  }
+
+  private restoreInteractiveThread(state: MrAgentState, discussionId: string): void {
+    const threadState = state.maintainerThreadState?.[discussionId];
+    const delivery = threadState?.delivery;
+    const pendingQuestion = Object.entries(threadState?.decisions ?? {}).find(
+      ([, decision]) => decision.action === 'ask' || Boolean(decision.question?.trim())
+    );
+    const fileLine = pendingQuestion?.[0] ?? delivery?.filePath;
+    const question = pendingQuestion?.[1].question ?? delivery?.question;
+    if (!fileLine || !question) return;
+
+    state.interactiveThreads ??= {};
+    state.interactiveThreads[discussionId] = {
+      status: 'awaiting-reply',
+      askedAt: Date.now(),
+      question,
+      filePath: fileLine.split(':')[0],
+    };
+  }
+
   private getMaintainerThreadState(state: MrAgentState, discussionId: string) {
     state.maintainerThreadState ??= {};
     state.maintainerThreadState[discussionId] ??= {
@@ -1242,7 +1519,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     try {
       const resolved = await worktreeManager.resolveFilePath(finding.file);
       if (!resolved) return fallback;
-      const content = worktreeManager.readFile(resolved);
+      const content = await worktreeManager.readFile(resolved);
       console.log(
         `[MaintainerRunner] stale finding ${finding.file}:${finding.line} 已读取完整文件 path=${resolved} lines=${content.split(/\r?\n/).length} chars=${content.length}`
       );
@@ -1326,6 +1603,65 @@ export class MaintainerRunner extends BaseRoleRunner {
     // 至少包含多个文件路径，才像批量统计表
     const fileMatches = body.match(/\b[\w\-./]+\.[a-zA-Z0-9]+\b/g) ?? [];
     return fileMatches.length >= 3;
+  }
+
+  /**
+   * 确定性识别纯统计报告，避免把机器生成的排名表交给 finding 解析器。
+   *
+   * 判定刻意保持严格：必须同时具备多组统计区块、至少两个仅含数字指标的文件行，
+   * 且正文中不存在具体 file:line 定位。无法确定的格式仍交给原有 LLM 语义判定。
+   */
+  private isClearlyStatisticalReportBody(body: string): boolean {
+    const normalized = body
+      .replace(/<[^>]+>/g, '')
+      .replace(/[`*_]/g, '')
+      .replace(/\r/g, '');
+    const lower = normalized.toLowerCase();
+
+    // 混合报告中只要存在具体行号，就不能在解析前整体跳过。
+    if (/\b[\w@\-./]+\.[a-zA-Z0-9]+:\d+\b/.test(normalized)) return false;
+
+    const hasSeveritySummary =
+      (lower.includes('severity') && lower.includes('count')) ||
+      (lower.includes('严重程度') && (lower.includes('数量') || lower.includes('计数')));
+    const hasRuleRanking =
+      lower.includes('top rules') ||
+      lower.includes('rule ranking') ||
+      lower.includes('规则排行') ||
+      lower.includes('规则排名');
+    const hasFileRanking =
+      lower.includes('top files') ||
+      lower.includes('file ranking') ||
+      lower.includes('文件排行') ||
+      lower.includes('文件排名');
+    const aggregateSectionCount = [hasSeveritySummary, hasRuleRanking, hasFileRanking].filter(
+      Boolean
+    ).length;
+    if (aggregateSectionCount < 2 || !hasFileRanking) return false;
+
+    const hasReportTitle = normalized
+      .split('\n')
+      .map(line => line.trim().replace(/^#+\s*/, ''))
+      .some(line => /(?:report|summary|overview|报告|汇总)$/i.test(line));
+    if (!hasReportTitle && aggregateSectionCount < 3) return false;
+
+    const fileRowPattern = /^\|?\s*([\w@\-./]+\.[a-zA-Z0-9]+)\s*(.*?)\s*\|?$/;
+    const numericPayloadPattern = /^[\s|+\-.,%0-9]+$/;
+    let numericFileRows = 0;
+
+    for (const rawLine of normalized.split('\n')) {
+      const line = rawLine.trim();
+      if (!line || /^\|?\s*:?-{3,}/.test(line)) continue;
+      const match = line.match(fileRowPattern);
+      if (!match) continue;
+
+      const payload = match[2].trim();
+      if (!payload) continue;
+      if (!numericPayloadPattern.test(payload)) return false;
+      numericFileRows += 1;
+    }
+
+    return numericFileRows >= 2;
   }
 
   /**
@@ -1424,5 +1760,14 @@ export class MaintainerRunner extends BaseRoleRunner {
         break;
       }
     }
+  }
+
+  /** 检查远端 discussion 是否已包含当前无需修复项的逐项说明。 */
+  private hasNoFixExplanationForItems(discussion: Discussion, fileLines: string[]): boolean {
+    if (fileLines.length === 0) return true;
+    const notes = discussion.notes.filter(note => isMaintainerNoFixExplanationNote(note.body));
+    if (notes.length === 0) return false;
+    if (fileLines.length === 1) return true;
+    return fileLines.every(fileLine => notes.some(note => note.body.includes(fileLine)));
   }
 }

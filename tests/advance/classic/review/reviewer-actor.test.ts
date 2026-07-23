@@ -69,12 +69,14 @@ describe('ReviewerActor', () => {
     const state: MrAgentState = { version: 1, discussions: {}, interactiveThreads: {}, processedDiscussions: {} };
     const diffs = [{ oldPath: 'src/index.ts', newPath: 'src/index.ts', newFile: false, deletedFile: false, diff: '+const x' }];
 
-    await actor.postReview(mockMR, mockResult, {
+    const options = {
       diffs,
       shaInfo: { baseSha: 'b', headSha: 'h', startSha: 's' },
       stateKey: 'feature/test:main',
       state,
-    });
+    };
+    await actor.postReview(mockMR, mockResult, options);
+    await actor.createFindingThreads(mockMR, mockResult.findings, options);
 
     expect(provider.createDiscussion).toHaveBeenCalledTimes(1);
     expect(provider.createDiscussion).toHaveBeenCalledWith(
@@ -103,12 +105,14 @@ describe('ReviewerActor', () => {
       processedDiscussions: {},
     };
 
-    await actor.postReview(mockMR, mockResult, {
+    const options = {
       diffs: [{ oldPath: 'src/index.ts', newPath: 'src/index.ts', newFile: false, deletedFile: false, diff: '+const x' }],
       shaInfo: { baseSha: 'b', headSha: 'h', startSha: 's' },
       stateKey: 'feature/test:main',
       state,
-    });
+    };
+    await actor.postReview(mockMR, mockResult, options);
+    await actor.createFindingThreads(mockMR, mockResult.findings, options);
 
     expect(provider.createDiscussion).not.toHaveBeenCalled();
   });

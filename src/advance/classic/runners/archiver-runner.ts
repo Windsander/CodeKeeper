@@ -1,4 +1,5 @@
 import { readdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join, relative } from 'node:path';
 import { BaseRoleRunner } from './base-role-runner.js';
 import { ArchiverBrain } from '../archive/archiver-brain.js';
@@ -7,6 +8,8 @@ import { MemoryClient } from '../memory/memory-client.js';
 import type { Project, RoleConfig } from '../../types.js';
 import type { LlmClient } from '../../llm/client.js';
 import { getArchiveRoot } from '../../types.js';
+import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
+import type { ProjectKnowledgeItem } from '../memory/types.js';
 
 export interface ArchiverRunnerOptions {
   /** LLM 客户端实例 */
@@ -70,6 +73,7 @@ export class ArchiverRunner extends BaseRoleRunner {
       return;
     }
 
+    const state = loadState(project);
     const memoryClient = new MemoryClient({
       mcpUrl: this.mcpUrl,
       context: {
@@ -80,19 +84,76 @@ export class ArchiverRunner extends BaseRoleRunner {
         sessionId: buildArchiverSessionId(project.id, new Date()),
       },
     });
-    await memoryClient.connect().catch(() => {
-      console.warn('[ArchiverRunner] MemoryClient 连接失败，本次以无记忆模式运行');
-    });
+    try {
+      await memoryClient.connect();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[ArchiverRunner] MemoryClient 连接失败，本轮不标记完成: ${message}`);
+      throw error;
+    }
 
     const brain = new ArchiverBrain({ llmClient: this.llmClient });
     const actor = new ArchiverActor({ memoryClient });
+    state.archiverState ??= {
+      sourceFingerprint: this.hash(JSON.stringify(files)),
+      items: {},
+      updatedAt: Date.now(),
+    };
+    state.archiverState.sourceFingerprint = this.hash(JSON.stringify(files));
 
-    const items = await brain.analyzeProject(project, files);
-    console.log(`[ArchiverRunner] 提炼出 ${items.length} 条项目知识`);
+    try {
+      await this.retryPendingKnowledge(actor, state, project);
 
-    await actor.storeKnowledge(items);
+      const items = await brain.analyzeProject(project, files);
+      const stableItems = items.map(item => this.stabilizeKnowledgeItem(project.id, item));
+      console.log(`[ArchiverRunner] 提炼出 ${stableItems.length} 条项目知识`);
 
-    await memoryClient.disconnect().catch(() => undefined);
+      const pendingItems: ProjectKnowledgeItem[] = [];
+      for (const item of stableItems) {
+        const existing = state.archiverState.items[item.id];
+        if (existing?.status === 'recorded') continue;
+        state.archiverState.items[item.id] = {
+          item,
+          status: 'pending',
+          attempts: existing?.attempts ?? 0,
+          updatedAt: Date.now(),
+        };
+        pendingItems.push(item);
+      }
+      state.archiverState.updatedAt = Date.now();
+      saveState(project, state, 'archiver');
+
+      if (pendingItems.length > 0) {
+        try {
+          await actor.storeKnowledge(pendingItems);
+          for (const item of pendingItems) {
+            const entry = state.archiverState.items[item.id];
+            if (!entry) continue;
+            entry.status = 'recorded';
+            entry.lastError = undefined;
+            entry.updatedAt = Date.now();
+          }
+          state.archiverState.updatedAt = Date.now();
+          saveState(project, state, 'archiver');
+          console.log(`[ArchiverRunner] 已提交 ${pendingItems.length} 条项目知识写入`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          for (const item of pendingItems) {
+            const entry = state.archiverState.items[item.id];
+            if (!entry) continue;
+            entry.status = 'failed';
+            entry.attempts += 1;
+            entry.lastError = message;
+            entry.updatedAt = Date.now();
+          }
+          state.archiverState.updatedAt = Date.now();
+          saveState(project, state, 'archiver');
+          throw error;
+        }
+      }
+    } finally {
+      await memoryClient.disconnect().catch(() => undefined);
+    }
   }
 
   private async listProjectFiles(rootPath: string, archiveRoot: string, subPath = ''): Promise<string[]> {
@@ -112,5 +173,64 @@ export class ArchiverRunner extends BaseRoleRunner {
       }
     }
     return files;
+  }
+
+  private async retryPendingKnowledge(
+    actor: ArchiverActor,
+    state: MrAgentState,
+    project: Project
+  ): Promise<void> {
+    const pending = Object.values(state.archiverState?.items ?? {})
+      .filter(entry => entry.status !== 'recorded')
+      .map(entry => entry.item);
+    if (pending.length === 0) return;
+
+    try {
+      await actor.storeKnowledge(pending);
+      for (const item of pending) {
+        const entry = state.archiverState?.items[item.id];
+        if (!entry) continue;
+        entry.status = 'recorded';
+        entry.lastError = undefined;
+        entry.updatedAt = Date.now();
+      }
+      if (state.archiverState) {
+        state.archiverState.updatedAt = Date.now();
+        saveState(project, state, 'archiver');
+      }
+      console.log(`[ArchiverRunner] 已补偿写入 ${pending.length} 条待处理项目知识`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      for (const item of pending) {
+        const entry = state.archiverState?.items[item.id];
+        if (!entry) continue;
+        entry.status = 'failed';
+        entry.attempts += 1;
+        entry.lastError = message;
+        entry.updatedAt = Date.now();
+      }
+      if (state.archiverState) {
+        state.archiverState.updatedAt = Date.now();
+        saveState(project, state, 'archiver');
+      }
+      console.warn(`[ArchiverRunner] 补偿项目知识写入失败: ${message}`);
+    }
+  }
+
+  private stabilizeKnowledgeItem(projectId: string, item: ProjectKnowledgeItem): ProjectKnowledgeItem {
+    const canonical = JSON.stringify({
+      category: item.category,
+      sourceFiles: [...item.sourceFiles].sort(),
+      content: item.content,
+      confidence: item.confidence,
+      relations: item.relations,
+      metadata: item.metadata,
+    });
+    const digest = this.hash(canonical).slice(0, 24);
+    return { ...item, id: `archiver-${projectId}-${digest}` };
+  }
+
+  private hash(value: string): string {
+    return createHash('sha256').update(value).digest('hex');
   }
 }
