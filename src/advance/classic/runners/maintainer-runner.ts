@@ -517,6 +517,15 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
 
     const threadState = this.getMaintainerThreadState(state, discussion.id);
+    const sourceNoteEdited = getCommentUpdatedAt(firstNote) > (
+      threadState.lastReviewerNoteAt > 0
+        ? threadState.lastReviewerNoteAt
+        : Math.max(
+            ...Object.values(threadState.decisions).map(decision => decision.decidedAt),
+            threadState.lastSummaryAt ?? 0,
+            state.processedDiscussions?.[discussion.id]?.processedAt ?? 0
+          )
+    );
     const delivery = threadState.delivery;
     const deliveryNoteExists = Boolean(
       delivery &&
@@ -826,7 +835,11 @@ export class MaintainerRunner extends BaseRoleRunner {
               return Math.max(max, getCommentActivityAt(note));
             }, 0);
           const lastHumanNoteAt = getLastHumanNoteAt(discussion);
-          if (lastMaintainerNoteAt > 0 && lastMaintainerNoteAt >= lastHumanNoteAt) {
+          if (
+            lastMaintainerNoteAt > 0 &&
+            lastMaintainerNoteAt >= lastHumanNoteAt &&
+            !sourceNoteEdited
+          ) {
             threadState.nonFindingAction = 'ignore';
             console.log(
               `[MaintainerRunner] discussion ${discussion.id} 已有 Maintainer 回复但无处理记录，静默补记并跳过`

@@ -1,4 +1,4 @@
-import { readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join, relative } from 'node:path';
 import { BaseRoleRunner } from './base-role-runner.js';
@@ -27,6 +27,27 @@ export function buildArchiverSessionId(projectId: string, date: Date): string {
   const dd = String(date.getUTCDate()).padStart(2, '0');
   const slot = Math.floor(date.getUTCHours() / 8);
   return `archiver-${projectId}-${yyyy}-${mm}-${dd}-${slot}`;
+}
+
+/**
+ * 为 Archiver 选中的输入文件生成稳定指纹。
+ *
+ * 文件名保持不变但内容发生变化时，也必须重新触发知识提炼；
+ * 不把正文写入状态，只保存每个文件内容的摘要。
+ */
+export function buildArchiverSourceFingerprint(
+  sourceFiles: string[],
+  fileContents: Record<string, string | undefined>
+): string {
+  const canonical = [...new Set(sourceFiles)]
+    .sort()
+    .map(file => ({
+      file,
+      contentHash: createHash('sha256')
+        .update(fileContents[file] ?? '<unreadable>')
+        .digest('hex'),
+    }));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
 /**
@@ -95,7 +116,7 @@ export class ArchiverRunner extends BaseRoleRunner {
     const brain = new ArchiverBrain({ llmClient: this.llmClient });
     const actor = new ArchiverActor({ memoryClient });
     const sourceFiles = selectArchiverInputFiles(files);
-    const sourceFingerprint = this.hash(JSON.stringify(sourceFiles));
+    const sourceFingerprint = await this.buildSourceFingerprint(project.rootPath, sourceFiles);
     state.archiverState ??= {
       sourceFingerprint: '',
       items: {},
@@ -191,6 +212,16 @@ export class ArchiverRunner extends BaseRoleRunner {
       }
     }
     return files;
+  }
+
+  private async buildSourceFingerprint(rootPath: string, sourceFiles: string[]): Promise<string> {
+    const fileContents: Record<string, string | undefined> = {};
+    await Promise.all(
+      sourceFiles.map(async file => {
+        fileContents[file] = await readFile(join(rootPath, file), 'utf8').catch(() => undefined);
+      })
+    );
+    return buildArchiverSourceFingerprint(sourceFiles, fileContents);
   }
 
   private async retryPendingKnowledge(
