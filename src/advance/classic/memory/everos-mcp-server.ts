@@ -729,13 +729,7 @@ export class EverOSMcpServer {
     }));
     const content = `整理项目知识：\n${JSON.stringify(sanitized, null, 2)}`;
 
-    try {
-      await this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content);
-    } catch (err) {
-      // persistSingleMessage 已将 add/flush 失败入队；继续抛出让 MCP 调用方知道本次尚未完成。
-      logger.error({ err, sessionId: ctx.sessionId }, 'record_project_knowledge 后台记忆写入失败，已入队重试');
-      throw err;
-    }
+    await this.persistSingleMessage(ctx, ctx.agentId, 'assistant', content, true);
   }
 
   private async handleRecordFixAttempt(
@@ -824,7 +818,8 @@ export class EverOSMcpServer {
     ctx: MemoryContext,
     senderId: string,
     role: 'user' | 'assistant' | 'tool',
-    content: string
+    content: string,
+    acceptQueued = false
   ): Promise<void> {
     const start = Date.now();
     const messages: EverOSAddMessage[] = [
@@ -838,14 +833,21 @@ export class EverOSMcpServer {
     try {
       await everosMemoryAddMessages(this.everosUrl, ctx, messages);
     } catch (err) {
-      logger.error({ err, sessionId: ctx.sessionId }, '单条记忆后台写入失败，已入队重试');
-      this.queue?.enqueue(ctx, 'add_messages', messages);
+      if (this.queue) {
+        this.queue.enqueue(ctx, 'add_messages', messages);
+        logger.warn({ err, sessionId: ctx.sessionId }, '单条记忆写入失败，已由队列接管');
+        if (acceptQueued) return;
+      }
       throw err;
     }
     try {
       await this.flushSession(ctx);
     } catch (err) {
-      this.queue?.enqueue(ctx, 'flush');
+      if (this.queue) {
+        this.queue.enqueue(ctx, 'flush');
+        logger.warn({ err, sessionId: ctx.sessionId }, '单条记忆 flush 失败，已由队列接管');
+        if (acceptQueued) return;
+      }
       throw err;
     }
     logger.info(

@@ -15,6 +15,23 @@ export interface ArchiverBrainOptions {
   promptLoader?: PromptLoader;
 }
 
+/** 选出实际交给项目知识 LLM 的文件，并保证顺序稳定。 */
+export function selectArchiverInputFiles(files: string[]): string[] {
+  const priority = ['README', 'package.json', 'tsconfig', 'config.', '.eslintrc', 'CONTRIBUTING'];
+  return files
+    .map(file => ({
+      file,
+      score: priority.reduce(
+        (total, keyword) =>
+          file.toLowerCase().includes(keyword.toLowerCase()) ? total + 1 : total,
+        0
+      ),
+    }))
+    .sort((left, right) => right.score - left.score || left.file.localeCompare(right.file))
+    .slice(0, 5)
+    .map(item => item.file);
+}
+
 /**
  * Archiver 大脑：编排多个 Analyzer 提炼项目知识
  */
@@ -56,23 +73,13 @@ export class LlmProjectAnalyzer implements ProjectAnalyzer {
   }
 
   async analyze(project: Project, files: string[]): Promise<ProjectKnowledgeItem[]> {
-    const keyFiles = this.selectKeyFiles(files);
+    const keyFiles = selectArchiverInputFiles(files);
     if (keyFiles.length === 0) return [];
 
     const prompt = this.buildPrompt(project, keyFiles);
     const system = `你是项目知识整理助手。${this.promptLoader.load('shared/json-only-constraint')}`;
     const raw = await this.llmClient.complete(prompt, system);
     return this.parseResponse(raw);
-  }
-
-  private selectKeyFiles(files: string[]): string[] {
-    const priority = ['README', 'package.json', 'tsconfig', 'config.', '.eslintrc', 'CONTRIBUTING'];
-    const scored = files.map((f) => {
-      const score = priority.reduce((acc, keyword) => (f.toLowerCase().includes(keyword.toLowerCase()) ? acc + 1 : acc), 0);
-      return { file: f, score };
-    });
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, 5).map((s) => s.file);
   }
 
   private buildPrompt(project: Project, files: string[]): string {
@@ -87,8 +94,8 @@ export class LlmProjectAnalyzer implements ProjectAnalyzer {
     try {
       const cleaned = raw.replace(/```(?:json)?\s*([\s\S]*?)```/, '$1').trim();
       const parsed = JSON.parse(cleaned) as Array<Record<string, unknown>>;
-      return parsed.map((item) => ({
-        id: String(item.id ?? `knowledge-${Date.now()}`),
+      return parsed.map((item, index) => ({
+        id: String(item.id ?? `knowledge-${index}`),
         category: this.normalizeCategory(String(item.category ?? 'convention')),
         sourceFiles: Array.isArray(item.sourceFiles) ? item.sourceFiles.map(String) : [],
         content: String(item.content ?? ''),

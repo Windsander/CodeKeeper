@@ -54,7 +54,9 @@ export class ReviewerActor {
    * 返回 summary 评论的 note ID
    */
   async postReview(mr: MergeRequest, result: ReviewResult, options?: PostReviewOptions): Promise<number> {
-    const comment = formatReviewComment(mr, result, this.options.reviewerName);
+    const comment =
+      this.getPendingDeliveryBody(options, 'summary') ??
+      formatReviewComment(mr, result, this.options.reviewerName);
     let noteId: number;
     try {
       noteId = await this.postComment(mr, comment, options, 'summary');
@@ -79,7 +81,9 @@ export class ReviewerActor {
     if (newFindings.length === 0) {
       throw new Error('无新增发现项时不应追加补充评审');
     }
-    const body = formatSupplementaryReviewComment(mr, newFindings, this.options.reviewerName);
+    const body =
+      this.getPendingDeliveryBody(options, 'append') ??
+      formatSupplementaryReviewComment(mr, newFindings, this.options.reviewerName);
     try {
       const noteId = await this.postComment(mr, body, options, 'append');
       console.log(`[ReviewerActor] 已在 MR !${mr.iid} 追加补充评审`);
@@ -173,5 +177,14 @@ export class ReviewerActor {
       throw new Error(result.error ?? `Reviewer ${kind} 评论投递未完成`);
     }
     return result.noteId;
+  }
+
+  private getPendingDeliveryBody(
+    options: PostReviewOptions | undefined,
+    kind: 'summary' | 'append'
+  ): string | undefined {
+    if (!options?.state || !options.stateKey) return undefined;
+    const delivery = options.state.reviewCommentDelivery?.[options.stateKey]?.[kind];
+    return delivery && delivery.status !== 'posted' ? delivery.body : undefined;
   }
 }

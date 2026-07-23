@@ -2,7 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join, relative } from 'node:path';
 import { BaseRoleRunner } from './base-role-runner.js';
-import { ArchiverBrain } from '../archive/archiver-brain.js';
+import { ArchiverBrain, selectArchiverInputFiles } from '../archive/archiver-brain.js';
 import { ArchiverActor } from '../archive/archiver-actor.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import type { Project, RoleConfig } from '../../types.js';
@@ -94,24 +94,39 @@ export class ArchiverRunner extends BaseRoleRunner {
 
     const brain = new ArchiverBrain({ llmClient: this.llmClient });
     const actor = new ArchiverActor({ memoryClient });
+    const sourceFiles = selectArchiverInputFiles(files);
+    const sourceFingerprint = this.hash(JSON.stringify(sourceFiles));
     state.archiverState ??= {
-      sourceFingerprint: this.hash(JSON.stringify(files)),
+      sourceFingerprint: '',
       items: {},
       updatedAt: Date.now(),
     };
-    state.archiverState.sourceFingerprint = this.hash(JSON.stringify(files));
 
     try {
-      await this.retryPendingKnowledge(actor, state, project);
+      const pendingRecovered = await this.retryPendingKnowledge(actor, state, project);
+      if (!pendingRecovered) {
+        console.warn('[ArchiverRunner] 仍有项目知识等待补偿，本轮不重复调用 LLM');
+        return;
+      }
 
-      const items = await brain.analyzeProject(project, files);
+      if (state.archiverState.sourceFingerprint === sourceFingerprint) {
+        console.log('[ArchiverRunner] 项目知识输入未变化，跳过 LLM 分析');
+        return;
+      }
+
+      const items = await brain.analyzeProject(project, sourceFiles);
       const stableItems = items.map(item => this.stabilizeKnowledgeItem(project.id, item));
       console.log(`[ArchiverRunner] 提炼出 ${stableItems.length} 条项目知识`);
 
       const pendingItems: ProjectKnowledgeItem[] = [];
       for (const item of stableItems) {
         const existing = state.archiverState.items[item.id];
-        if (existing?.status === 'recorded') continue;
+        if (
+          existing?.status === 'recorded' &&
+          this.knowledgeItemFingerprint(existing.item) === this.knowledgeItemFingerprint(item)
+        ) {
+          continue;
+        }
         state.archiverState.items[item.id] = {
           item,
           status: 'pending',
@@ -151,6 +166,9 @@ export class ArchiverRunner extends BaseRoleRunner {
           throw error;
         }
       }
+      state.archiverState.sourceFingerprint = sourceFingerprint;
+      state.archiverState.updatedAt = Date.now();
+      saveState(project, state, 'archiver');
     } finally {
       await memoryClient.disconnect().catch(() => undefined);
     }
@@ -179,11 +197,11 @@ export class ArchiverRunner extends BaseRoleRunner {
     actor: ArchiverActor,
     state: MrAgentState,
     project: Project
-  ): Promise<void> {
+  ): Promise<boolean> {
     const pending = Object.values(state.archiverState?.items ?? {})
       .filter(entry => entry.status !== 'recorded')
       .map(entry => entry.item);
-    if (pending.length === 0) return;
+    if (pending.length === 0) return true;
 
     try {
       await actor.storeKnowledge(pending);
@@ -199,6 +217,7 @@ export class ArchiverRunner extends BaseRoleRunner {
         saveState(project, state, 'archiver');
       }
       console.log(`[ArchiverRunner] 已补偿写入 ${pending.length} 条待处理项目知识`);
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       for (const item of pending) {
@@ -214,11 +233,22 @@ export class ArchiverRunner extends BaseRoleRunner {
         saveState(project, state, 'archiver');
       }
       console.warn(`[ArchiverRunner] 补偿项目知识写入失败: ${message}`);
+      return false;
     }
   }
 
   private stabilizeKnowledgeItem(projectId: string, item: ProjectKnowledgeItem): ProjectKnowledgeItem {
     const canonical = JSON.stringify({
+      sourceId: item.id,
+      category: item.category,
+      sourceFiles: [...item.sourceFiles].sort(),
+    });
+    const digest = this.hash(canonical).slice(0, 24);
+    return { ...item, id: `archiver-${projectId}-${digest}` };
+  }
+
+  private knowledgeItemFingerprint(item: ProjectKnowledgeItem): string {
+    return JSON.stringify({
       category: item.category,
       sourceFiles: [...item.sourceFiles].sort(),
       content: item.content,
@@ -226,8 +256,6 @@ export class ArchiverRunner extends BaseRoleRunner {
       relations: item.relations,
       metadata: item.metadata,
     });
-    const digest = this.hash(canonical).slice(0, 24);
-    return { ...item, id: `archiver-${projectId}-${digest}` };
   }
 
   private hash(value: string): string {

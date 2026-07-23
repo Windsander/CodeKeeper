@@ -63,6 +63,30 @@ export class GitLabClient {
   }
 
   /**
+   * 读取 GitLab 列表接口的全部分页。
+   *
+   * 远端事实对账不能只依赖第一页，否则超过 100 条后会把旧 note/discussion
+   * 误判为已删除。调用方可在拿到全量数据后再应用自己的活跃窗口。
+   */
+  private async requestAllPages<T>(endpoint: string, perPage = 100): Promise<T[]> {
+    const items: T[] = [];
+    let page = 1;
+
+    while (true) {
+      const separator = endpoint.includes('?') ? '&' : '?';
+      const batch = await this.request<T[]>(
+        'GET',
+        `${endpoint}${separator}per_page=${perPage}&page=${page}`
+      );
+      items.push(...batch);
+      if (batch.length < perPage) break;
+      page += 1;
+    }
+
+    return items;
+  }
+
+  /**
    * Verify that the project is reachable with current credentials
    */
   async verifyProject(): Promise<void> {
@@ -177,9 +201,8 @@ export class GitLabClient {
    * Get MR notes (comments)
    */
   async getMergeRequestNotes(iid: number): Promise<GitLabNote[]> {
-    return this.request<GitLabNote[]>(
-      'GET',
-      `/projects/${this.projectId}/merge_requests/${iid}/notes?per_page=100`
+    return this.requestAllPages<GitLabNote>(
+      `/projects/${this.projectId}/merge_requests/${iid}/notes`
     );
   }
 
@@ -187,9 +210,8 @@ export class GitLabClient {
    * Get MR discussions
    */
   async getMergeRequestDiscussions(iid: number): Promise<GitLabDiscussion[]> {
-    return this.request<GitLabDiscussion[]>(
-      'GET',
-      `/projects/${this.projectId}/merge_requests/${iid}/discussions?per_page=100`
+    return this.requestAllPages<GitLabDiscussion>(
+      `/projects/${this.projectId}/merge_requests/${iid}/discussions`
     );
   }
 
@@ -347,6 +369,7 @@ export interface GitLabNote {
   body: string;
   author: { username: string; name: string };
   created_at: string;
+  updated_at?: string;
   resolved: boolean;
   system: boolean;
   position?: {

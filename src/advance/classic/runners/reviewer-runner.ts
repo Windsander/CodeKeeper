@@ -14,17 +14,25 @@ import { RecallPlanner } from '../memory/recall-planner.js';
 import { buildEverOSAgentId } from '../memory/types.js';
 import { buildFindingCaseKey } from '../memory/finding-case-key.js';
 import { loadState, saveState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
-import { isReviewCommentDeliveryPending } from './shared/review-comment-delivery.js';
-import { deliverDiscussionReply } from './shared/discussion-delivery.js';
+import {
+  deliverReviewComment,
+  isReviewCommentDeliveryPending,
+} from './shared/review-comment-delivery.js';
+import {
+  deliverDiscussionReply,
+  isDiscussionDeliveryPending,
+} from './shared/discussion-delivery.js';
 import {
   formatAgentFooter,
   isAgentAuthoredNote,
+  isBotAuthor,
   REVIEWER_ROLE_LABEL,
 } from './shared/review-utils.js';
 import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
 import type { MergeRequest, MrDiff, ReviewFinding, Discussion, ReviewerComment } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 import { logger } from '../../../core/logger.js';
+import { getCommentActivityAt } from '../provider/activity-window.js';
 
 /**
  * 构建 Reviewer 会话 ID（按 MR 粒度）
@@ -188,17 +196,42 @@ export class ReviewerRunner extends BaseRoleRunner {
       const headChanged = previousReview ? previousReview.headSha !== headSha : true;
       const findingsChanged = previousReview ? previousReview.findingsHash !== findingsHash : true;
 
-      // 提前拉取评论：既用于记录记忆，也用于判断之前的 summary 是否被删除
-      let comments: ReviewerComment[] = [];
+      // 评论快照失败时不能把“未知”当成“远端为空”，否则会误补发 summary/append。
+      let allComments: ReviewerComment[];
+      let activeHumanComments: ReviewerComment[];
       try {
-        comments = await provider.getReviewerComments(mr.iid);
+        const commentSnapshot = await provider.getReviewerCommentSnapshot(mr.iid);
+        allComments = commentSnapshot.all;
+        activeHumanComments = commentSnapshot.activeHuman;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`[ReviewerRunner] 获取 MR !${mr.iid} 评论失败: ${message}`);
+        console.error(
+          `[ReviewerRunner] 获取 MR !${mr.iid} 评论快照失败，本轮跳过远端评论副作用: ${message}`
+        );
+        await memoryClient?.disconnect().catch(() => undefined);
+        continue;
       }
 
-      const summaryStillExists = previousReview?.summaryNoteId
-        ? comments.some(c => c.id === previousReview.summaryNoteId)
+      let recoveredDeliveries: { summaryNoteId?: number; appendNoteId?: number };
+      try {
+        recoveredDeliveries = await this.reconcileReviewCommentDeliveries(
+          provider,
+          mr,
+          state,
+          stateKey,
+          allComments,
+          project
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[ReviewerRunner] MR !${mr.iid} 恢复历史评论投递失败: ${message}`);
+        await memoryClient?.disconnect().catch(() => undefined);
+        continue;
+      }
+      const summaryNoteIdFromState =
+        recoveredDeliveries.summaryNoteId ?? previousReview?.summaryNoteId;
+      const summaryStillExists = summaryNoteIdFromState
+        ? allComments.some(comment => comment.id === summaryNoteIdFromState)
         : false;
       const threadRiskLevels = new Set<ReviewFinding['severity']>(
         reviewerConfig.threadRiskLevels ?? ['CRITICAL', 'HIGH']
@@ -217,12 +250,9 @@ export class ReviewerRunner extends BaseRoleRunner {
         isReviewCommentDeliveryPending(reviewDelivery?.append);
 
       const lastReviewedAt = previousReview?.reviewedAt ?? 0;
-      const recordedNoteIds = new Set(previousReview?.reviewNoteIds ?? []);
-      const newComments = comments.filter((c) => {
-        if (recordedNoteIds.has(c.id)) return false;
-        const ts = new Date(c.createdAt).getTime();
-        return !Number.isNaN(ts) && ts > lastReviewedAt;
-      });
+      const newComments = activeHumanComments.filter(
+        comment => getCommentActivityAt(comment) > lastReviewedAt
+      );
 
       if (
         previousReview &&
@@ -264,13 +294,14 @@ export class ReviewerRunner extends BaseRoleRunner {
       }
 
       // 如果之前保存的 summary note 已经被删除，则重新发 summary，而不是追加补充评审
-      const previousSummaryNoteId = previousReview?.summaryNoteId;
-      const shouldPostSummary = !previousReview || !summaryStillExists;
+      const previousSummaryNoteId = summaryNoteIdFromState;
+      const shouldPostSummary = !summaryStillExists;
 
       const newFindingsHash = computeFindingsHash(newFindingsToPost);
       const lastAppendStillExists =
-        previousReview?.lastAppendNoteId !== undefined &&
-        comments.some((c) => c.id === previousReview.lastAppendNoteId);
+        recoveredDeliveries.appendNoteId !== undefined ||
+        (previousReview?.lastAppendNoteId !== undefined &&
+          allComments.some((comment) => comment.id === previousReview.lastAppendNoteId));
       const shouldAppend =
         !shouldPostSummary &&
         newFindingsToPost.length > 0 &&
@@ -278,7 +309,8 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       const reviewNoteIds: number[] = [];
       let summaryNoteId: number | undefined = previousSummaryNoteId;
-      let lastAppendNoteId: number | undefined = previousReview?.lastAppendNoteId;
+      let lastAppendNoteId: number | undefined =
+        recoveredDeliveries.appendNoteId ?? previousReview?.lastAppendNoteId;
       let lastAppendFindingsHash: string | undefined = previousReview?.lastAppendFindingsHash;
       try {
         if (result.findings.length > 0 && shouldPostSummary) {
@@ -287,7 +319,7 @@ export class ReviewerRunner extends BaseRoleRunner {
             shaInfo,
             stateKey,
             state,
-            comments,
+            comments: allComments,
           });
           reviewNoteIds.push(id);
           summaryNoteId = id;
@@ -297,7 +329,7 @@ export class ReviewerRunner extends BaseRoleRunner {
           const id = await actor.appendSupplementaryReview(mr, newFindingsToPost, {
             stateKey,
             state,
-            comments,
+            comments: allComments,
           });
           reviewNoteIds.push(id);
           lastAppendNoteId = id;
@@ -349,7 +381,9 @@ export class ReviewerRunner extends BaseRoleRunner {
         })),
         mrAuthor: mr.author,
       };
-      const reviewMemoryKey = `${headSha}:${findingsHash}:${newComments.map(c => c.id).join(',')}`;
+      const reviewMemoryKey = `${headSha}:${findingsHash}:${newComments
+        .map(comment => `${comment.id}:${getCommentActivityAt(comment)}`)
+        .join(',')}`;
       const memoryState = { ...(previousReview?.memory ?? {}) };
       if (
         shouldRecordMemory &&
@@ -502,7 +536,16 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       // 处理别人对 Reviewer 自己开的 discussion threads / summary 评论的新回复
       try {
-        const discussions = await provider.getDiscussions(mr.iid);
+        const discussionSnapshot = await provider.getDiscussionSnapshot(mr.iid);
+        const trackedDiscussionIds = new Set<string>([
+          ...(state.discussions[stateKey] ?? []).map(item => item.discussionId),
+          ...Object.keys(state.reviewerThreadState ?? {}),
+        ]);
+        const discussions = this.includeTrackedDiscussions(
+          discussionSnapshot.active,
+          discussionSnapshot.all,
+          trackedDiscussionIds
+        );
         await this.handleThreadReplies(
           mr,
           discussions,
@@ -548,7 +591,6 @@ export class ReviewerRunner extends BaseRoleRunner {
     const reviewerThreads = discussions.filter(
       (d) =>
         d.notes.length > 0 &&
-        !d.resolved &&
         isAgentAuthoredNote(d.notes[0].body) &&
         d.notes[0].body.includes(REVIEWER_ROLE_LABEL)
     );
@@ -569,14 +611,27 @@ export class ReviewerRunner extends BaseRoleRunner {
         lastRepliedAt: baselineTime,
       });
 
-      if (threadState.pendingTargetNoteId !== undefined && threadState.delivery) {
+      const delivery = threadState.delivery;
+      const deliveryNoteExists = Boolean(
+        delivery &&
+          discussion.notes.some(
+            note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
+          )
+      );
+      const shouldReconcileDelivery = Boolean(
+        delivery &&
+          (threadState.pendingTargetNoteId !== undefined ||
+            isDiscussionDeliveryPending(delivery) ||
+            (delivery.replyStatus === 'posted' && !deliveryNoteExists))
+      );
+      if (shouldReconcileDelivery && delivery) {
         const pendingResult = await deliverDiscussionReply({
           provider,
           mr,
           discussion,
-          body: threadState.delivery.replyBody,
+          body: delivery.replyBody,
           resolve: false,
-          delivery: threadState.delivery,
+          delivery,
           setDelivery: delivery => {
             threadState.delivery = delivery;
           },
@@ -590,27 +645,35 @@ export class ReviewerRunner extends BaseRoleRunner {
           );
           continue;
         }
-        threadState.lastRepliedAt = Math.max(
-          threadState.lastRepliedAt,
-          threadState.pendingTargetCreatedAt ?? 0
-        );
-        threadState.pendingTargetNoteId = undefined;
-        threadState.pendingTargetCreatedAt = undefined;
+        if (threadState.pendingTargetNoteId !== undefined) {
+          threadState.lastRepliedAt = Math.max(
+            threadState.lastRepliedAt,
+            threadState.pendingTargetCreatedAt ?? 0
+          );
+          threadState.pendingTargetNoteId = undefined;
+          threadState.pendingTargetCreatedAt = undefined;
+        }
         if (project) saveState(project, state, 'reviewer');
+      }
+
+      if (discussion.resolved) {
+        console.log(`[ReviewerRunner] discussion ${discussion.id} 已解决，仅完成投递对账`);
+        continue;
       }
 
       const lastRepliedAt = threadState.lastRepliedAt;
 
       const targetNotes = discussion.notes
         .filter((note) => {
-          const ts = new Date(note.createdAt).getTime();
+          const ts = getCommentActivityAt(note);
           return (
             !Number.isNaN(ts) &&
             ts > lastRepliedAt &&
-            !isAgentAuthoredNote(note.body)
+            !isAgentAuthoredNote(note.body) &&
+            !isBotAuthor(note.author)
           );
         })
-        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        .sort((a, b) => getCommentActivityAt(a) - getCommentActivityAt(b));
 
       if (targetNotes.length === 0) {
         console.log(`[ReviewerRunner] discussion ${discussion.id} 没有新的人类回复`);
@@ -629,7 +692,7 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       const replyFooter = formatAgentFooter(REVIEWER_ROLE_LABEL, reviewerName);
       for (const note of targetNotes) {
-        const noteTs = new Date(note.createdAt).getTime();
+        const noteTs = getCommentActivityAt(note);
         const decision = await brain.replyToComment({
           mr,
           originalFindings,
@@ -679,6 +742,55 @@ export class ReviewerRunner extends BaseRoleRunner {
         if (project) saveState(project, state, 'reviewer');
       }
     }
+  }
+
+  private async reconcileReviewCommentDeliveries(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    state: MrAgentState,
+    stateKey: string,
+    comments: ReviewerComment[],
+    project: Project
+  ): Promise<{ summaryNoteId?: number; appendNoteId?: number }> {
+    const deliveryState = state.reviewCommentDelivery?.[stateKey];
+    if (!deliveryState) return {};
+
+    const reconcile = async (kind: 'summary' | 'append'): Promise<number | undefined> => {
+      const delivery = deliveryState[kind];
+      if (!delivery) return undefined;
+      const result = await deliverReviewComment({
+        provider,
+        mr,
+        body: delivery.body,
+        comments,
+        delivery,
+        setDelivery: nextDelivery => {
+          deliveryState[kind] = nextDelivery;
+        },
+        checkpoint: () => saveState(project, state, 'reviewer'),
+      });
+      if (!result.posted) {
+        throw new Error(result.error ?? `Reviewer ${kind} 评论恢复失败`);
+      }
+      return result.noteId;
+    };
+
+    return {
+      summaryNoteId: await reconcile('summary'),
+      appendNoteId: await reconcile('append'),
+    };
+  }
+
+  private includeTrackedDiscussions(
+    active: Discussion[],
+    all: Discussion[],
+    trackedIds: Set<string>
+  ): Discussion[] {
+    const selected = new Map(active.map(discussion => [discussion.id, discussion]));
+    for (const discussion of all) {
+      if (trackedIds.has(discussion.id)) selected.set(discussion.id, discussion);
+    }
+    return [...selected.values()];
   }
 
   /**

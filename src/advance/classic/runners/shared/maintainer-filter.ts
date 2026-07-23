@@ -13,6 +13,7 @@ import {
   isBotAuthor,
 } from './review-utils.js';
 import { isDiscussionDeliveryPending } from './discussion-delivery.js';
+import { getCommentActivityAt } from '../../provider/activity-window.js';
 
 /** 单条 finding 最大自动修复重试次数 */
 const MAX_FIX_RETRY_ATTEMPTS = 3;
@@ -42,10 +43,7 @@ function getLatestNoteTime(
   let latest = 0;
   for (const note of notes) {
     if (!predicate(note)) continue;
-    const t = new Date(note.createdAt).getTime();
-    if (!Number.isNaN(t)) {
-      latest = Math.max(latest, t);
-    }
+    latest = Math.max(latest, getCommentActivityAt(note));
   }
   return latest;
 }
@@ -115,12 +113,15 @@ export function isDiscussionPending(
 ): boolean {
   const threadState = state.maintainerThreadState?.[discussion.id];
   const hasPendingDelivery = isDiscussionDeliveryPending(threadState?.delivery);
+  const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState.decisions) : false;
+  const needsNoFixExplanation =
+    Boolean(threadState) &&
+    !hasCompleteNoFixExplanation(discussion, threadState!.decisions) &&
+    !hasPendingRetry;
+  if (hasPendingDelivery || needsNoFixExplanation) return true;
   if ((discussion.resolved || !discussion.resolvable) && !hasPendingDelivery) {
     return false;
   }
-  if (hasPendingDelivery) return true;
-
-  const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState.decisions) : false;
 
   const lastHumanNoteAt = getLatestNoteTime(discussion.notes, isHumanNote);
 
@@ -133,8 +134,7 @@ export function isDiscussionPending(
     // 放行进入流程，让 processDiscussion 清理状态并重新评估
     const askNoteStillExists = discussion.notes.some((note) => {
       if (!isMaintainerAuthoredNote(note.body)) return false;
-      const t = new Date(note.createdAt).getTime();
-      return !Number.isNaN(t) && t >= askedAt - 1000;
+      return getCommentActivityAt(note) >= askedAt - 1000;
     });
     if (!askNoteStillExists) {
       return true;
@@ -157,13 +157,7 @@ export function isDiscussionPending(
 
   // 所有 finding 都已判定无需修复，但远端没有对应说明（可能从未发布或被清理）：
   // 必须重新进入流程补发逐项结论并 resolve，不能只依赖本地决策状态静默跳过。
-  if (
-    threadState &&
-    !hasCompleteNoFixExplanation(discussion, threadState.decisions) &&
-    !hasPendingRetry
-  ) {
-    return true;
-  }
+  if (needsNoFixExplanation) return true;
 
   // 如果 Maintainer 已经回复/提问过，且之后没有新的人工 note：
   // - 有处理证据（决策记忆/统计报告/非 finding 记录）→ 跳过，防重复回复与自我追问；

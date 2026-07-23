@@ -73,8 +73,23 @@ export interface ReviewerComment {
   body: string;
   /** 创建时间 ISO 字符串 */
   createdAt: string;
+  /** 最近编辑时间 ISO 字符串 */
+  updatedAt?: string;
   /** 是否已解决（可选，讨论类型才有） */
   resolved?: boolean;
+}
+
+/** 远端全量事实与 Agent 活跃分析窗口。 */
+export interface RemoteActivitySnapshot<T> {
+  /** 全量远端事实，用于 ID、正文和删除状态对账 */
+  all: T[];
+  /** 最近活跃窗口，用于 Agent 分析 */
+  active: T[];
+}
+
+/** Reviewer 评论快照，额外提供排除自动账号后的活跃评论。 */
+export interface ReviewerCommentSnapshot extends RemoteActivitySnapshot<ReviewerComment> {
+  activeHuman: ReviewerComment[];
 }
 
 /**
@@ -203,6 +218,9 @@ export interface IGitProvider {
   /** 获取指定 MR 的所有 discussions */
   getDiscussions(iid: number): Promise<Discussion[]>;
 
+  /** 获取指定 MR 的全量 discussion 与最近活动窗口 */
+  getDiscussionSnapshot(iid: number): Promise<RemoteActivitySnapshot<Discussion>>;
+
   /** resolve 或 unresolve 指定 discussion */
   resolveDiscussion(iid: number, discussionId: string, resolved?: boolean): Promise<void>;
 
@@ -211,6 +229,9 @@ export interface IGitProvider {
 
   /** 获取指定 MR 的评审评论（已过滤系统 note 和 bot） */
   getReviewerComments(iid: number): Promise<ReviewerComment[]>;
+
+  /** 获取指定 MR 的全量评论、活动窗口与人工评论窗口 */
+  getReviewerCommentSnapshot(iid: number): Promise<ReviewerCommentSnapshot>;
 
   /** 获取指定 MR 的 CI 状态 */
   getCIStatus(iid: number): Promise<'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'unknown'>;

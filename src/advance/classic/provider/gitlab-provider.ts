@@ -11,9 +11,15 @@ import {
   type MrDiff,
   type Discussion,
   type ReviewerComment,
+  type RemoteActivitySnapshot,
+  type ReviewerCommentSnapshot,
   type MergeOptions,
   type GitLabDiffPosition,
 } from './types.js';
+import {
+  selectRecentActiveComments,
+  selectRecentActiveDiscussions,
+} from './activity-window.js';
 import { matchesFilter } from './mr-filter.js';
 import { GitLabClient } from '../../../gitlab/client.js';
 import type { ProjectConfig } from '../../../types.js';
@@ -22,7 +28,9 @@ import type { GitlabConfig, MrReviewFilter } from '../../types.js';
 /**
  * 需要过滤的 bot / 系统账号用户名模式（词边界匹配）
  */
-const BOT_PATTERN = /\b(bot|ci|codekeeper|gitlab|jenkins|github|renovate|dependabot)\b/i;
+const BOT_PATTERN =
+  /(?:^|[_\-[\]])(?:bot|ci|codekeeper|gitlab|jenkins|github|renovate|dependabot)(?:[_\-[\]]|$)|_bot_[a-f0-9]{8,}$/i;
+const AGENT_COMMENT_MARKER = 'CodeKeeper Advance';
 
 /**
  * 判断用户名是否为 bot
@@ -266,33 +274,29 @@ export class GitLabProvider implements IGitProvider {
     return discussion.id;
   }
 
-  /**
-   * 获取指定 MR 的所有 discussions
-   *
-   * 过滤掉 system notes 和 bot 用户创建的 discussion。
-   */
-  async getDiscussions(
-    iid: number
-  ): Promise<Discussion[]> {
+  /** 获取指定 MR 最近活跃的 discussions。 */
+  async getDiscussions(iid: number): Promise<Discussion[]> {
+    return (await this.getDiscussionSnapshot(iid)).active;
+  }
+
+  /** 获取全量 discussion 事实，并单独生成最近活动窗口。 */
+  async getDiscussionSnapshot(iid: number): Promise<RemoteActivitySnapshot<Discussion>> {
     const discussions = await this.client.getMergeRequestDiscussions(iid);
-    return discussions
-      .filter(
-        (d) =>
-          d.notes.length > 0 &&
-          !d.notes[0].system
-      )
-      .map((d) => {
-        const position = d.position ?? d.notes.find((n) => n.position)?.position;
+    const all = discussions
+      .map((discussion) => {
+        const notes = discussion.notes.filter(note => !note.system);
+        const position = discussion.position ?? discussion.notes.find((note) => note.position)?.position;
         return {
-          id: d.id,
+          id: discussion.id,
           // 某些 GitLab 实例/版本对普通 note discussion 不返回 resolvable/resolved，默认视为可处理
-          resolvable: d.resolvable ?? true,
-          resolved: d.resolved ?? false,
-          notes: d.notes.map((note) => ({
+          resolvable: discussion.resolvable ?? true,
+          resolved: discussion.resolved ?? false,
+          notes: notes.map((note) => ({
             id: note.id,
             author: note.author.username,
             body: note.body,
             createdAt: note.created_at,
+            updatedAt: note.updated_at,
             resolved: note.resolved ?? false,
           })),
           position: position
@@ -305,7 +309,13 @@ export class GitLabProvider implements IGitProvider {
               }
             : undefined,
         };
-      });
+      })
+      .filter(discussion => discussion.notes.length > 0);
+
+    return {
+      all,
+      active: selectRecentActiveDiscussions(all),
+    };
   }
 
   /**
@@ -331,25 +341,33 @@ export class GitLabProvider implements IGitProvider {
     return note.id;
   }
 
-  /**
-   * 获取指定 MR 的评审评论
-   *
-   * 过滤掉：
-   * 1. system notes（系统生成的 note）
-   * 2. bot 用户发布的评论
-   */
+  /** 获取指定 MR 最近活跃的人工评审评论。 */
   async getReviewerComments(iid: number): Promise<ReviewerComment[]> {
-    const notes = await this.client.getMergeRequestNotes(iid);
+    return (await this.getReviewerCommentSnapshot(iid)).activeHuman;
+  }
 
-    return notes
-      .filter((note) => !note.system && !isBot(note.author.username))
+  /** 获取全量非系统评论，并分别生成全体与人工评论活动窗口。 */
+  async getReviewerCommentSnapshot(iid: number): Promise<ReviewerCommentSnapshot> {
+    const notes = await this.client.getMergeRequestNotes(iid);
+    const all = notes
+      .filter((note) => !note.system)
       .map((note) => ({
         id: note.id,
         author: note.author.username,
         body: note.body,
         createdAt: note.created_at,
+        updatedAt: note.updated_at,
         resolved: note.resolved ?? false,
       }));
+
+    const active = selectRecentActiveComments(all);
+    return {
+      all,
+      active,
+      activeHuman: active.filter(
+        comment => !isBot(comment.author) && !comment.body.includes(AGENT_COMMENT_MARKER)
+      ),
+    };
   }
 
   /**

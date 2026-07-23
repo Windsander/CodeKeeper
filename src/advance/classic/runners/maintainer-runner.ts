@@ -37,6 +37,7 @@ import {
   isDiscussionDeliveryPending,
   type DiscussionDeliveryResult,
 } from './shared/discussion-delivery.js';
+import { getCommentActivityAt } from '../provider/activity-window.js';
 
 function logMemoryUsage(label: string): void {
   const usage = process.memoryUsage();
@@ -95,8 +96,7 @@ function getLastHumanNoteAt(discussion: Discussion): number {
     .slice(1)
     .filter(note => !isAgentAuthoredNote(note.body) && !isBotAuthor(note.author))
     .reduce((max, note) => {
-      const t = new Date(note.createdAt).getTime();
-      return !Number.isNaN(t) ? Math.max(max, t) : max;
+      return Math.max(max, getCommentActivityAt(note));
     }, 0);
 }
 
@@ -320,9 +320,21 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       console.log(`[MaintainerRunner] 维护 MR !${mr.iid}: ${mr.title}`);
 
+      let allDiscussions: Discussion[];
       let discussions: Discussion[];
+      let activeDiscussionIds: Set<string>;
       try {
-        discussions = await provider.getDiscussions(mr.iid);
+        const snapshot = await provider.getDiscussionSnapshot(mr.iid);
+        allDiscussions = snapshot.all;
+        activeDiscussionIds = new Set(snapshot.active.map(discussion => discussion.id));
+        discussions = this.includeTrackedDiscussions(
+          snapshot.active,
+          snapshot.all,
+          new Set([
+            ...Object.keys(state.maintainerThreadState ?? {}),
+            ...Object.keys(state.interactiveThreads ?? {}),
+          ])
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[MaintainerRunner] 获取 MR !${mr.iid} discussions 失败: ${message}`);
@@ -354,6 +366,15 @@ export class MaintainerRunner extends BaseRoleRunner {
         checkpoint: () => saveState(project, state, 'maintainer'),
       });
 
+      const reconciliationResults = await this.reconcileTrackedDiscussionDeliveries(
+        actor,
+        provider,
+        mr,
+        allDiscussions,
+        state
+      );
+      saveState(project, state, 'maintainer');
+
       console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
       discussions.forEach((d, idx) => {
         console.log(
@@ -372,8 +393,19 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
 
       const pendingDiscussions = discussions.filter(d => {
-        const headChanged = hasHeadChangedSinceProcessing(d, state, currentHeadSha);
+        const reconciliation = reconciliationResults.get(d.id);
+        if (reconciliation?.pending) return false;
+
+        const isActive = activeDiscussionIds.has(d.id);
+        const headChanged =
+          isActive && hasHeadChangedSinceProcessing(d, state, currentHeadSha);
         const pending = isDiscussionPending(d, state) || headChanged;
+        if (!isActive && pending && !this.canRecoverOutsideActivityWindow(d, state)) {
+          console.log(
+            `[MaintainerRunner] discussion ${d.id} 超出最近活动窗口且无待恢复状态，跳过分析`
+          );
+          return false;
+        }
         if (!pending) {
           const processed = state.processedDiscussions?.[d.id];
           console.log(
@@ -477,26 +509,43 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
 
     const threadState = this.getMaintainerThreadState(state, discussion.id);
-    const pendingDelivery = await this.retryPendingDiscussionDelivery(
-      actor,
-      provider,
-      mr,
-      discussion,
-      state
+    const delivery = threadState.delivery;
+    const deliveryNoteExists = Boolean(
+      delivery &&
+        discussion.notes.some(
+          note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
+        )
     );
-    if (pendingDelivery) {
-      if (pendingDelivery.replyPosted && !pendingDelivery.resolved) {
-        this.restoreInteractiveThread(state, discussion.id);
-      }
-      recordProcessed();
-      if (pendingDelivery.pending) {
+    const shouldReconcileDelivery =
+      isDiscussionDeliveryPending(delivery) ||
+      Boolean(delivery?.replyStatus === 'posted' && !deliveryNoteExists);
+    if (shouldReconcileDelivery) {
+      const deliveryResult = await this.retryPendingDiscussionDelivery(
+        actor,
+        provider,
+        mr,
+        discussion,
+        state
+      );
+      if (deliveryResult?.pending) {
+        recordProcessed();
         console.warn(
-          `[MaintainerRunner] discussion ${discussion.id} 远端投递仍待重试: ${pendingDelivery.error ?? '未知错误'}`
+          `[MaintainerRunner] discussion ${discussion.id} 远端投递仍待重试: ${deliveryResult.error ?? '未知错误'}`
         );
-      } else {
-        console.log(`[MaintainerRunner] discussion ${discussion.id} 已恢复未完成的远端投递`);
+        return;
       }
-      return;
+      if (deliveryResult) {
+        if (threadState.delivery?.awaitingReply) {
+          this.restoreInteractiveThread(state, discussion.id);
+        } else {
+          this.clearAwaitingReplyState(state, discussion.id);
+          recordProcessed();
+          console.log(`[MaintainerRunner] discussion ${discussion.id} 已恢复未完成的远端投递`);
+          return;
+        }
+      }
+    } else if (delivery?.replyStatus === 'posted' && delivery.awaitingReply) {
+      this.restoreInteractiveThread(state, discussion.id);
     }
 
     // 如果本 discussion 正在交互式等待 Reviewer 回复，先处理新回复
@@ -506,8 +555,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       // 只要 discussion 里在提问时间之后还有 Maintainer 发布的 note，就说明状态有效
       const maintainerNotesAfterAsk = discussion.notes.filter(note => {
         if (!isMaintainerAuthoredNote(note.body)) return false;
-        const noteTime = new Date(note.createdAt).getTime();
-        return !Number.isNaN(noteTime) && noteTime >= askedAt - 1000;
+        return getCommentActivityAt(note) >= askedAt - 1000;
       });
 
       // 如果 discussion 里已经找不到提问后的 Maintainer note，说明状态已脏，清除后继续处理
@@ -515,12 +563,11 @@ export class MaintainerRunner extends BaseRoleRunner {
         console.warn(
           `[MaintainerRunner] discussion ${discussion.id} 的交互状态已过期，清除后重新处理`
         );
-        delete state.interactiveThreads[discussion.id];
+        this.clearAwaitingReplyState(state, discussion.id);
       } else {
         const newReviewerNotes = discussion.notes.filter(note => {
-          if (isMaintainerAuthoredNote(note.body)) return false;
-          const noteTime = new Date(note.createdAt).getTime();
-          return !Number.isNaN(noteTime) && noteTime > askedAt;
+          if (isAgentAuthoredNote(note.body) || isBotAuthor(note.author)) return false;
+          return getCommentActivityAt(note) > askedAt;
         });
 
         if (newReviewerNotes.length === 0) {
@@ -557,7 +604,7 @@ export class MaintainerRunner extends BaseRoleRunner {
                 return;
               }
             }
-            delete state.interactiveThreads[discussion.id];
+            this.clearAwaitingReplyState(state, discussion.id);
             console.log(
               `[MaintainerRunner] discussion ${discussion.id} 交互式提问超时未回复，已清理等待状态`
             );
@@ -568,16 +615,38 @@ export class MaintainerRunner extends BaseRoleRunner {
           return;
         }
 
-        await this.handleInteractiveReply(
-          mr,
-          discussion,
-          brain,
-          actor,
-          worktreeManager,
-          maintainerName,
-          state,
-          projectRootPath
-        );
+        const interactiveFilePath = existingThread.filePath;
+        const interactiveQuestion = existingThread.question;
+        this.clearAwaitingReplyState(state, discussion.id);
+        try {
+          await this.handleInteractiveReply(
+            mr,
+            discussion,
+            brain,
+            actor,
+            worktreeManager,
+            maintainerName,
+            state,
+            projectRootPath,
+            interactiveFilePath
+          );
+        } catch (error) {
+          state.interactiveThreads[discussion.id] = {
+            status: 'awaiting-reply',
+            askedAt,
+            question: interactiveQuestion,
+            filePath: interactiveFilePath,
+          };
+          const currentDelivery = state.maintainerThreadState?.[discussion.id]?.delivery;
+          if (currentDelivery) {
+            currentDelivery.awaitingReply = true;
+            currentDelivery.awaitingReplyAt = askedAt;
+            currentDelivery.question = interactiveQuestion;
+            currentDelivery.filePath = interactiveFilePath;
+            currentDelivery.updatedAt = Date.now();
+          }
+          throw error;
+        }
         recordProcessed();
         return;
       }
@@ -746,8 +815,7 @@ export class MaintainerRunner extends BaseRoleRunner {
           const lastMaintainerNoteAt = discussion.notes
             .filter(note => isMaintainerAuthoredNote(note.body))
             .reduce((max, note) => {
-              const t = new Date(note.createdAt).getTime();
-              return Number.isNaN(t) ? max : Math.max(max, t);
+              return Math.max(max, getCommentActivityAt(note));
             }, 0);
           const lastHumanNoteAt = getLastHumanNoteAt(discussion);
           if (lastMaintainerNoteAt > 0 && lastMaintainerNoteAt >= lastHumanNoteAt) {
@@ -1360,15 +1428,13 @@ export class MaintainerRunner extends BaseRoleRunner {
     worktreeManager: WorktreeManager,
     maintainerName: string,
     state: MrAgentState,
-    projectRootPath: string
+    projectRootPath: string,
+    filePath: string | undefined
   ): Promise<void> {
-    const thread = state.interactiveThreads[discussion.id];
-    const filePath = thread?.filePath;
     if (!filePath) {
       console.warn(
-        `[MaintainerRunner] interactive thread ${discussion.id} 缺少 filePath，移除状态`
+        `[MaintainerRunner] interactive thread ${discussion.id} 缺少 filePath，结束等待状态`
       );
-      delete state.interactiveThreads[discussion.id];
       return;
     }
 
@@ -1388,8 +1454,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       mr.sourceBranch
     );
     if (fileContent === null) {
-      console.warn(`[MaintainerRunner] 读取文件 ${filePath} 失败，跳过交互回复处理`);
-      return;
+      throw new Error(`读取交互回复关联文件失败: ${filePath}`);
     }
 
     const threadNotes = discussion.notes.map(note => ({
@@ -1444,11 +1509,11 @@ export class MaintainerRunner extends BaseRoleRunner {
     discussion: Discussion,
     state: MrAgentState
   ): Promise<DiscussionDeliveryResult | null> {
-    if (typeof actor.retryPendingDelivery === 'function') {
-      return actor.retryPendingDelivery(mr, discussion, state);
+    if (typeof actor.reconcileDelivery === 'function') {
+      return actor.reconcileDelivery(mr, discussion, state);
     }
     const delivery = state.maintainerThreadState?.[discussion.id]?.delivery;
-    if (!isDiscussionDeliveryPending(delivery) || !delivery) return null;
+    if (!delivery) return null;
     return this.deliverDiscussionReplyDirect(
       provider,
       mr,
@@ -1488,17 +1553,126 @@ export class MaintainerRunner extends BaseRoleRunner {
     const pendingQuestion = Object.entries(threadState?.decisions ?? {}).find(
       ([, decision]) => decision.action === 'ask' || Boolean(decision.question?.trim())
     );
-    const fileLine = pendingQuestion?.[0] ?? delivery?.filePath;
-    const question = pendingQuestion?.[1].question ?? delivery?.question;
-    if (!fileLine || !question) return;
+    const filePath =
+      delivery?.filePath ?? pendingQuestion?.[0]?.replace(/:\d+$/, '');
+    const question = delivery?.question ?? pendingQuestion?.[1].question;
+    if (!filePath || !question) return;
 
     state.interactiveThreads ??= {};
     state.interactiveThreads[discussionId] = {
       status: 'awaiting-reply',
-      askedAt: Date.now(),
+      askedAt: delivery?.awaitingReplyAt ?? delivery?.updatedAt ?? Date.now(),
       question,
-      filePath: fileLine.split(':')[0],
+      filePath,
     };
+  }
+
+  private clearAwaitingReplyState(state: MrAgentState, discussionId: string): void {
+    delete state.interactiveThreads[discussionId];
+    const delivery = state.maintainerThreadState?.[discussionId]?.delivery;
+    if (!delivery) return;
+    delivery.awaitingReply = undefined;
+    delivery.awaitingReplyAt = undefined;
+    delivery.question = undefined;
+    delivery.filePath = undefined;
+    delivery.updatedAt = Date.now();
+  }
+
+  private includeTrackedDiscussions(
+    active: Discussion[],
+    all: Discussion[],
+    trackedIds: Set<string>
+  ): Discussion[] {
+    const selected = new Map(active.map(discussion => [discussion.id, discussion]));
+    for (const discussion of all) {
+      if (trackedIds.has(discussion.id)) selected.set(discussion.id, discussion);
+    }
+    return [...selected.values()];
+  }
+
+  private canRecoverOutsideActivityWindow(
+    discussion: Discussion,
+    state: MrAgentState
+  ): boolean {
+    if (state.interactiveThreads[discussion.id]?.status === 'awaiting-reply') return true;
+
+    const threadState = state.maintainerThreadState?.[discussion.id];
+    if (!threadState) return false;
+    if (isDiscussionDeliveryPending(threadState.delivery)) return true;
+    if (threadState.delivery?.awaitingReply) return true;
+
+    const decisions = Object.values(threadState.decisions);
+    if (
+      decisions.some(
+        decision =>
+          decision.action === 'fix' &&
+          !decision.fixSucceeded &&
+          decision.failedAttempts < MAX_FIX_RETRY_ATTEMPTS
+      )
+    ) {
+      return true;
+    }
+
+    const ignoredFileLines = Object.entries(threadState.decisions)
+      .filter(([, decision]) => decision.action === 'ignore')
+      .map(([fileLine]) => fileLine);
+    return (
+      ignoredFileLines.length === decisions.length &&
+      ignoredFileLines.length > 0 &&
+      !this.hasNoFixExplanationForItems(discussion, ignoredFileLines)
+    );
+  }
+
+  private async reconcileTrackedDiscussionDeliveries(
+    actor: MaintainerActor,
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    discussions: Discussion[],
+    state: MrAgentState
+  ): Promise<Map<string, DiscussionDeliveryResult>> {
+    const results = new Map<string, DiscussionDeliveryResult>();
+    for (const discussion of discussions) {
+      const delivery = state.maintainerThreadState?.[discussion.id]?.delivery;
+      if (!delivery) continue;
+      const replyExists = discussion.notes.some(
+        note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
+      );
+      if (!isDiscussionDeliveryPending(delivery) && replyExists) {
+        if (delivery.awaitingReply) this.restoreInteractiveThread(state, discussion.id);
+        continue;
+      }
+      try {
+        const result = await this.retryPendingDiscussionDelivery(
+          actor,
+          provider,
+          mr,
+          discussion,
+          state
+        );
+        if (!result) continue;
+        results.set(discussion.id, result);
+        if (result.replyPosted && delivery.awaitingReply) {
+          this.restoreInteractiveThread(state, discussion.id);
+        }
+        if (result.pending) {
+          console.warn(
+            `[MaintainerRunner] discussion ${discussion.id} 远端投递对账失败: ${result.error ?? '未知错误'}`
+          );
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(
+          `[MaintainerRunner] discussion ${discussion.id} 远端投递对账异常，继续处理后续 discussion: ${message}`
+        );
+        results.set(discussion.id, {
+          replyPosted: false,
+          resolved: false,
+          pending: true,
+          error: message,
+        });
+      }
+    }
+    return results;
   }
 
   private getMaintainerThreadState(state: MrAgentState, discussionId: string) {

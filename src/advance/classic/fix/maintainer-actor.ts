@@ -170,7 +170,13 @@ export class MaintainerActor {
     );
 
     if (result.replyPosted && askedItems.length > 0) {
-      this.setAwaitingReply(state, discussion.id, askedItems[0].text, askedItems[0].fileLine);
+      this.setAwaitingReply(
+        state,
+        discussion.id,
+        askedItems[0].text,
+        askedItems[0].fileLine,
+        state.maintainerThreadState?.[discussion.id]?.delivery?.awaitingReplyAt
+      );
       this.options.checkpoint?.();
       console.log(`[MaintainerActor] 汇总 discussion ${discussion.id} 有待澄清项，等待回复`);
     } else if (result.resolved) {
@@ -200,6 +206,23 @@ export class MaintainerActor {
     const threadState = state.maintainerThreadState?.[discussion.id];
     if (!isDiscussionDeliveryPending(threadState?.delivery)) return null;
     const delivery = threadState?.delivery;
+    if (!delivery) return null;
+    return this.deliverReply(
+      mr,
+      discussion,
+      delivery.replyBody,
+      delivery.resolveRequired,
+      state
+    );
+  }
+
+  /** 对账任意已记录投递，包括远端可能已被删除的完成态回复。 */
+  async reconcileDelivery(
+    mr: MergeRequest,
+    discussion: Discussion,
+    state: MrAgentState
+  ): Promise<DiscussionDeliveryResult | null> {
+    const delivery = state.maintainerThreadState?.[discussion.id]?.delivery;
     if (!delivery) return null;
     return this.deliverReply(
       mr,
@@ -513,7 +536,13 @@ export class MaintainerActor {
       { question, filePath }
     );
     if (result.replyPosted) {
-      this.setAwaitingReply(state, discussion.id, question, filePath);
+      this.setAwaitingReply(
+        state,
+        discussion.id,
+        question,
+        filePath,
+        state.maintainerThreadState?.[discussion.id]?.delivery?.awaitingReplyAt
+      );
       this.options.checkpoint?.();
       console.log(`[MaintainerActor] 已在 discussion ${discussion.id} 提出澄清问题`);
     }
@@ -626,13 +655,14 @@ export class MaintainerActor {
     state: MrAgentState,
     discussionId: string,
     question: string,
-    fileLine: string
+    fileLine: string,
+    askedAt = Date.now()
   ): void {
     const filePath = fileLine.split(':')[0];
     state.interactiveThreads ??= {};
     state.interactiveThreads[discussionId] = {
       status: 'awaiting-reply',
-      askedAt: Date.now(),
+      askedAt,
       question,
       filePath,
     };

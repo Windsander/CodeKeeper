@@ -93,6 +93,18 @@ export class MemoryWriteRetryService {
     try {
       if (write.kind === 'add_messages') {
         await everosMemoryAddMessages(url, ctx, write.messages);
+        try {
+          await everosMemoryFlush(url, ctx);
+        } catch (err) {
+          this.queue.enqueue(ctx, 'flush');
+          this.queue.remove(write.id);
+          const message = err instanceof Error ? err.message : String(err);
+          logger.warn(
+            { err, writeId: write.id },
+            `add_messages 已成功，flush 已转入独立重试队列: ${message}`
+          );
+          return;
+        }
       } else {
         await everosMemoryFlush(url, ctx);
       }

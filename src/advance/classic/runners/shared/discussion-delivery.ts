@@ -62,6 +62,7 @@ export async function deliverDiscussionReply(params: {
     delivery.awaitingReply = true;
     delivery.question = params.awaitingReply.question;
     delivery.filePath = params.awaitingReply.filePath;
+    delivery.awaitingReplyAt ??= Date.now();
   }
   if (!resolve) delivery.resolveStatus = 'not-required';
   delivery.updatedAt = Date.now();
@@ -135,6 +136,7 @@ export async function deliverDiscussionReply(params: {
       checkpoint();
       try {
         await provider.resolveDiscussion(mr.iid, discussion.id);
+        discussion.resolved = true;
         delivery.resolveStatus = 'resolved';
         delivery.lastError = undefined;
         delivery.updatedAt = Date.now();

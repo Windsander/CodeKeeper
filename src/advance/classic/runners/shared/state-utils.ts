@@ -76,6 +76,8 @@ export interface DiscussionDeliveryState {
   question?: string;
   /** 等待回复关联的文件路径 */
   filePath?: string;
+  /** 首次进入等待人工回复的时间戳，重启恢复时必须复用 */
+  awaitingReplyAt?: number;
   /** 最近一次状态更新时间 */
   updatedAt: number;
 }
