@@ -80,6 +80,49 @@ describe('isDiscussionPending', () => {
     expect(isDiscussionPending(d, state)).toBe(true);
   });
 
+  it('首条 Reviewer note 被编辑后即使 note 数未变也重新进入流程', () => {
+    const previousActivityAt = Date.parse('2026-07-01T00:00:00.000Z');
+    const updatedAt = Date.parse('2026-07-02T00:00:00.000Z');
+    const d = makeDiscussion({
+      notes: [
+        {
+          id: 1,
+          author: 'reviewer-bot',
+          body: 'virtual/module-a.ts:10 更新后的问题描述',
+          createdAt: '2026-07-01T00:00:00.000Z',
+          updatedAt: '2026-07-02T00:00:00.000Z',
+        },
+        {
+          id: 2,
+          author: 'maintainer-bot',
+          body: '✅ 已处理\n\n---\n*生成于 2026/07/01 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-07-01T01:00:00.000Z',
+        },
+      ],
+    });
+    const state = makeState({
+      processedDiscussions: {
+        'd-1': { noteCount: 2, processedAt: previousActivityAt },
+      },
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'virtual/module-a.ts:10': {
+              action: 'ignore',
+              reason: '旧结论',
+              failedAttempts: 0,
+              decidedAt: previousActivityAt,
+            },
+          },
+          lastReviewerNoteAt: previousActivityAt,
+        },
+      },
+    });
+
+    expect(updatedAt).toBeGreaterThan(previousActivityAt);
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
   it('交互式等待中且无新人工回复时不再每轮进入流程', () => {
     const now = Date.now();
     const d = makeDiscussion({

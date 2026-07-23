@@ -324,6 +324,47 @@ describe('GitLabProvider', () => {
   });
 
   describe('getReviewerComments', () => {
+    it('全量快照保留 bot 与 Agent，但人工窗口只从全局最近 100 条中筛选', async () => {
+      const newestBotNotes: GitLabNote[] = Array.from({ length: 100 }, (_, index) => ({
+        id: index + 1,
+        body: `自动评论 ${index + 1}`,
+        author: { username: 'ci-bot', name: 'CI Bot' },
+        created_at: new Date(Date.UTC(2026, 6, 1, 0, index + 1)).toISOString(),
+        resolved: false,
+        system: false,
+      }));
+      const oldHumanNote: GitLabNote = {
+        id: 1001,
+        body: '较早的人工评论',
+        author: { username: 'developer', name: 'Developer' },
+        created_at: '2026-07-01T00:00:00.000Z',
+        resolved: false,
+        system: false,
+      };
+      const agentNote: GitLabNote = {
+        id: 1002,
+        body: '自动总结\n\n*CodeKeeper Advance MR 评审 Agent*',
+        author: { username: 'service-account', name: 'Service Account' },
+        created_at: '2026-07-01T00:00:01.000Z',
+        resolved: false,
+        system: false,
+      };
+      mockGetMergeRequestNotes.mockResolvedValue([
+        oldHumanNote,
+        agentNote,
+        ...newestBotNotes,
+      ]);
+
+      const snapshot = await new GitLabProvider(gitlabConfig).getReviewerCommentSnapshot(42);
+
+      expect(snapshot.all).toHaveLength(102);
+      expect(snapshot.all.map(comment => comment.id)).toEqual(
+        expect.arrayContaining([1001, 1002])
+      );
+      expect(snapshot.active).toHaveLength(100);
+      expect(snapshot.activeHuman).toEqual([]);
+    });
+
     it('应过滤 system notes 和 bot 用户', async () => {
       const mockNotes: GitLabNote[] = [
         {

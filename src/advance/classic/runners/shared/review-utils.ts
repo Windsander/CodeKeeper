@@ -87,7 +87,8 @@ export function isMaintainerNoFixExplanationNote(body: string): boolean {
  * 只用于把「明确的自动化账号」排除在「人工回复」之外；
  * 拿不准的一律视为人工，避免漏掉真实用户的新信息。
  */
-const BOT_AUTHOR_PATTERN = /(?:^|[_[-])bot(?:[\]-]|$)|_bot_[a-f0-9]{8,}$/i;
+const BOT_AUTHOR_PATTERN =
+  /(?:^|[_\-[\]])(?:bot|ci|codekeeper|gitlab|jenkins|github|renovate|dependabot)(?:[_\-[\]]|$)|_bot_[a-f0-9]{8,}$/i;
 
 /**
  * 判断 note 作者是否为自动化 bot。

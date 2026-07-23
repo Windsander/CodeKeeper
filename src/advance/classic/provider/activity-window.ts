@@ -9,6 +9,11 @@ function parseActivityTime(value: string | undefined): number {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
+/** 返回评论明确的编辑时间；未提供 updatedAt 时不把创建时间误当成编辑。 */
+export function getCommentUpdatedAt(comment: ReviewerComment): number {
+  return parseActivityTime(comment.updatedAt);
+}
+
 /** 返回评论最近一次创建或编辑的时间。 */
 export function getCommentActivityAt(comment: ReviewerComment): number {
   return Math.max(

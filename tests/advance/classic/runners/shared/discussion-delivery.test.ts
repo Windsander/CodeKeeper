@@ -167,6 +167,49 @@ describe('deliverDiscussionReply', () => {
     expect(provider.addDiscussionNote).toHaveBeenCalledTimes(2);
     expect(delivery?.replyNoteId).toBe(9);
   });
+
+  it('人工重开已完成 discussion 时仅对账回复，不自动再次 resolve', async () => {
+    const provider = {
+      addDiscussionNote: vi.fn().mockResolvedValue(12),
+      resolveDiscussion: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IGitProvider;
+    const discussion = makeDiscussion();
+    let delivery: DiscussionDeliveryState | undefined;
+
+    const completed = await deliverDiscussionReply({
+      provider,
+      mr,
+      discussion,
+      body: '已完成的处理结论',
+      resolve: true,
+      delivery,
+      setDelivery: next => {
+        delivery = next;
+      },
+      checkpoint: () => undefined,
+    });
+    expect(completed.resolved).toBe(true);
+    discussion.resolved = false;
+    vi.mocked(provider.addDiscussionNote).mockClear();
+    vi.mocked(provider.resolveDiscussion).mockClear();
+
+    const result = await deliverDiscussionReply({
+      provider,
+      mr,
+      discussion,
+      body: '已完成的处理结论',
+      resolve: true,
+      delivery,
+      setDelivery: next => {
+        delivery = next;
+      },
+      checkpoint: () => undefined,
+    });
+
+    expect(result).toMatchObject({ replyPosted: true, resolved: false, pending: false });
+    expect(provider.addDiscussionNote).not.toHaveBeenCalled();
+    expect(provider.resolveDiscussion).not.toHaveBeenCalled();
+  });
 });
 
 describe('isDiscussionDeliveryPending', () => {

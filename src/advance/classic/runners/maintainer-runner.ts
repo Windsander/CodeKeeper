@@ -37,7 +37,10 @@ import {
   isDiscussionDeliveryPending,
   type DiscussionDeliveryResult,
 } from './shared/discussion-delivery.js';
-import { getCommentActivityAt } from '../provider/activity-window.js';
+import {
+  getCommentActivityAt,
+  getCommentUpdatedAt,
+} from '../provider/activity-window.js';
 
 function logMemoryUsage(label: string): void {
   const usage = process.memoryUsage();
@@ -497,8 +500,13 @@ export class MaintainerRunner extends BaseRoleRunner {
         processedAt: Date.now(),
       };
       const threadState = state.maintainerThreadState?.[discussion.id];
-      if (threadState && currentHeadSha) {
-        threadState.lastProcessedHeadSha = currentHeadSha;
+      if (threadState) {
+        threadState.lastReviewerNoteAt = discussion.notes[0]
+          ? getCommentActivityAt(discussion.notes[0])
+          : threadState.lastReviewerNoteAt;
+        if (currentHeadSha) {
+          threadState.lastProcessedHeadSha = currentHeadSha;
+        }
       }
     };
 
@@ -961,6 +969,13 @@ export class MaintainerRunner extends BaseRoleRunner {
       const hasNewHumanNote = lastHumanNoteAt > (threadState.lastHumanNoteAt ?? 0);
 
       const existing = threadState.decisions[key];
+      const sourceNoteChanged = Boolean(
+        existing &&
+          getCommentUpdatedAt(firstNote) >
+            (threadState.lastReviewerNoteAt > 0
+              ? threadState.lastReviewerNoteAt
+              : existing.decidedAt)
+      );
       const staleRecheck = await this.recheckStaleFindingIfNeeded(
         brain,
         worktreeManager,
@@ -995,7 +1010,14 @@ export class MaintainerRunner extends BaseRoleRunner {
       const noFixExplanationMissing =
         existing?.action === 'ignore' &&
         !this.hasNoFixExplanationForItems(discussion, [`${finding.file}:${finding.line}`]);
-      if (existing && !staleFinding && !needsRetry && !hasNewHumanNote && !noFixExplanationMissing) {
+      if (
+        existing &&
+        !staleFinding &&
+        !needsRetry &&
+        !hasNewHumanNote &&
+        !sourceNoteChanged &&
+        !noFixExplanationMissing
+      ) {
         console.log(
           `[MaintainerRunner] finding ${key} 已有历史决策且无人工新回复，跳过: action=${existing.action}`
         );
@@ -1007,7 +1029,8 @@ export class MaintainerRunner extends BaseRoleRunner {
         existing?.action === 'ignore' &&
         noFixExplanationMissing &&
         !staleFinding &&
-        !hasNewHumanNote
+        !hasNewHumanNote &&
+        !sourceNoteChanged
       ) {
         await actor.applyDecision(
           mr,
@@ -1157,6 +1180,13 @@ export class MaintainerRunner extends BaseRoleRunner {
     for (const finding of findings) {
       const key = getFindingKey(finding);
       const existing = threadState.decisions[key];
+      const sourceNoteChanged = Boolean(
+        existing &&
+          getCommentUpdatedAt(firstNote) >
+            (threadState.lastReviewerNoteAt > 0
+              ? threadState.lastReviewerNoteAt
+              : existing.decidedAt)
+      );
       const needsRetry =
         existing?.action === 'fix' &&
         !existing.fixSucceeded &&
@@ -1186,7 +1216,12 @@ export class MaintainerRunner extends BaseRoleRunner {
         console.log(`[MaintainerRunner] stale finding ${key} 已在当前代码中解决，加入汇总说明`);
         continue;
       }
-      const shouldReuse = existing && !staleFinding && !hasNewHumanNote && !needsRetry;
+      const shouldReuse =
+        existing &&
+        !staleFinding &&
+        !hasNewHumanNote &&
+        !sourceNoteChanged &&
+        !needsRetry;
 
       if (shouldReuse) {
         console.log(`[MaintainerRunner] finding ${key} 复用历史决策: action=${existing.action}`);

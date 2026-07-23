@@ -14,6 +14,7 @@ import {
   isAgentAuthoredNote,
   isMaintainerAuthoredNote,
   isMaintainerNoFixExplanationNote,
+  isBotAuthor,
 } from '../../../../../src/advance/classic/runners/shared/review-utils.js';
 import type { MergeRequest, ReviewResult, ReviewFinding } from '../../../../../src/advance/classic/provider/types.js';
 
@@ -166,6 +167,16 @@ describe('isAgentAuthoredNote', () => {
 
   it('普通评论返回 false', () => {
     expect(isAgentAuthoredNote('这里应该改一下')).toBe(false);
+  });
+});
+
+describe('isBotAuthor', () => {
+  it('识别常见自动化账号但不误伤普通用户名', () => {
+    expect(isBotAuthor('ci-bot')).toBe(true);
+    expect(isBotAuthor('codekeeper-agent')).toBe(true);
+    expect(isBotAuthor('project_123_bot_63ebd35e')).toBe(true);
+    expect(isBotAuthor('robotics-developer')).toBe(false);
+    expect(isBotAuthor('alice')).toBe(false);
   });
 });
 

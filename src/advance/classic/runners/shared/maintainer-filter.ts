@@ -13,7 +13,10 @@ import {
   isBotAuthor,
 } from './review-utils.js';
 import { isDiscussionDeliveryPending } from './discussion-delivery.js';
-import { getCommentActivityAt } from '../../provider/activity-window.js';
+import {
+  getCommentActivityAt,
+  getCommentUpdatedAt,
+} from '../../provider/activity-window.js';
 
 /** 单条 finding 最大自动修复重试次数 */
 const MAX_FIX_RETRY_ATTEMPTS = 3;
@@ -112,6 +115,25 @@ export function isDiscussionPending(
   state: Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'>
 ): boolean {
   const threadState = state.maintainerThreadState?.[discussion.id];
+  const processed = state.processedDiscussions?.[discussion.id];
+  const sourceNoteUpdatedAt = discussion.notes[0]
+    ? getCommentUpdatedAt(discussion.notes[0])
+    : 0;
+  const latestDecisionAt = threadState
+    ? Object.values(threadState.decisions).reduce(
+        (latest, decision) => Math.max(latest, decision.decidedAt),
+        0
+      )
+    : 0;
+  const lastReviewerNoteAt = threadState?.lastReviewerNoteAt ?? 0;
+  const sourceNoteBaseline = lastReviewerNoteAt > 0
+    ? lastReviewerNoteAt
+    : Math.max(
+        latestDecisionAt,
+        threadState?.lastSummaryAt ?? 0,
+        processed?.processedAt ?? 0
+      );
+  const hasUpdatedSourceNote = sourceNoteUpdatedAt > sourceNoteBaseline;
   const hasPendingDelivery = isDiscussionDeliveryPending(threadState?.delivery);
   const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState.decisions) : false;
   const needsNoFixExplanation =
@@ -163,14 +185,18 @@ export function isDiscussionPending(
   // - 有处理证据（决策记忆/统计报告/非 finding 记录）→ 跳过，防重复回复与自我追问；
   // - 无处理证据（如旧版本只发过轻松回复/提问）→ 放行重新评估，
   //   让真实 finding 有机会被处理；非 finding 则由 processDiscussion 静默补记证据。
-  if (lastMaintainerNoteAt > 0 && lastMaintainerNoteAt >= lastHumanNoteAt && !hasPendingRetry) {
+  if (
+    lastMaintainerNoteAt > 0 &&
+    lastMaintainerNoteAt >= lastHumanNoteAt &&
+    !hasPendingRetry &&
+    !hasUpdatedSourceNote
+  ) {
     return !hasProcessingEvidence(threadState);
   }
 
   // 已处理过且没有新 note、也不在等待重试
-  const processed = state.processedDiscussions?.[discussion.id];
   const hasNewNotes = processed ? discussion.notes.length > processed.noteCount : true;
-  if (processed && !hasNewNotes && !hasPendingRetry) {
+  if (processed && !hasNewNotes && !hasUpdatedSourceNote && !hasPendingRetry) {
     // 已处理过但没有任何处理证据（旧版本走了 non-finding 路径，
     // 只记了 noteCount、没留决策记录）→ 放行重新评估，
     // 让真实 finding 有机会被处理；有证据则安全跳过

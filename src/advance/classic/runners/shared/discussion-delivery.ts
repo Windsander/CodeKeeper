@@ -161,7 +161,7 @@ export async function deliverDiscussionReply(params: {
   return {
     replyPosted: true,
     replyNoteId: delivery.replyNoteId,
-    resolved: !resolve || delivery.resolveStatus === 'resolved',
+    resolved: !resolve || discussion.resolved,
     pending: false,
   };
 }
