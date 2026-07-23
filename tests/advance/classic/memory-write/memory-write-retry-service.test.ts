@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MemoryWriteRetryService } from '../../../../src/advance/classic/memory/memory-write-retry-service';
-import type { IMemoryWriteQueue, PendingMemoryWrite } from '../../../../src/advance/classic/memory/memory-write-queue';
-import { everosMemoryAddMessages, everosMemoryFlush } from '../../../../src/advance/classic/memory/everos-api';
+import type {
+  IMemoryWriteQueue,
+  PendingMemoryWrite,
+} from '../../../../src/advance/classic/memory/memory-write-queue';
+import {
+  everosMemoryAddMessages,
+  everosMemoryFlush,
+} from '../../../../src/advance/classic/memory/everos-api';
 
 vi.mock('../../../../src/advance/classic/memory/everos-api.js', () => ({
   everosMemoryAddMessages: vi.fn(),
@@ -16,6 +22,7 @@ describe('MemoryWriteRetryService', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     queue = {
+      enqueue: vi.fn(),
       listReady: vi.fn().mockReturnValue([]),
       remove: vi.fn(),
       markFailed: vi.fn(),
@@ -75,6 +82,24 @@ describe('MemoryWriteRetryService', () => {
       'http://everos:8000',
       expect.objectContaining({ projectId: 'proj', sessionId: 'sess' }),
       write.messages
+    );
+    expect(queue.remove).toHaveBeenCalledWith('w1');
+    expect(queue.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('add_messages 成功但 flush 失败时转为独立 flush 任务', async () => {
+    const write = sampleWrite();
+    queue.listReady = vi.fn().mockReturnValue([write]);
+    vi.mocked(everosMemoryAddMessages).mockResolvedValue(undefined);
+    vi.mocked(everosMemoryFlush).mockRejectedValue(new Error('flush boom'));
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(everosMemoryAddMessages).toHaveBeenCalledTimes(1);
+    expect(queue.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'proj', sessionId: 'sess' }),
+      'flush'
     );
     expect(queue.remove).toHaveBeenCalledWith('w1');
     expect(queue.markFailed).not.toHaveBeenCalled();

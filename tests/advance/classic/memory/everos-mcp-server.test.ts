@@ -138,6 +138,133 @@ describe('EverOSMcpServer 失败入队', () => {
     await transport.close();
     await server.stop();
   });
+
+  it('record_project_knowledge 写入失败且队列接管成功时返回成功', async () => {
+    vi.mocked(everosMemoryAddMessages).mockReset().mockRejectedValue(new Error('add boom'));
+    vi.mocked(everosMemoryFlush).mockReset().mockResolvedValue(undefined);
+    const queue: IMemoryWriteQueue = {
+      enqueue: vi.fn(),
+      listReady: vi.fn().mockReturnValue([]),
+      remove: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999', queue });
+    const { client, transport } = await connect(server);
+    const ctx = makeCtx({ agentId: 'archiver', sessionId: 'archiver-proj-1' });
+
+    const result = await client.callTool({
+      name: 'record_project_knowledge',
+      arguments: {
+        context: ctx,
+        items: [
+          {
+            id: 'knowledge-queue-success',
+            category: 'architecture',
+            sourceFiles: ['virtual/module-a.ts'],
+            content: '可由队列补偿的项目知识',
+            confidence: 'high',
+            createdAt: '2026-07-22T00:00:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(result.content).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(queue.enqueue).toHaveBeenCalledOnce();
+    expect(queue.enqueue).toHaveBeenCalledWith(ctx, 'add_messages', expect.any(Array));
+
+    await transport.close();
+    await server.stop();
+  });
+
+  it('record_project_knowledge 写入与入队都失败时返回失败', async () => {
+    vi.mocked(everosMemoryAddMessages).mockReset().mockRejectedValue(new Error('add boom'));
+    vi.mocked(everosMemoryFlush).mockReset().mockResolvedValue(undefined);
+    const queue: IMemoryWriteQueue = {
+      enqueue: vi.fn(() => {
+        throw new Error('queue boom');
+      }),
+      listReady: vi.fn().mockReturnValue([]),
+      remove: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999', queue });
+    const { client, transport } = await connect(server);
+    const ctx = makeCtx({ agentId: 'archiver', sessionId: 'archiver-proj-1' });
+
+    const result = await client.callTool({
+      name: 'record_project_knowledge',
+      arguments: {
+        context: ctx,
+        items: [
+          {
+            id: 'knowledge-queue-failure',
+            category: 'architecture',
+            sourceFiles: ['virtual/module-a.ts'],
+            content: '无法持久化的项目知识',
+            confidence: 'high',
+            createdAt: '2026-07-22T00:00:00.000Z',
+          },
+        ],
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      expect.objectContaining({ type: 'text', text: expect.stringContaining('queue boom') }),
+    ]);
+
+    await transport.close();
+    await server.stop();
+  });
+
+  it('record_finding_cases add 成功但 flush 失败时只入队 flush', async () => {
+    vi.mocked(everosMemoryAddMessages).mockReset().mockResolvedValue(undefined);
+    vi.mocked(everosMemoryFlush).mockReset().mockRejectedValue(new Error('flush boom'));
+    const queue: IMemoryWriteQueue = {
+      enqueue: vi.fn(),
+      listReady: vi.fn().mockReturnValue([]),
+      remove: vi.fn(),
+      markFailed: vi.fn(),
+    };
+    const server = new EverOSMcpServer({ everosUrl: 'http://127.0.0.1:9999', queue });
+    const { client, transport } = await connect(server);
+    const ctx = makeCtx();
+
+    await client.callTool({
+      name: 'record_finding_cases',
+      arguments: {
+        context: ctx,
+        cases: [
+          {
+            key: 'case:proj-1:mr-1:virtual_module-a_ts:18:rule-example',
+            mrIid: 1,
+            file: 'virtual/module-a.ts',
+            line: 18,
+            severity: 'LOW',
+            ruleId: 'rule-example',
+            message: '示例问题',
+            status: 'open',
+          },
+        ],
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(queue.enqueue).toHaveBeenCalledOnce();
+    expect(queue.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: ctx.projectId,
+        agentId: 'reviewer-case',
+        sessionId: 'finding-cases-proj-1',
+      }),
+      'flush'
+    );
+
+    await transport.close();
+    await server.stop();
+  });
 });
 
 describe('EverOSMcpServer owner 注册', () => {

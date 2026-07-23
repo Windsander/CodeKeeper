@@ -665,11 +665,7 @@ export class EverOSMcpServer {
     }));
 
     this.persistAndFlush(caseCtx, messages).catch(err => {
-      logger.error(
-        { err, sessionId: caseCtx.sessionId },
-        'record_finding_cases 后台记忆写入失败，已入队重试'
-      );
-      this.queue?.enqueue(caseCtx, 'add_messages', messages);
+      logger.error({ err, sessionId: caseCtx.sessionId }, 'record_finding_cases 后台记忆写入失败');
     });
   }
 
@@ -701,8 +697,18 @@ export class EverOSMcpServer {
    */
   private async persistAndFlush(ctx: MemoryContext, messages: EverOSAddMessage[]): Promise<void> {
     const start = Date.now();
-    await everosMemoryAddMessages(this.everosUrl, ctx, messages);
-    await this.flushSession(ctx);
+    try {
+      await everosMemoryAddMessages(this.everosUrl, ctx, messages);
+    } catch (error) {
+      this.queue?.enqueue(ctx, 'add_messages', messages);
+      throw error;
+    }
+    try {
+      await this.flushSession(ctx);
+    } catch (error) {
+      this.queue?.enqueue(ctx, 'flush');
+      throw error;
+    }
     logger.info(
       { sessionId: ctx.sessionId, messageCount: messages.length, durationMs: Date.now() - start },
       'finding case 批量写入并 flush 完成'

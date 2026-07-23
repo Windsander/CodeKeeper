@@ -95,13 +95,7 @@ describe('buildSummaryStateHash', () => {
   });
 
   it('处理状态类别变化时生成不同哈希', () => {
-    const ignoredHash = buildSummaryStateHash(
-      [],
-      [],
-      [],
-      [{ fileLine: 'src/app.ts:10' }],
-      []
-    );
+    const ignoredHash = buildSummaryStateHash([], [], [], [{ fileLine: 'src/app.ts:10' }], []);
     const fixedHash = buildSummaryStateHash(['src/app.ts:10'], [], [], [], []);
 
     expect(fixedHash).not.toBe(ignoredHash);
@@ -1622,6 +1616,192 @@ describe('MaintainerRunner', () => {
     expect(state.processedDiscussions?.['d-stray']).toBeDefined();
   });
 
+  it('首条 Reviewer note 仅编辑时间变化时重新评估历史 finding 决策', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const previousActivityAt = Date.parse('2026-07-20T00:00:00.000Z');
+    const updatedActivityAt = Date.parse('2026-07-21T00:00:00.000Z');
+    const finding: ReviewFinding = {
+      severity: 'LOW',
+      file: 'virtual/module-a.ts',
+      line: 18,
+      message: '编辑后的问题描述',
+      suggestion: '根据当前实现重新判断',
+    };
+    const discussion: Discussion = {
+      id: 'd-edited-finding',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 11,
+          author: 'reviewer-bot',
+          body: `${finding.file}:${finding.line} | ${finding.message} | ${finding.suggestion}`,
+          createdAt: '2026-07-20T00:00:00.000Z',
+          updatedAt: '2026-07-21T00:00:00.000Z',
+          resolved: false,
+        },
+        {
+          id: 12,
+          author: 'maintainer-bot',
+          body: `✅ 已修复（无需重复修改）：\n\n${finding.file}:${finding.line}: 旧结论\n\n---\n*生成于 2026/07/20 · CodeKeeper Advance MR 维护 Agent · bot*`,
+          createdAt: '2026-07-20T01:00:00.000Z',
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue([finding]),
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      decide: vi.fn().mockResolvedValue({
+        action: 'ignore',
+        alreadyFixed: true,
+        reason: '重新检查后仍无需修改',
+        replyBody: '当前实现仍满足要求',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn(),
+      postSummary: vi.fn(),
+    });
+    const provider = mockOf<GitLabProvider>({
+      getMRDiff: vi.fn().mockResolvedValue([]),
+    });
+    const worktreeManager = mockOf<WorktreeManager>({
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockResolvedValue(finding.file),
+      getWorktreePath: vi.fn().mockReturnValue('/virtual-worktree'),
+      readFileWindow: vi.fn().mockResolvedValue({
+        imports: '',
+        snippet: 'export const currentValue = true;',
+        snippetStartLine: 1,
+        snippetEndLine: 24,
+        totalLines: 24,
+        truncated: false,
+        targetLine: finding.line,
+      }),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      processedDiscussions: {
+        [discussion.id]: { noteCount: 2, processedAt: previousActivityAt },
+      },
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {
+            [`${finding.file}:${finding.line}`]: {
+              action: 'ignore',
+              alreadyFixed: true,
+              reason: '旧结论',
+              replyBody: '旧说明',
+              failedAttempts: 0,
+              decidedAt: previousActivityAt,
+            },
+          },
+          lastReviewerNoteAt: previousActivityAt,
+          lastHumanNoteAt: 0,
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/virtual-project'
+    );
+
+    expect(brain.decide).toHaveBeenCalledOnce();
+    expect(brain.decide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        finding,
+        originalComment: discussion.notes[0].body,
+        staleFinding: false,
+      })
+    );
+    expect(actor.applyDecision).not.toHaveBeenCalled();
+    expect(state.maintainerThreadState?.[discussion.id]?.lastReviewerNoteAt).toBe(
+      updatedActivityAt
+    );
+  });
+
+  it('非 finding 首条 note 被编辑后不被已有 Maintainer 回复静默吞掉', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const previousActivityAt = Date.parse('2026-07-20T00:00:00.000Z');
+    const updatedActivityAt = Date.parse('2026-07-21T00:00:00.000Z');
+    const discussion: Discussion = {
+      id: 'd-edited-non-finding',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 21,
+          author: 'reviewer-bot',
+          body: '更新后的普通设计说明，需要重新判断是否记录。',
+          createdAt: '2026-07-20T00:00:00.000Z',
+          updatedAt: '2026-07-21T00:00:00.000Z',
+          resolved: false,
+        },
+        {
+          id: 22,
+          author: 'maintainer-bot',
+          body: '感谢分享\n\n---\n*生成于 2026/07/20 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-07-20T01:00:00.000Z',
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue([]),
+      decideNonFindingComment: vi.fn().mockResolvedValue({
+        action: 'ignore',
+        reason: '更新后仍无需采取动作',
+      }),
+    });
+    const provider = mockOf<GitLabProvider>({
+      getMRDiff: vi.fn().mockResolvedValue([]),
+      addDiscussionNote: vi.fn(),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      processedDiscussions: {
+        [discussion.id]: { noteCount: 2, processedAt: previousActivityAt },
+      },
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {},
+          lastReviewerNoteAt: previousActivityAt,
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      mockOf<MaintainerActor>({ applyDecision: vi.fn() }),
+      mockOf<WorktreeManager>({}),
+      'CodeKeeper Maintainer',
+      state,
+      '/virtual-project'
+    );
+
+    expect(brain.decideNonFindingComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: discussion.notes[0].body })
+    );
+    expect(provider.addDiscussionNote).not.toHaveBeenCalled();
+    expect(state.maintainerThreadState?.[discussion.id]?.nonFindingAction).toBe('ignore');
+    expect(state.maintainerThreadState?.[discussion.id]?.lastReviewerNoteAt).toBe(
+      updatedActivityAt
+    );
+  });
+
   it('来自 bot 作者（无 Agent 署名）的非 finding 评论即使 LLM 决策 ask 也不发问', async () => {
     const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
 
@@ -2400,9 +2580,7 @@ describe('MaintainerRunner', () => {
       },
     });
   });
-
 });
-
 
 describe('hasHeadChangedSinceProcessing', () => {
   it('rechecks exhausted failures after the MR HEAD changes', () => {
