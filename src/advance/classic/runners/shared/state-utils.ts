@@ -11,8 +11,9 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
-  rmSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -143,6 +144,27 @@ export type StateOwner = 'reviewer' | 'maintainer' | 'archiver' | 'all';
 const STATE_LOCK_TIMEOUT_MS = 10_000;
 const STATE_LOCK_STALE_MS = 60_000;
 
+/**
+ * 锁目录始终为空，必须使用 rmdirSync。
+ * 部分 Windows + Node 25 环境在中文路径上调用递归 rmSync 会无报错但保留目标目录。
+ */
+function removeStateLock(lockPath: string): void {
+  try {
+    rmdirSync(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+/** 中文路径下使用 unlinkSync，避免 rmSync 静默保留临时文件。 */
+function removeTempStateFile(tempPath: string): void {
+  try {
+    unlinkSync(tempPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
 function createEmptyState(): MrAgentState {
   return { version: 1, discussions: {}, interactiveThreads: {} };
 }
@@ -228,11 +250,12 @@ function acquireStateLock(lockPath: string): void {
 
       try {
         if (Date.now() - statSync(lockPath).mtimeMs > STATE_LOCK_STALE_MS) {
-          rmSync(lockPath, { recursive: true, force: true });
+          removeStateLock(lockPath);
           continue;
         }
-      } catch {
-        // 锁刚被其他进程释放，直接进入下一轮尝试。
+      } catch (lockError) {
+        if ((lockError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw lockError;
       }
 
       Atomics.wait(waitBuffer, 0, 0, 25);
@@ -388,10 +411,10 @@ export function saveState(project: Project, state: MrAgentState, owner: StateOwn
       // Windows 某些文件锁场景无法直接 rename 覆盖，退化为有备份保护的写入。
       writeFileSync(path, serialized, 'utf-8');
     } finally {
-      rmSync(tempPath, { force: true });
+      removeTempStateFile(tempPath);
     }
   } finally {
-    rmSync(lockPath, { recursive: true, force: true });
+    removeStateLock(lockPath);
   }
 }
 

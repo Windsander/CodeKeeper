@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { join } from 'node:path';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmdirSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   getStatePath,
@@ -14,16 +24,29 @@ describe('state-utils 角色隔离保存', () => {
   let root = '';
 
   afterEach(() => {
-    if (root) rmSync(root, { recursive: true, force: true });
+    if (root) removeTestTree(root);
     root = '';
   });
 
-  function makeProject(): Project {
+  function removeTestTree(path: string): void {
+    if (!existsSync(path)) return;
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      const childPath = join(path, entry.name);
+      if (entry.isDirectory()) {
+        removeTestTree(childPath);
+      } else {
+        unlinkSync(childPath);
+      }
+    }
+    rmdirSync(path);
+  }
+
+  function makeProject(archiveDirectory = 'archive'): Project {
     root = mkdtempSync(join(tmpdir(), 'state-owner-'));
     return {
       id: 'project-example',
       rootPath: root,
-      archiveRoot: join(root, 'archive'),
+      archiveRoot: join(root, archiveDirectory),
       name: '示例项目',
       registeredAt: Date.now(),
       lastScannedAt: null,
@@ -109,5 +132,28 @@ describe('state-utils 角色隔离保存', () => {
     saveState(project, { ...restored, discussions: { recovered: [] } }, 'reviewer');
     expect(loadState(project).discussions).toEqual({ recovered: [] });
     expect(JSON.parse(readFileSync(`${path}.bak`, 'utf-8')).discussions).toEqual({});
+  });
+
+  it('中文归档路径上的陈旧锁可被回收且保存后正常释放', () => {
+    const project = makeProject('状态归档');
+    const path = getStatePath(project);
+    const lockPath = `${path}.lock`;
+    mkdirSync(dirname(lockPath), { recursive: true });
+    mkdirSync(lockPath);
+    const staleAt = new Date(Date.now() - 2 * 60_000);
+    utimesSync(lockPath, staleAt, staleAt);
+
+    saveState(
+      project,
+      {
+        version: 1,
+        discussions: {},
+        interactiveThreads: {},
+      },
+      'maintainer'
+    );
+
+    expect(loadState(project).version).toBe(1);
+    expect(existsSync(lockPath)).toBe(false);
   });
 });
