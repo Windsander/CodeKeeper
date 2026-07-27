@@ -4,6 +4,7 @@ import {
   buildSummaryStateHash,
   classifyBatchFixItems,
   hasHeadChangedSinceProcessing,
+  refreshDiscussionProcessedHeadSha,
   runDiscussionTasks,
 } from '../../../../src/advance/classic/runners/maintainer-runner.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
@@ -100,6 +101,42 @@ describe('buildSummaryStateHash', () => {
 
     expect(fixedHash).not.toBe(ignoredHash);
   });
+
+  it('重复结果不会改变汇总哈希', () => {
+    const singleHash = buildSummaryStateHash(['src/example.ts:10'], [], [], [], []);
+    const duplicateHash = buildSummaryStateHash(
+      ['src/example.ts:10', 'src/example.ts:10'],
+      [],
+      [],
+      [],
+      []
+    );
+
+    expect(duplicateHash).toBe(singleHash);
+  });
+});
+
+describe('refreshDiscussionProcessedHeadSha', () => {
+  it('使用自动推送后的最新 HEAD 更新 discussion 水位', async () => {
+    const provider = mockOf<GitLabProvider>({
+      getMRShaInfo: vi.fn().mockResolvedValue({ baseSha: 'base', headSha: 'new-head' }),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      maintainerThreadState: {
+        'discussion-1': {
+          decisions: {},
+          lastReviewerNoteAt: 0,
+          lastProcessedHeadSha: 'old-head',
+        },
+      },
+    });
+
+    const headSha = await refreshDiscussionProcessedHeadSha(provider, 7, 'discussion-1', state);
+
+    expect(headSha).toBe('new-head');
+    expect(state.maintainerThreadState?.['discussion-1'].lastProcessedHeadSha).toBe('new-head');
+  });
 });
 
 const mockFinding: ReviewFinding = {
@@ -112,6 +149,95 @@ const mockFinding: ReviewFinding = {
 };
 
 describe('MaintainerRunner', () => {
+  it('合并路径别名后复用成功终态，不再重复处理同一 finding', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const canonicalFile = 'modules/example-a/src/tracker.test.ts';
+    const absoluteFile = `/ci/builds/group/sample-repo/${canonicalFile}`;
+    const discussion: Discussion = {
+      id: 'd-path-alias',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 10,
+          author: 'reviewer-bot',
+          body: [
+            '## CI Review · Round 1',
+            '### AI 分析',
+            '#### 🟢 低风险',
+            `- ${absoluteFile}:20 | 测试说明需要确认 | 保持现有实现`,
+          ].join('\n'),
+          createdAt: '2026-07-20T00:00:00Z',
+          resolved: false,
+        },
+      ],
+    };
+    const provider = mockOf<GitLabProvider>({
+      getMRDiff: vi.fn().mockResolvedValue([
+        {
+          filePath: canonicalFile,
+          additions: 1,
+          deletions: 0,
+          oldPath: canonicalFile,
+          newPath: canonicalFile,
+          newFile: false,
+          deletedFile: false,
+          diff: '',
+        },
+      ]),
+    });
+    const brain = mockOf<MaintainerBrain>({
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      decide: vi.fn(),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn(),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      processedDiscussions: {},
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {
+            [`${absoluteFile}:20`]: {
+              action: 'fix',
+              reason: '旧路径修复失败',
+              failedAttempts: 1,
+              decidedAt: 2,
+            },
+            [`${canonicalFile}:20`]: {
+              action: 'fix',
+              reason: '已经修复',
+              failedAttempts: 0,
+              fixSucceeded: true,
+              decidedAt: 1,
+            },
+          },
+          lastReviewerNoteAt: Date.parse('2026-07-20T00:00:00Z'),
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      mockOf<WorktreeManager>({}),
+      'CodeKeeper Maintainer',
+      state,
+      '/virtual/workspace/sample-repo'
+    );
+
+    const threadState = state.maintainerThreadState?.[discussion.id];
+    expect(threadState?.activeFindingKeys).toEqual([`${canonicalFile}:20`]);
+    expect(threadState?.decisions).not.toHaveProperty(`${absoluteFile}:20`);
+    expect(threadState?.decisions[`${canonicalFile}:20`].fixSucceeded).toBe(true);
+    expect(brain.decide).not.toHaveBeenCalled();
+    expect(actor.applyDecision).not.toHaveBeenCalled();
+  });
+
   it('调用 brain.decide 时传入 mrContext 与 relatedFindings', async () => {
     const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
 

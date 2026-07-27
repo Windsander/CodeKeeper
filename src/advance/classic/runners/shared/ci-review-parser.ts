@@ -1,5 +1,5 @@
-import { basename } from 'node:path';
 import type { ReviewFinding } from '../../provider/types.js';
+import { normalizeFindingFilePath } from './finding-identity.js';
 
 export interface CiReviewConfirmationItem {
   ruleId?: string;
@@ -155,9 +155,9 @@ function extractLocation(
   text: string,
   options: CiReviewParserOptions
 ): { raw: string; file: string; lines: number[] } | null {
-  const match = text.match(/((?:[A-Za-z]:)?[\\/\w@+.,()\-]+\.[A-Za-z0-9]+)(?::(\d+(?:,\d+)*))?/);
+  const match = text.match(/((?:[A-Za-z]:)?[\\/\w@+.,()-]+\.[A-Za-z0-9]+)(?::(\d+(?:,\d+)*))?/);
   if (!match) return null;
-  const file = normalizeCiFilePath(match[1], options);
+  const file = normalizeFindingFilePath(match[1], options);
   const lines = match[2]
     ? match[2]
         .split(',')
@@ -165,25 +165,6 @@ function extractLocation(
         .filter(line => Number.isInteger(line) && line > 0)
     : [1];
   return { raw: match[0], file, lines: lines.length > 0 ? lines : [1] };
-}
-
-function normalizeCiFilePath(path: string, options: CiReviewParserOptions): string {
-  const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '');
-  const changedFiles = [...(options.changedFiles ?? [])].sort((a, b) => b.length - a.length);
-  const changedFile = changedFiles.find(
-    file => normalized === file || normalized.endsWith(`/${file}`)
-  );
-  if (changedFile) return changedFile;
-
-  const projectName = options.projectRootPath
-    ? basename(options.projectRootPath).replace(/\\/g, '/')
-    : '';
-  if (projectName) {
-    const marker = `/${projectName}/`;
-    const index = normalized.toLowerCase().lastIndexOf(marker.toLowerCase());
-    if (index >= 0) return normalized.slice(index + marker.length);
-  }
-  return normalized.replace(/^\/+/, '');
 }
 
 function stripMarkdown(text: string): string {

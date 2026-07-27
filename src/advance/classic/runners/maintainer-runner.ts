@@ -31,16 +31,18 @@ import {
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { focusedContextToString } from '../fix/focused-context-streamer.js';
 import { isDiscussionPending, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
-import { parseStructuredCiReview } from './shared/ci-review-parser.js';
+import { isCiReviewBody, parseStructuredCiReview } from './shared/ci-review-parser.js';
+import {
+  getFindingKey,
+  normalizeAndDedupeFindings,
+  reconcileFindingDecisionAliases,
+} from './shared/finding-identity.js';
 import {
   deliverDiscussionReply,
   isDiscussionDeliveryPending,
   type DiscussionDeliveryResult,
 } from './shared/discussion-delivery.js';
-import {
-  getCommentActivityAt,
-  getCommentUpdatedAt,
-} from '../provider/activity-window.js';
+import { getCommentActivityAt, getCommentUpdatedAt } from '../provider/activity-window.js';
 
 function logMemoryUsage(label: string): void {
   const usage = process.memoryUsage();
@@ -79,10 +81,6 @@ function normalizeMaintainerActionResult(
     awaitingReply: false,
     pending: false,
   };
-}
-
-function getFindingKey(finding: ReviewFinding): string {
-  return `${finding.file}:${finding.line}`;
 }
 
 /**
@@ -126,11 +124,13 @@ export function buildSummaryStateHash(
   alreadyFixedItems: Array<{ fileLine: string }>
 ): string {
   const stateKeys = [
-    ...fixedItems.map(fileLine => `fixed:${fileLine}`),
-    ...failedItems.map(item => `failed:${item.split(' — ')[0]}`),
-    ...askedItems.map(item => `ask:${item.fileLine}`),
-    ...ignoredItems.map(item => `ignored:${item.fileLine}`),
-    ...alreadyFixedItems.map(item => `already-fixed:${item.fileLine}`),
+    ...new Set([
+      ...fixedItems.map(fileLine => `fixed:${fileLine}`),
+      ...failedItems.map(item => `failed:${item.split(' — ')[0]}`),
+      ...askedItems.map(item => `ask:${item.fileLine}`),
+      ...ignoredItems.map(item => `ignored:${item.fileLine}`),
+      ...alreadyFixedItems.map(item => `already-fixed:${item.fileLine}`),
+    ]),
   ].sort();
   return simpleHash(JSON.stringify(stateKeys));
 }
@@ -172,6 +172,20 @@ export function hasHeadChangedSinceProcessing(
   if (state.interactiveThreads?.[discussion.id]?.status === 'awaiting-reply') return false;
   const processedHead = state.maintainerThreadState?.[discussion.id]?.lastProcessedHeadSha;
   return Boolean(processedHead && isReviewCommitStale(processedHead, currentHeadSha));
+}
+
+/** 刷新已完成 discussion 的真实 MR HEAD，避免自动推送后写入旧处理水位。 */
+export async function refreshDiscussionProcessedHeadSha(
+  provider: Pick<GitLabProvider, 'getMRShaInfo'>,
+  mrIid: number,
+  discussionId: string,
+  state: MrAgentState
+): Promise<string | undefined> {
+  const latestHeadSha = (await provider.getMRShaInfo(mrIid)).headSha;
+  if (!latestHeadSha) return undefined;
+  const threadState = state.maintainerThreadState?.[discussionId];
+  if (threadState) threadState.lastProcessedHeadSha = latestHeadSha;
+  return latestHeadSha;
 }
 
 /**
@@ -400,8 +414,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         if (reconciliation?.pending) return false;
 
         const isActive = activeDiscussionIds.has(d.id);
-        const headChanged =
-          isActive && hasHeadChangedSinceProcessing(d, state, currentHeadSha);
+        const headChanged = isActive && hasHeadChangedSinceProcessing(d, state, currentHeadSha);
         const pending = isDiscussionPending(d, state) || headChanged;
         if (!isActive && pending && !this.canRecoverOutsideActivityWindow(d, state)) {
           console.log(
@@ -438,26 +451,42 @@ export class MaintainerRunner extends BaseRoleRunner {
       await runDiscussionTasks(
         pendingDiscussions,
         async discussion => {
-        console.log(
-          `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
-        );
-        logMemoryUsage(`处理 discussion ${discussion.id} 前`);
-        await this.processDiscussion(
-          mr,
-          discussion,
-          provider,
-          brain,
-          actor,
-          worktreeManager,
-          maintainerName,
-          state,
-          project.rootPath,
-          memoryClient,
-           cognitiveDepth,
-           currentHeadSha
-         );
-         saveState(project, state, 'maintainer');
-         },
+          console.log(
+            `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
+          );
+          logMemoryUsage(`处理 discussion ${discussion.id} 前`);
+          await this.processDiscussion(
+            mr,
+            discussion,
+            provider,
+            brain,
+            actor,
+            worktreeManager,
+            maintainerName,
+            state,
+            project.rootPath,
+            memoryClient,
+            cognitiveDepth,
+            currentHeadSha
+          );
+          try {
+            const latestHeadSha = await refreshDiscussionProcessedHeadSha(
+              provider,
+              mr.iid,
+              discussion.id,
+              state
+            );
+            if (latestHeadSha) {
+              currentHeadSha = latestHeadSha;
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(
+              `[MaintainerRunner] discussion ${discussion.id} 完成后刷新 MR HEAD 失败: ${message}`
+            );
+          }
+          saveState(project, state, 'maintainer');
+        },
         (discussion, error) => {
           // 记忆写入可能已经在异常前完成，因此不能据此推断回复也已成功发布。
           const message = error instanceof Error ? error.message : String(error);
@@ -517,21 +546,21 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
 
     const threadState = this.getMaintainerThreadState(state, discussion.id);
-    const sourceNoteEdited = getCommentUpdatedAt(firstNote) > (
-      threadState.lastReviewerNoteAt > 0
+    const sourceNoteEdited =
+      getCommentUpdatedAt(firstNote) >
+      (threadState.lastReviewerNoteAt > 0
         ? threadState.lastReviewerNoteAt
         : Math.max(
             ...Object.values(threadState.decisions).map(decision => decision.decidedAt),
             threadState.lastSummaryAt ?? 0,
             state.processedDiscussions?.[discussion.id]?.processedAt ?? 0
-          )
-    );
+          ));
     const delivery = threadState.delivery;
     const deliveryNoteExists = Boolean(
       delivery &&
-        discussion.notes.some(
-          note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
-        )
+      discussion.notes.some(
+        note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
+      )
     );
     const shouldReconcileDelivery =
       isDiscussionDeliveryPending(delivery) ||
@@ -669,8 +698,61 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
     }
 
+    // 明确的纯统计报告不需要 MR diff，保留快速闸门避免无意义的远端请求。
+    if (!isCiReviewBody(firstNote.body) && this.isClearlyStatisticalReportBody(firstNote.body)) {
+      console.log(
+        `[MaintainerRunner] discussion ${discussion.id} 结构化识别为纯统计报告，解析前静默跳过`
+      );
+      threadState.statisticalReport = true;
+      threadState.activeFindingKeys = [];
+      recordProcessed();
+      return;
+    }
+
+    // 在解析 finding 前先取得 MR 文件列表，用于将绝对路径、相对路径和唯一文件名归一。
+    let mrContext: MrContext | undefined;
+    let changedFiles: string[] = [];
+    try {
+      const diffs = await provider.getMRDiff(mr.iid);
+      changedFiles = diffs.map(diff => diff.filePath);
+      const diffSummary = diffs
+        .map(diff => `${diff.filePath}: +${diff.additions}/-${diff.deletions}`)
+        .join('\n');
+      mrContext = {
+        iid: mr.iid,
+        title: mr.title,
+        sourceBranch: mr.sourceBranch,
+        targetBranch: mr.targetBranch,
+        description: mr.description,
+        diffSummary,
+        changedFiles,
+      };
+    } catch {
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} diff 失败，继续使用基础上下文`);
+    }
+
+    const syncFindingState = (rawFindings: ReviewFinding[]): ReviewFinding[] => {
+      const normalizedFindings = normalizeAndDedupeFindings(rawFindings, {
+        projectRootPath,
+        changedFiles,
+      });
+      const activeFindingKeys = normalizedFindings.map(getFindingKey);
+      const mergedAliases = reconcileFindingDecisionAliases(
+        threadState.decisions,
+        activeFindingKeys,
+        { projectRootPath, changedFiles }
+      );
+      threadState.activeFindingKeys = activeFindingKeys;
+      if (mergedAliases > 0) {
+        console.log(
+          `[MaintainerRunner] discussion ${discussion.id} 已合并 ${mergedAliases} 个 finding 历史路径别名`
+        );
+      }
+      return normalizedFindings;
+    };
+
     // CI Review 使用结构化解析，避免把规则确认项、优点或折叠区说明混成普通 finding。
-    const ciReview = parseStructuredCiReview(firstNote.body, { projectRootPath });
+    const ciReview = parseStructuredCiReview(firstNote.body, { projectRootPath, changedFiles });
     const reviewCommit = getDiscussionReviewCommit(
       mr,
       discussion,
@@ -678,19 +760,6 @@ export class MaintainerRunner extends BaseRoleRunner {
       state,
       ciReview?.commitSha ?? extractReviewCommit(firstNote.body)
     );
-
-    // 明确的机器统计报告必须在 finding 解析前截断。
-    // 否则 Top files 表格会被解析成一批 line:1 的文件级 finding；一旦后续 LLM
-    // 保守地判成「非统计报告」，这些计数行就会错误进入修复循环。
-    // 混合报告若包含具体 file:line 定位，不会命中此确定性闸门，仍按正常 finding 处理。
-    if (!ciReview && this.isClearlyStatisticalReportBody(firstNote.body)) {
-      console.log(
-        `[MaintainerRunner] discussion ${discussion.id} 结构化识别为纯统计报告，解析前静默跳过`
-      );
-      threadState.statisticalReport = true;
-      recordProcessed();
-      return;
-    }
 
     // 先解析 finding，用解析结果区分「纯统计报告」与「含可操作 finding 的混合报告」：
     // 只有完全解析不出可操作 finding 时才可能是纯统计报告；
@@ -702,6 +771,7 @@ export class MaintainerRunner extends BaseRoleRunner {
           position: discussion.position,
           isSummary: firstNote.body.includes('CodeKeeper Advance MR 评审 Agent'),
         });
+    findings = syncFindingState(findings);
     const staleFinding = isReviewCommitStale(
       reviewCommit ?? threadState.lastProcessedHeadSha,
       currentHeadSha
@@ -717,6 +787,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         );
       }
       if (findings.length === 0 && ciReview.confirmationItems.length > 0) {
+        syncFindingState([]);
         threadState.nonFindingAction = 'ignore';
         recordProcessed();
         return;
@@ -732,6 +803,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     // 已缓存统计报告标记的重验：能解析出可操作 finding 说明之前误判或报告已更新，清除标记继续处理
     if (threadState.statisticalReport) {
       if (actionableFindings.length === 0) {
+        syncFindingState([]);
         console.log(`[MaintainerRunner] discussion ${discussion.id} 已标记为统计报告，静默跳过`);
         recordProcessed();
         return;
@@ -748,6 +820,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         `[MaintainerRunner] discussion ${discussion.id} 剔除 ${findings.length - actionableFindings.length} 个疑似聚合条目，仅处理 ${actionableFindings.length} 个可操作 finding`
       );
       findings = actionableFindings;
+      findings = syncFindingState(findings);
     }
 
     // 纯统计报告闸：解析结果全是聚合条目时，由 LLM 做最终语义判定；确认则缓存并静默跳过
@@ -758,32 +831,13 @@ export class MaintainerRunner extends BaseRoleRunner {
           `[MaintainerRunner] discussion ${discussion.id} 判定为批量统计报告，缓存并静默跳过（${findings.length} 个疑似聚合条目）`
         );
         threadState.statisticalReport = true;
+        syncFindingState([]);
         recordProcessed();
         return;
       }
       console.log(
         `[MaintainerRunner] discussion ${discussion.id} 疑似聚合条目但 LLM 判定非统计报告，继续正常处理`
       );
-    }
-
-    // 获取 MR 级上下文，供非 finding 决策和后续单条/批量处理共用
-    let mrContext: MrContext | undefined;
-    try {
-      const diffs = await provider.getMRDiff(mr.iid);
-      const diffSummary = diffs
-        .map(d => `${d.filePath}: +${d.additions}/-${d.deletions}`)
-        .join('\n');
-      mrContext = {
-        iid: mr.iid,
-        title: mr.title,
-        sourceBranch: mr.sourceBranch,
-        targetBranch: mr.targetBranch,
-        description: mr.description,
-        diffSummary,
-        changedFiles: diffs.map(d => d.filePath),
-      };
-    } catch {
-      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} diff 失败，继续使用基础上下文`);
     }
 
     // 如果解析出来的文件无效，使用 position 兜底
@@ -809,7 +863,9 @@ export class MaintainerRunner extends BaseRoleRunner {
             autoFixable: false,
           },
         ];
+        findings = syncFindingState(findings);
       } else {
+        syncFindingState([]);
         // 正文预检：纯统计报告可能完全解析不出 finding（如覆盖率、指标汇总表），
         // 命中聚合标记时先由 LLM 判定，确认则缓存并静默跳过，不再走非 finding 决策
         if (this.looksLikeAggregateReportBody(firstNote.body)) {
@@ -984,10 +1040,8 @@ export class MaintainerRunner extends BaseRoleRunner {
       const existing = threadState.decisions[key];
       const sourceNoteChanged = Boolean(
         existing &&
-          getCommentUpdatedAt(firstNote) >
-            (threadState.lastReviewerNoteAt > 0
-              ? threadState.lastReviewerNoteAt
-              : existing.decidedAt)
+        getCommentUpdatedAt(firstNote) >
+          (threadState.lastReviewerNoteAt > 0 ? threadState.lastReviewerNoteAt : existing.decidedAt)
       );
       const staleRecheck = await this.recheckStaleFindingIfNeeded(
         brain,
@@ -1131,7 +1185,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         fixSucceeded: decision.action === 'fix' ? codeApplied : undefined,
         lastFailureReason:
           decision.action === 'fix' && !codeApplied
-            ? actionResult.error ?? existing?.lastFailureReason
+            ? (actionResult.error ?? existing?.lastFailureReason)
             : undefined,
         decidedAt: Date.now(),
       };
@@ -1195,10 +1249,8 @@ export class MaintainerRunner extends BaseRoleRunner {
       const existing = threadState.decisions[key];
       const sourceNoteChanged = Boolean(
         existing &&
-          getCommentUpdatedAt(firstNote) >
-            (threadState.lastReviewerNoteAt > 0
-              ? threadState.lastReviewerNoteAt
-              : existing.decidedAt)
+        getCommentUpdatedAt(firstNote) >
+          (threadState.lastReviewerNoteAt > 0 ? threadState.lastReviewerNoteAt : existing.decidedAt)
       );
       const needsRetry =
         existing?.action === 'fix' &&
@@ -1230,11 +1282,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         continue;
       }
       const shouldReuse =
-        existing &&
-        !staleFinding &&
-        !hasNewHumanNote &&
-        !sourceNoteChanged &&
-        !needsRetry;
+        existing && !staleFinding && !hasNewHumanNote && !sourceNoteChanged && !needsRetry;
 
       if (shouldReuse) {
         console.log(`[MaintainerRunner] finding ${key} 复用历史决策: action=${existing.action}`);
@@ -1601,8 +1649,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     const pendingQuestion = Object.entries(threadState?.decisions ?? {}).find(
       ([, decision]) => decision.action === 'ask' || Boolean(decision.question?.trim())
     );
-    const filePath =
-      delivery?.filePath ?? pendingQuestion?.[0]?.replace(/:\d+$/, '');
+    const filePath = delivery?.filePath ?? pendingQuestion?.[0]?.replace(/:\d+$/, '');
     const question = delivery?.question ?? pendingQuestion?.[1].question;
     if (!filePath || !question) return;
 
@@ -1638,10 +1685,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     return [...selected.values()];
   }
 
-  private canRecoverOutsideActivityWindow(
-    discussion: Discussion,
-    state: MrAgentState
-  ): boolean {
+  private canRecoverOutsideActivityWindow(discussion: Discussion, state: MrAgentState): boolean {
     if (state.interactiveThreads[discussion.id]?.status === 'awaiting-reply') return true;
 
     const threadState = state.maintainerThreadState?.[discussion.id];
@@ -1748,9 +1792,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       return content;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[MaintainerRunner] unable to load full stale file ${finding.file}: ${message}`
-      );
+      console.warn(`[MaintainerRunner] unable to load full stale file ${finding.file}: ${message}`);
       return fallback;
     }
   }

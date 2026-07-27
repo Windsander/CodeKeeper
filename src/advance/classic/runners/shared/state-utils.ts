@@ -296,6 +296,8 @@ export interface MaintainerFindingDecision {
 export interface MaintainerThreadState {
   /** findingKey -> 决策记录 */
   decisions: Record<string, MaintainerFindingDecision>;
+  /** 最近一次解析得到的有效 finding key；历史孤儿状态不再驱动重试。 */
+  activeFindingKeys?: string[];
   /** 该 discussion 下最近一条 Reviewer note 的时间戳（毫秒） */
   lastReviewerNoteAt: number;
   /**

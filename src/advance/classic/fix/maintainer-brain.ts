@@ -339,13 +339,18 @@ export class MaintainerBrain {
     logMemorySnapshot('MaintainerBrain.decide 认知引擎返回后');
 
     if (this.options.memoryClient) {
-      await this.options.memoryClient.recordFixAttempt({
-        mrIid,
-        file: finding.file,
-        line: finding.line,
-        success: decision.action === 'fix',
-        reason: decision.reason,
-      });
+      try {
+        await this.options.memoryClient.recordFixAttempt({
+          mrIid,
+          file: finding.file,
+          line: finding.line,
+          success: decision.action === 'fix',
+          reason: decision.reason,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[MaintainerBrain] 修复尝试记忆写入失败，继续完成 discussion: ${message}`);
+      }
     }
 
     return {

@@ -46,9 +46,7 @@ function createReplyDecisionLlmClient(input: Record<string, unknown>): LlmClient
   return new LlmClient({
     apiKey: 'test',
     mock: {
-      toolResponses: [
-        { toolCalls: [{ id: '1', name: 'maintainer_reply_decision', input }] },
-      ],
+      toolResponses: [{ toolCalls: [{ id: '1', name: 'maintainer_reply_decision', input }] }],
     },
   });
 }
@@ -274,6 +272,34 @@ describe('MaintainerBrain', () => {
     expect(prompt).toContain('该用户偏好显式类型注解');
   });
 
+  it('修复尝试记忆写入超时时仍返回决策', async () => {
+    const memoryClient = mockOf<IMemoryClient>({
+      recallUserPreferences: vi.fn().mockResolvedValue([]),
+      recallProjectKnowledge: vi.fn().mockResolvedValue([]),
+      recallForMaintenance: vi.fn().mockResolvedValue([]),
+      recordFixAttempt: vi.fn().mockRejectedValue(new Error('request timed out')),
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const brain = new MaintainerBrain({
+      llmClient: createFastDecisionLlmClient({ action: 'fix', reason: '可以安全修复' }),
+      memoryClient,
+      cognitiveDepth: 'fast',
+    });
+
+    await expect(
+      brain.decide({
+        finding: makeFinding(),
+        fileContent: 'const value = 1;',
+        mrIid: 1,
+        userId: 'reviewer',
+      })
+    ).resolves.toMatchObject({ action: 'fix' });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('修复尝试记忆写入失败，继续完成 discussion')
+    );
+    warn.mockRestore();
+  });
+
   it('决策前通过 RecallPlanner 按需召回记忆并拼入 prompt', async () => {
     const completeDecision = vi
       .fn()
@@ -334,8 +360,24 @@ describe('MaintainerBrain', () => {
   it('从 summary 中解析多条 finding', async () => {
     const brain = new MaintainerBrain({
       llmClient: createParseFindingsLlmClient([
-        { severity: 'HIGH', file: 'src/a.ts', line: 10, ruleId: 'R1', message: '问题 A', suggestion: '改成 X', autoFixable: true },
-        { severity: 'MEDIUM', file: 'src/b.ts', line: 20, ruleId: 'R2', message: '问题 B', suggestion: '改成 Y', autoFixable: false },
+        {
+          severity: 'HIGH',
+          file: 'src/a.ts',
+          line: 10,
+          ruleId: 'R1',
+          message: '问题 A',
+          suggestion: '改成 X',
+          autoFixable: true,
+        },
+        {
+          severity: 'MEDIUM',
+          file: 'src/b.ts',
+          line: 20,
+          ruleId: 'R2',
+          message: '问题 B',
+          suggestion: '改成 Y',
+          autoFixable: false,
+        },
       ]),
     });
     const summary = `
@@ -388,10 +430,10 @@ describe('MaintainerBrain', () => {
     const findings = await brain.parseFindings({ body });
 
     expect(findings.length).toBeGreaterThanOrEqual(3);
-    expect(findings.every((f) => f.line === 1)).toBe(true);
-    expect(findings.map((f) => f.file)).toContain('src/app/core.ts');
-    expect(findings.map((f) => f.file)).toContain('src/app/gateway.ts');
-    expect(findings.every((f) => /^[\d\s|.%-]*$/.test(f.message))).toBe(true);
+    expect(findings.every(f => f.line === 1)).toBe(true);
+    expect(findings.map(f => f.file)).toContain('src/app/core.ts');
+    expect(findings.map(f => f.file)).toContain('src/app/gateway.ts');
+    expect(findings.every(f => /^[\d\s|.%-]*$/.test(f.message))).toBe(true);
   });
 
   it('无修复点的评论返回空数组', async () => {
@@ -552,8 +594,22 @@ describe('MaintainerBrain.parseFindings Markdown fallback', () => {
 
   it('普通文本段落可解析出多个 finding', async () => {
     const llmClient = createParseFindingsLlmClient([
-      { severity: 'HIGH', file: 'src/a.ts', line: 10, message: '类型不安全', suggestion: '使用具体类型', autoFixable: true },
-      { severity: 'MEDIUM', file: 'src/b.ts', line: 25, message: '变量未使用', suggestion: '删除变量', autoFixable: true },
+      {
+        severity: 'HIGH',
+        file: 'src/a.ts',
+        line: 10,
+        message: '类型不安全',
+        suggestion: '使用具体类型',
+        autoFixable: true,
+      },
+      {
+        severity: 'MEDIUM',
+        file: 'src/b.ts',
+        line: 25,
+        message: '变量未使用',
+        suggestion: '删除变量',
+        autoFixable: true,
+      },
     ]);
     const brain = new MaintainerBrain({ llmClient });
     const findings = await brain.parseFindings({

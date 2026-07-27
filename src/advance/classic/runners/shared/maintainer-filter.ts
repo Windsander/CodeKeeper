@@ -5,7 +5,11 @@
  */
 
 import type { Discussion, ReviewerComment } from '../../provider/types.js';
-import type { MrAgentState, MaintainerFindingDecision, MaintainerThreadState } from './state-utils.js';
+import type {
+  MrAgentState,
+  MaintainerFindingDecision,
+  MaintainerThreadState,
+} from './state-utils.js';
 import {
   isMaintainerAuthoredNote,
   isMaintainerNoFixExplanationNote,
@@ -13,10 +17,7 @@ import {
   isBotAuthor,
 } from './review-utils.js';
 import { isDiscussionDeliveryPending } from './discussion-delivery.js';
-import {
-  getCommentActivityAt,
-  getCommentUpdatedAt,
-} from '../../provider/activity-window.js';
+import { getCommentActivityAt, getCommentUpdatedAt } from '../../provider/activity-window.js';
 
 /** 单条 finding 最大自动修复重试次数 */
 const MAX_FIX_RETRY_ATTEMPTS = 3;
@@ -30,9 +31,22 @@ export const INTERACTIVE_REPLY_TIMEOUT_MS = 3 * 24 * 60 * 60 * 1000;
 /**
  * 判断是否存在未达重试上限的失败 fix 决策
  */
-function hasPendingRetryDecision(decisions: Record<string, MaintainerFindingDecision>): boolean {
-  return Object.values(decisions).some(
-    (d) => d.action === 'fix' && !d.fixSucceeded && d.failedAttempts < MAX_FIX_RETRY_ATTEMPTS
+function getActiveDecisionEntries(
+  threadState: MaintainerThreadState
+): Array<[string, MaintainerFindingDecision]> {
+  if (!threadState.activeFindingKeys) return Object.entries(threadState.decisions);
+  return threadState.activeFindingKeys.flatMap(key => {
+    const decision = threadState.decisions[key];
+    return decision ? [[key, decision] as [string, MaintainerFindingDecision]] : [];
+  });
+}
+
+function hasPendingRetryDecision(threadState: MaintainerThreadState): boolean {
+  return getActiveDecisionEntries(threadState).some(
+    ([, decision]) =>
+      decision.action === 'fix' &&
+      !decision.fixSucceeded &&
+      decision.failedAttempts < MAX_FIX_RETRY_ATTEMPTS
   );
 }
 
@@ -89,9 +103,9 @@ function hasProcessingEvidence(threadState: MaintainerThreadState | undefined): 
 /** 判断所有 finding 是否都已判定为无需修复，且远端 note 已逐项说明。 */
 function hasCompleteNoFixExplanation(
   discussion: Discussion,
-  decisions: Record<string, MaintainerFindingDecision>
+  threadState: MaintainerThreadState
 ): boolean {
-  const entries = Object.entries(decisions);
+  const entries = getActiveDecisionEntries(threadState);
   if (entries.length === 0 || entries.some(([, decision]) => decision.action !== 'ignore')) {
     return true;
   }
@@ -116,9 +130,7 @@ export function isDiscussionPending(
 ): boolean {
   const threadState = state.maintainerThreadState?.[discussion.id];
   const processed = state.processedDiscussions?.[discussion.id];
-  const sourceNoteUpdatedAt = discussion.notes[0]
-    ? getCommentUpdatedAt(discussion.notes[0])
-    : 0;
+  const sourceNoteUpdatedAt = discussion.notes[0] ? getCommentUpdatedAt(discussion.notes[0]) : 0;
   const latestDecisionAt = threadState
     ? Object.values(threadState.decisions).reduce(
         (latest, decision) => Math.max(latest, decision.decidedAt),
@@ -126,20 +138,16 @@ export function isDiscussionPending(
       )
     : 0;
   const lastReviewerNoteAt = threadState?.lastReviewerNoteAt ?? 0;
-  const sourceNoteBaseline = lastReviewerNoteAt > 0
-    ? lastReviewerNoteAt
-    : Math.max(
-        latestDecisionAt,
-        threadState?.lastSummaryAt ?? 0,
-        processed?.processedAt ?? 0
-      );
+  const sourceNoteBaseline =
+    lastReviewerNoteAt > 0
+      ? lastReviewerNoteAt
+      : Math.max(latestDecisionAt, threadState?.lastSummaryAt ?? 0, processed?.processedAt ?? 0);
   const hasUpdatedSourceNote = sourceNoteUpdatedAt > sourceNoteBaseline;
   const hasPendingDelivery = isDiscussionDeliveryPending(threadState?.delivery);
-  const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState.decisions) : false;
-  const needsNoFixExplanation =
-    Boolean(threadState) &&
-    !hasCompleteNoFixExplanation(discussion, threadState!.decisions) &&
-    !hasPendingRetry;
+  const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState) : false;
+  const needsNoFixExplanation = threadState
+    ? !hasCompleteNoFixExplanation(discussion, threadState) && !hasPendingRetry
+    : false;
   if (hasPendingDelivery || needsNoFixExplanation) return true;
   if ((discussion.resolved || !discussion.resolvable) && !hasPendingDelivery) {
     return false;
@@ -154,7 +162,7 @@ export function isDiscussionPending(
     const askedAt = interactive.askedAt;
     // 提问 note 已被删除（如人工清理）时，交互状态已脏：
     // 放行进入流程，让 processDiscussion 清理状态并重新评估
-    const askNoteStillExists = discussion.notes.some((note) => {
+    const askNoteStillExists = discussion.notes.some(note => {
       if (!isMaintainerAuthoredNote(note.body)) return false;
       return getCommentActivityAt(note) >= askedAt - 1000;
     });
@@ -166,7 +174,7 @@ export function isDiscussionPending(
     return hasNewReply || timedOut;
   }
 
-  const lastMaintainerNoteAt = getLatestNoteTime(discussion.notes, (note) =>
+  const lastMaintainerNoteAt = getLatestNoteTime(discussion.notes, note =>
     isMaintainerAuthoredNote(note.body)
   );
 

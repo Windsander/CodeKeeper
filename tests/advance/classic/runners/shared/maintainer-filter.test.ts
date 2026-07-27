@@ -18,7 +18,9 @@ function makeDiscussion(overrides: Partial<Discussion> = {}): Discussion {
 }
 
 function makeState(
-  overrides: Partial<Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'>> = {}
+  overrides: Partial<
+    Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'>
+  > = {}
 ): Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'> {
   return {
     interactiveThreads: {},
@@ -127,7 +129,11 @@ describe('isDiscussionPending', () => {
     const now = Date.now();
     const d = makeDiscussion({
       notes: [
-        { author: 'human', body: '这里要怎么改？', createdAt: new Date(now - 60_000).toISOString() },
+        {
+          author: 'human',
+          body: '这里要怎么改？',
+          createdAt: new Date(now - 60_000).toISOString(),
+        },
         {
           author: 'maintainer',
           body: '能否补充一下期望？\n\n---\n*生成于 2026/01/01 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
@@ -137,7 +143,12 @@ describe('isDiscussionPending', () => {
     });
     const state = makeState({
       interactiveThreads: {
-        'd-1': { status: 'awaiting-reply', askedAt: now - 30_000, question: '能否补充？', filePath: 'a.ts' },
+        'd-1': {
+          status: 'awaiting-reply',
+          askedAt: now - 30_000,
+          question: '能否补充？',
+          filePath: 'a.ts',
+        },
       },
       processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 30_000 } },
     });
@@ -148,7 +159,11 @@ describe('isDiscussionPending', () => {
     const now = Date.now();
     const d = makeDiscussion({
       notes: [
-        { author: 'human', body: '这里要怎么改？', createdAt: new Date(now - 60_000).toISOString() },
+        {
+          author: 'human',
+          body: '这里要怎么改？',
+          createdAt: new Date(now - 60_000).toISOString(),
+        },
         {
           author: 'maintainer',
           body: '能否补充一下期望？\n\n---\n*生成于 2026/01/01 00:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
@@ -159,7 +174,12 @@ describe('isDiscussionPending', () => {
     });
     const state = makeState({
       interactiveThreads: {
-        'd-1': { status: 'awaiting-reply', askedAt: now - 30_000, question: '能否补充？', filePath: 'a.ts' },
+        'd-1': {
+          status: 'awaiting-reply',
+          askedAt: now - 30_000,
+          question: '能否补充？',
+          filePath: 'a.ts',
+        },
       },
       processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 30_000 } },
     });
@@ -171,12 +191,21 @@ describe('isDiscussionPending', () => {
     const d = makeDiscussion({
       notes: [
         // 只剩人工 note，Maintainer 的提问 note 已被删除
-        { author: 'human', body: '这里为什么要这么改？', createdAt: new Date(now - 60_000).toISOString() },
+        {
+          author: 'human',
+          body: '这里为什么要这么改？',
+          createdAt: new Date(now - 60_000).toISOString(),
+        },
       ],
     });
     const state = makeState({
       interactiveThreads: {
-        'd-1': { status: 'awaiting-reply', askedAt: now - 30_000, question: '能否补充？', filePath: 'a.ts' },
+        'd-1': {
+          status: 'awaiting-reply',
+          askedAt: now - 30_000,
+          question: '能否补充？',
+          filePath: 'a.ts',
+        },
       },
       processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 30_000 } },
     });
@@ -293,9 +322,7 @@ describe('isDiscussionPending', () => {
 
   it('全部无需修复但远端最终说明被删除时重新进入流程', () => {
     const d = makeDiscussion({
-      notes: [
-        { author: 'reviewer-bot', body: '发现两个问题', createdAt: '2026-07-20T00:00:00Z' },
-      ],
+      notes: [{ author: 'reviewer-bot', body: '发现两个问题', createdAt: '2026-07-20T00:00:00Z' }],
     });
     const state = makeState({
       processedDiscussions: { 'd-1': { noteCount: 2, processedAt: 1 } },
@@ -330,7 +357,11 @@ describe('isDiscussionPending', () => {
     // 不能因为有一条 Maintainer note 就永久跳过
     const d = makeDiscussion({
       notes: [
-        { author: 'reviewer-bot', body: 'CI Review 报告（含 finding 表格）', createdAt: '2026-01-01T00:00:00Z' },
+        {
+          author: 'reviewer-bot',
+          body: 'CI Review 报告（含 finding 表格）',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
         {
           author: 'maintainer',
           body: '感谢 Review 的详细分析！\n\n---\n*生成于 2026/01/01 01:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
@@ -437,7 +468,13 @@ describe('isDiscussionPending', () => {
       maintainerThreadState: {
         'd-1': {
           decisions: {
-            'src/a.ts:1': { action: 'fix', reason: '已删除', failedAttempts: 0, fixSucceeded: true, decidedAt: 1 },
+            'src/a.ts:1': {
+              action: 'fix',
+              reason: '已删除',
+              failedAttempts: 0,
+              fixSucceeded: true,
+              decidedAt: 1,
+            },
           },
           lastReviewerNoteAt: 0,
         },
@@ -531,6 +568,49 @@ describe('isDiscussionPending', () => {
         },
       },
     });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('历史孤儿失败决策不再触发当前 discussion 重试', () => {
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'reviewer',
+          body: 'modules/example-a/src/parser.ts:20 存在问题',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          author: 'maintainer',
+          body: '✅ 已修复\n\n---\n*生成于 2026/01/02 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-02T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      processedDiscussions: { 'd-1': { noteCount: 2, processedAt: 2 } },
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'modules/example-a/src/parser.ts:20': {
+              action: 'fix',
+              reason: '已修复',
+              failedAttempts: 0,
+              fixSucceeded: true,
+              decidedAt: 2,
+            },
+            '/ci/builds/group/sample-repo/modules/example-a/src/parser.ts:20': {
+              action: 'fix',
+              reason: '旧路径下修复失败',
+              failedAttempts: 1,
+              decidedAt: 1,
+            },
+          },
+          activeFindingKeys: ['modules/example-a/src/parser.ts:20'],
+          lastReviewerNoteAt: Date.parse('2026-01-01T00:00:00Z'),
+        },
+      },
+    });
+
     expect(isDiscussionPending(d, state)).toBe(false);
   });
 });
