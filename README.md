@@ -1,126 +1,163 @@
+<div align=center id=readme-top>
+
 # CodeKeeper Advance
 
-CodeKeeper Advance 是一个本地优先、面向多项目的 Agent 协作与知识智库系统。它通过长期运行的 Reviewer、Maintainer 与 Archiver 角色，将代码评审、问题维护、知识归档和长期记忆组织在同一套桌面工作台中。
+**A local-first, multi-project agent collaboration and knowledge-base workbench.**
 
-> 当前版本为 `0.1.0`，处于 Alpha 阶段。建议先在测试项目或受保护分支中验证，再用于重要仓库。
+[English](README.md) · [中文](README.zh-CN.md)
 
-## 核心能力
+</div>
 
-| 能力           | 说明                                                                                              |
-| -------------- | ------------------------------------------------------------------------------------------------- |
-| 多项目管理     | 注册多个本地项目，分别维护归档位置、GitLab 配置、角色开关与运行状态。                             |
-| Reviewer       | 扫描 Merge Request，结合项目规则、变更内容和历史记忆生成结构化评审意见。                          |
-| Maintainer     | 读取 Reviewer findings，检查问题是否仍然有效，在隔离 worktree 中尝试修复、验证并回复 discussion。 |
-| Archiver       | 按文件优先的方式整理项目文档，支持归档、重组、忽略、标记和撤销。                                  |
-| 长期记忆       | 使用 EverOS 保存项目知识、角色经验、案例与技能，并提供记忆图谱和统计视图。                        |
-| 桌面工作台     | Electron + React 面板用于项目管理、角色配置、服务状态、日志、记忆图谱和归档历史查看。             |
-| 守护进程与 CLI | Node.js 守护进程负责调度、IPC、模型服务和角色生命周期；CLI 提供注册、扫描、历史与撤销入口。       |
+> [!WARNING]
+> Version `0.1.0` is an Alpha release. Validate it in a test project or a protected branch before using it with important repositories.
 
-## EverOS 记忆系统
+<details>
+  <summary><kbd>Table of Contents</kbd></summary>
 
-CodeKeeper Advance 的长期记忆能力采用 **EverOS**，源码以 Git submodule 方式放在 `vendor/everos`。
+<br>
 
-- EverOS 作为本地 sidecar 服务运行，主进程通过 HTTP 与 MCP 桥接访问记忆能力。
-- 首次启动角色服务时，系统会在用户目录创建独立 Python 虚拟环境，并从 submodule 安装 EverOS。
-- 记忆默认按项目组织；Reviewer、Maintainer、Archiver 等角色记忆挂载在对应项目节点下。
-- 只有适合跨项目复用的共性知识才应进入系统级记忆，避免不同项目的上下文互相污染。
-- 本地 Embedding 与 Rerank 模型用于记忆检索；首次使用时可能需要下载模型文件。
-- EverOS 数据默认保存在本机。若启用了远程大语言模型或多模态模型，相关工作流仍可能把必要上下文发送到所配置的服务端。
+- [Overview](#overview)
+- [Core Capabilities](#core-capabilities)
+- [EverOS Memory System](#everos-memory-system)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [CLI](#cli)
+- [Local Data](#local-data)
+- [Development Commands](#development-commands)
+- [Security and Privacy](#security-and-privacy)
+- [Limitations](#limitations)
+- [Contributing](#contributing)
+- [License and Rights](#license-and-rights)
 
-EverOS 不受本仓库 MIT License 的重新许可约束。本项目不主张拥有 EverOS 的版权、商标或其他权利；CodeKeeper Advance 依据 Apache License 2.0 使用 `vendor/everos`，并在遵守该许可证及其 NOTICE 要求的前提下使用、修改和重新分发该组件。完整边界见 [许可证与权利边界](#许可证与权利边界) 与 `THIRD_PARTY_NOTICES.md`。
+<br>
 
-## 架构概览
+</details>
 
-```mermaid
-flowchart LR
-  UI["Electron 工作台"] --> IPC["Node.js 守护进程 / IPC"]
-  CLI["CLI"] --> IPC
-  IPC --> Registry["项目注册与 SQLite 元数据"]
-  IPC --> Roles["Reviewer / Maintainer / Archiver"]
-  IPC --> Archive["文件优先归档管线"]
-  Roles --> GitLab["GitLab API"]
-  Roles --> Worktree["隔离 Git worktree"]
-  Roles --> MCP["EverOS MCP Bridge"]
-  MCP --> EverOS["EverOS 本地服务"]
-  EverOS --> Memory["项目级长期记忆"]
-```
+## Overview
 
-## 环境要求
+CodeKeeper Advance is a local-first desktop workbench for multi-project agent collaboration and knowledge management. Long-running **Reviewer**, **Maintainer**, and **Archiver** roles coordinate code review, finding maintenance, knowledge archiving, and persistent memory in one workspace.
+
+The project is designed for teams that want an observable, recoverable automation loop rather than a one-shot script. The Electron workbench exposes project configuration, role status, logs, memory views, and archive history, while the Node.js daemon owns scheduling and role lifecycles.
+
+## Core Capabilities
+
+| Capability               | Description                                                                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Multi-project management | Register multiple local projects with independent archive locations, GitLab settings, role switches, and runtime state.                       |
+| Reviewer                 | Scan Merge Requests and produce structured review findings from project rules, changes, and historical memory.                                |
+| Maintainer               | Re-check findings, attempt fixes in an isolated Git worktree, validate changes, and deliver recoverable discussion replies.                   |
+| Archiver                 | Organize project documentation through a file-first pipeline with archive, reorganize, ignore, mark, and undo operations.                     |
+| Persistent memory        | Use EverOS for project knowledge, role experience, cases, and skills, with graph and statistics views.                                        |
+| Desktop workbench        | Manage projects, role settings, service health, logs, memory graphs, and archive history from Electron + React.                               |
+| Daemon and CLI           | Run scheduling, IPC, model access, and role lifecycles through the Node.js daemon; use the CLI for registration, scanning, history, and undo. |
+
+The sections below describe the memory boundary, local setup, operational safeguards, and release rights.
+
+## EverOS Memory System
+
+CodeKeeper Advance uses **EverOS** as its long-term memory layer. The EverOS source is included as a Git submodule at `vendor/everos`.
+
+- EverOS runs as a local sidecar service; the main process accesses memory through HTTP and an MCP bridge.
+- The first role-service startup creates an isolated Python virtual environment under the user data directory and installs EverOS from the submodule.
+- Memories are project-scoped by default. Reviewer, Maintainer, and Archiver memories are attached to the corresponding project node.
+- Only knowledge intended for reuse across projects should be attached to the system-level node, so project contexts do not contaminate one another.
+- Local embedding and reranking models are used for memory retrieval; the first run may download model files.
+- EverOS data is stored locally by default. If remote LLM or multimodal providers are enabled, required context may still be sent to those configured services.
+
+> [!NOTE]
+> CodeKeeper Advance does not claim ownership of EverOS. `vendor/everos` remains under its own Apache License 2.0 terms. Use, modification, and redistribution must follow that license and the upstream `LICENSE` and `NOTICE` files. See [License and Rights](#license-and-rights) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+## Architecture
+
+The runtime is organized around a small set of local services:
+
+- **Electron workbench** — project registration, role settings, health, logs, memory views, and archive history.
+- **Node.js daemon and IPC** — scheduling, configuration, model access, and role lifecycles.
+- **Reviewer / Maintainer / Archiver** — review, fix, and file-first archive pipelines.
+- **GitLab provider and isolated worktrees** — remote MR operations and controlled code changes.
+- **EverOS MCP bridge and local service** — project-scoped long-term memory.
+
+## Quick Start
+
+> Goal: start the desktop workbench, configure one project, and validate a role in a controlled repository.
+
+### 0. Prerequisites
 
 - Node.js `>= 22`
 - npm
-- Python `>= 3.12`，并提供 `venv` 与 `pip`
+- Python `>= 3.12` with `venv` and `pip`
 - Git
-- 可访问所配置模型服务的网络环境
-- 使用 MR 角色时，需要 GitLab 项目访问权限和具备相应操作权限的 Token
+- Network access to the configured model providers
+- GitLab project access and a token with the permissions required by the selected role
 
-当前主要在 Windows 环境中开发和验证。代码包含跨平台路径处理，但 Linux 与 macOS 的完整桌面流程仍建议自行验证。
+The project is primarily developed and validated on Windows. Cross-platform path handling is included, but the complete Linux and macOS desktop flow should be validated separately.
 
-## 快速开始
+### 1. Clone the repository and submodules
 
-### 1. 获取源码与 submodule
+Replace `YOUR_REPOSITORY_URL` with the GitHub repository URL:
 
 ```bash
 git clone --recurse-submodules YOUR_REPOSITORY_URL
 cd codekeeper-advance
 ```
 
-如果已经克隆了仓库，请补充初始化 EverOS：
+If the repository was already cloned, initialize EverOS with:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-### 2. 安装依赖
+### 2. Install dependencies
 
 ```bash
 npm install
 ```
 
-### 3. 启动完整开发环境
+### 3. Start the desktop development environment
 
 ```bash
 npm run electron:dev:all
 ```
 
-该命令会构建后端并同时启动守护进程、Vite、Electron TypeScript watch 和桌面窗口。首次启用角色服务时，EverOS 虚拟环境初始化和本地模型下载可能需要一些时间。
+This builds the backend and starts the daemon, Vite, the Electron TypeScript watcher, and the desktop window. The first role-service startup may take additional time while the EverOS virtual environment and local models are initialized.
 
-### 4. 完成界面配置
+### 4. Complete the desktop setup
 
-1. 在“设置”中配置 Agent 使用的大语言模型。
-2. 选择本地 Embedding 与 Rerank 模型；需要时再配置 EverOS 多模态模型。
-3. 在“仪表盘”注册本地项目，并按需指定独立归档位置。
-4. 在角色页面填写 GitLab 项目地址、Token、筛选条件和角色参数。
-5. 先在测试项目中启用角色并观察日志，确认行为符合预期后再扩大范围。
+1. Configure the Agent LLM in **Settings**.
+2. Select local embedding and reranking models; configure an EverOS multimodal model only when needed.
+3. Register a local project from the **Dashboard** and choose an independent archive location when appropriate.
+4. Enter the GitLab project URL, token, filters, and role settings on the role page.
+5. Enable roles in a test project first, inspect the logs, and expand the scope only after the behavior is understood.
 
-## 配置说明
+## Configuration
 
-### 应用级配置
+### Application-level configuration
 
-桌面设置会写入：
+Desktop settings are written to:
 
 ```text
 ~/.codekeeper-advance/daemon-config.json
 ```
 
-主要配置包括：
+The main settings include:
 
-- Agent LLM 的 Provider、API Key、Base URL、Model 与自定义 Headers
-- 扫描周期和每分钟请求限制
-- 本地 Embedding / Rerank 模型
-- EverOS 多模态模型覆盖配置
+- Agent LLM provider, API key, base URL, model, and custom headers
+- Scan interval and per-minute request limits
+- Local embedding and reranking models
+- EverOS multimodal model overrides
 
-当前 Advance 主流程以桌面设置和 `daemon-config.json` 为准。根目录的 `.env.example` 用于兼容入口，不应作为桌面主流程的唯一配置来源。
+The Advance desktop flow uses the desktop settings and `daemon-config.json` as its source of truth. The root `.env.example` exists for compatibility entry points and should not be treated as the only desktop configuration source.
 
-### 项目级配置
+### Project-level configuration
 
-项目注册信息、GitLab 配置和角色配置保存在本地元数据数据库中。文档扫描规则默认从以下文件读取：
+Project registration, GitLab settings, and role settings are stored in the local metadata database. Documentation scanning rules are read from this file by default:
 
 ```text
 <project>/.codekeeper/config.yaml
 ```
 
-示例：
+Example:
 
 ```yaml
 name: example-project
@@ -139,11 +176,11 @@ docTypes:
   - decision
 ```
 
-未指定归档位置时，归档内容默认写入项目内的 `.codekeeper`；也可以在注册项目时选择仓库外的独立目录。
+When no archive location is specified, archive output is written to the project's `.codekeeper` directory. A separate directory outside the repository can also be selected when registering the project.
 
 ## CLI
 
-开发模式下可以通过 `npm run dev --` 调用 CLI：
+In development mode, invoke the CLI with `npm run dev --`:
 
 ```bash
 npm run dev -- register /path/to/project
@@ -151,70 +188,70 @@ npm run dev -- list
 npm run dev -- status
 ```
 
-| 命令                                              | 用途                           |
-| ------------------------------------------------- | ------------------------------ |
-| `register <project-path> [--archive-root <path>]` | 注册项目和可选归档位置。       |
-| `unregister <project-id>`                         | 注销项目。                     |
-| `list`                                            | 列出已注册项目。               |
-| `start [--api-key <key>]`                         | 启动守护进程。                 |
-| `process <project-path> --api-key <key>`          | 对已注册项目执行一次归档流程。 |
-| `status`                                          | 查看项目与待处理事件状态。     |
-| `history <project-path>`                          | 查看归档动作历史。             |
-| `undo <action-id> <project-path>`                 | 撤销指定归档动作。             |
+| Command                                           | Purpose                                              |
+| ------------------------------------------------- | ---------------------------------------------------- |
+| `register <project-path> [--archive-root <path>]` | Register a project and an optional archive location. |
+| `unregister <project-id>`                         | Unregister a project.                                |
+| `list`                                            | List registered projects.                            |
+| `start [--api-key <key>]`                         | Start the daemon.                                    |
+| `process <project-path> --api-key <key>`          | Run one archive cycle for a registered project.      |
+| `status`                                          | Show project and pending-event status.               |
+| `history <project-path>`                          | Show archive-action history.                         |
+| `undo <action-id> <project-path>`                 | Undo a specific archive action.                      |
 
-构建后也可以使用：
+After building, the same entry points can be used with:
 
 ```bash
 npm run build
 npm start
 ```
 
-如果执行 `npm link`，包会提供 `codekeeper` 命令。角色与 GitLab 的完整配置目前仍推荐通过 Electron 工作台完成。
+Running `npm link` also exposes a `codekeeper` command. Full role and GitLab configuration is currently best completed through the Electron workbench.
 
-## 本地数据目录
+## Local Data
 
-| 路径                                     | 内容                                       |
-| ---------------------------------------- | ------------------------------------------ |
-| `~/.codekeeper-advance/`                 | 守护进程配置、SQLite 元数据和 IPC 文件。   |
-| `~/.codekeeper/everos-venv/`             | 自动创建的 EverOS Python 虚拟环境。        |
-| `~/.codekeeper/everos-data/`             | EverOS 配置与长期记忆数据。                |
-| `~/.codekeeper/memory/`                  | 项目角色状态、Soul 与辅助记忆文件。        |
-| `<project>/.codekeeper/`                 | 默认项目配置与归档输出，可配置为外部目录。 |
-| `<project-parent>/.codekeeper-worktree/` | Maintainer 使用的隔离 worktree。           |
-| `~/Logs/codekeeper/`                     | 应用与角色运行日志。                       |
+| Path                                     | Contents                                                                               |
+| ---------------------------------------- | -------------------------------------------------------------------------------------- |
+| `~/.codekeeper-advance/`                 | Daemon configuration, SQLite metadata, and IPC files.                                  |
+| `~/.codekeeper/everos-venv/`             | Automatically created EverOS Python virtual environment.                               |
+| `~/.codekeeper/everos-data/`             | EverOS configuration and long-term memory data.                                        |
+| `~/.codekeeper/memory/`                  | Project role state, Soul files, and supporting memory files.                           |
+| `<project>/.codekeeper/`                 | Default project configuration and archive output; can be moved outside the repository. |
+| `<project-parent>/.codekeeper-worktree/` | Isolated worktrees used by Maintainer.                                                 |
+| `~/Logs/codekeeper/`                     | Application and role-agent logs.                                                       |
 
-## 常用开发命令
+## Development Commands
 
-| 命令                       | 说明                                                |
-| -------------------------- | --------------------------------------------------- |
-| `npm run build`            | 编译 TypeScript，并复制 schema 与 prompts。         |
-| `npm run electron:dev:all` | 启动完整桌面开发环境。                              |
-| `npm run electron:build`   | 构建 Electron renderer 与 main/preload TypeScript。 |
-| `npm test`                 | 运行项目测试入口。                                  |
-| `npm run test:vitest`      | 直接运行 Vitest。                                   |
-| `npm run lint`             | 检查 `src` 下的 TypeScript。                        |
-| `npm run format`           | 检查 Prettier 格式。                                |
+| Command                    | Purpose                                                  |
+| -------------------------- | -------------------------------------------------------- |
+| `npm run build`            | Compile TypeScript and copy schemas and prompts.         |
+| `npm run electron:dev:all` | Start the complete desktop development environment.      |
+| `npm run electron:build`   | Build the Electron renderer and main/preload TypeScript. |
+| `npm test`                 | Run the project test entry point.                        |
+| `npm run test:vitest`      | Run Vitest directly.                                     |
+| `npm run lint`             | Check TypeScript under `src`.                            |
+| `npm run format`           | Check Prettier formatting.                               |
 
-当前仓库尚未提供正式安装包发布流程，`electron:build` 仅生成构建产物，不会创建平台安装程序。
+The repository does not yet provide a formal installer release flow. `electron:build` produces build artifacts but does not create a platform installer.
 
-## 安全与隐私
+## Security and Privacy
 
-- API Key 与 GitLab Token 当前保存在本地配置文件或 SQLite 元数据中，请保护用户目录权限，不要提交或分享这些文件。
-- Maintainer 具备修改代码、执行验证和与远端分支交互的能力。请使用最小权限 Token，并先在受控项目中验证自动修复策略。
-- 项目规则、MR 内容、代码片段和记忆召回结果可能进入所配置的远程模型上下文，请根据组织的数据策略选择模型服务。
-- EverOS 服务和记忆数据默认在本机运行，但“本地记忆”不等于整个 Agent 工作流完全离线。
-- 新增测试应使用临时目录、fixture 或虚拟仓库，避免写入开发者机器上的真实项目路径。
+- API keys and GitLab tokens are stored in local configuration files or SQLite metadata; protect the user data directory and never commit or share these files.
+- Maintainer can modify code, run validation, and interact with remote branches. Use least-privilege tokens and validate automatic-fix policies in a controlled project first.
+- Project rules, MR content, code snippets, and recalled memories may enter the configured model context. Select model services according to your organization's data policy.
+- EverOS services and memory data run locally by default, but local memory does not make the entire Agent workflow offline.
+- New tests should use temporary directories, fixtures, or virtual repositories instead of writing to a developer's real project path.
 
-## 当前限制
+## Limitations
 
-- 当前 MR Provider 主要面向 GitLab。
-- 桌面应用仍以源码方式运行，尚未提供签名安装包。
-- 凭据尚未接入操作系统安全存储。
-- 跨平台桌面流程和长时间运行稳定性仍需要更多公开环境验证。
+- The current MR provider primarily targets GitLab.
+- The desktop application is still source-based and does not yet ship a signed installer.
+- Credentials are not yet integrated with operating-system secure storage.
+- The complete cross-platform desktop flow and long-running stability still require more public-environment validation.
 
-## 贡献
+## Contributing
 
-欢迎通过 Issue 或 Pull Request 提交问题、设计建议与改进。提交前建议至少执行：
+Issues, design suggestions, and pull requests are welcome. Before submitting, run at least:
 
 ```bash
 npm run build
@@ -223,16 +260,22 @@ npm run lint
 npm run format
 ```
 
-请勿提交真实 Token、用户目录、私有项目路径、模型缓存、运行日志或 EverOS 本地数据。
+Do not submit real tokens, user directories, private project paths, model caches, runtime logs, or local EverOS data.
 
-## 许可证与权利边界
+## License and Rights
 
-- `LICENSE` 中的 MIT License 仅适用于 CodeKeeper Advance 项目原创、且项目有权授权的代码、文档和其他材料；它不覆盖 `vendor/everos`、第三方依赖、数据集 fixture 或其他另有标注的内容。
-- CodeKeeper Advance 自有材料的版权声明为 `Copyright © 2026 SobertLi`。该声明不改变任何第三方组件的版权、商标或其他权利归属，也不代表本项目拥有 EverOS。
-- EverOS 位于 `vendor/everos`，继续使用其 Apache License 2.0。该许可证在满足其条件的范围内允许使用、修改、制作衍生作品和重新分发；分发时必须保留其 `LICENSE`、`NOTICE` 及适用的版权声明，且 Apache License 2.0 不授予 EverOS 商标使用权。
-- EverOS 上游发行内容还包含单独许可的测试 fixture，以及可选依赖的许可说明；重新分发前请阅读 `THIRD_PARTY_NOTICES.md` 和 submodule 内的 `NOTICE`。
-- npm、Python 与模型依赖继续受各自许可证和使用条款约束。
+- The MIT License in [`LICENSE`](LICENSE) applies only to original CodeKeeper Advance code, documentation, and other materials for which the project has the right to grant that license. It does not cover `vendor/everos`, third-party dependencies, dataset fixtures, or other separately marked materials.
+- CodeKeeper Advance original materials carry `Copyright © 2026 SobertLi`. This notice does not change the copyright, trademark, or other rights of third-party components and does not claim ownership of EverOS.
+- EverOS is located at `vendor/everos` and remains under Apache License 2.0. Within that license's conditions, it may be used, modified, turned into derivative works, and redistributed; redistribution must preserve its `LICENSE`, `NOTICE`, and applicable copyright notices. Apache License 2.0 does not grant permission to use EverOS trademarks.
+- EverOS also contains separately licensed test fixtures and notes for optional dependencies. Read [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the submodule's `NOTICE` before redistributing.
+- npm, Python, and model dependencies remain subject to their own licenses and terms of use.
 
-本项目不对第三方组件的权利链作超出其许可证文本的承诺。若发布包含 fork、定制提交或完整依赖集合的二进制包、容器镜像或源码归档，应在发布前核验对应提交的来源、贡献者授权和再分发条件，并生成与实际发布物一致的第三方许可证清单。
+This project makes no promise about a third-party component's chain of title beyond the applicable license text. Before publishing a binary, container image, or source archive that contains forked commits, custom changes, or a complete dependency set, verify provenance, contributor authorization, and redistribution conditions, and generate a third-party license inventory matching the actual release.
 
 Copyright © 2026 SobertLi
+
+<div align=right>
+
+[Back to top](#readme-top)
+
+</div>
