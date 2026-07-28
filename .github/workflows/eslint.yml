@@ -1,0 +1,54 @@
+# ESLint 静态扫描 → 结果以 SARIF 上传到 GitHub Code Scanning
+# 参考 GitHub starter workflow：actions/starter-workflows/eslint.yml
+name: ESLint
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  schedule:
+    # 每周二 07:43 UTC 定期全量扫描（避开整点拥堵）
+    - cron: '43 7 * * 2'
+
+jobs:
+  eslint:
+    name: Run ESLint scanning
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # for actions/checkout
+      security-events: write # for github/codeql-action/upload-sarif
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # 必须装项目全部依赖：@typescript-eslint 等插件随项目锁定版本提供
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install SARIF formatter
+        run: npm install --no-save @microsoft/eslint-formatter-sarif
+
+      # 复用项目 lint 形态（旧式 eslintrc，需要关闭 flat config）；
+      # continue-on-error：lint 发现问题不阻断，交由 code scanning 呈现
+      - name: Run ESLint
+        env:
+          ESLINT_USE_FLAT_CONFIG: 'false'
+        run: >
+          node node_modules/eslint/bin/eslint.js src --ext ts
+          --format @microsoft/eslint-formatter-sarif
+          --output-file eslint-results.sarif
+        continue-on-error: true
+
+      - name: Upload analysis results to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: eslint-results.sarif
+          wait-for-processing: true
