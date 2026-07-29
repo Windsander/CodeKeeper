@@ -110,7 +110,7 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
   return {
     nodes: nodeList,
     edges: edgeList,
-    stats: buildStats(nodeList, edgeList, input.getResults),
+    stats: buildStats(nodeList, edgeList),
   };
 }
 
@@ -398,8 +398,7 @@ function addProjectShareEdges(
 
 function buildStats(
   nodes: MemoryGraphNode[],
-  edges: MemoryGraphEdge[],
-  getResults: Map<string, EverOSMemoryGetResult>
+  edges: MemoryGraphEdge[]
 ): MemoryGraphStats {
   const memoryGroups = ['episode', 'agent_case', 'agent_skill', 'profile'] as const;
   let totalMemories = 0;
@@ -407,29 +406,12 @@ function buildStats(
     if (memoryGroups.some((group) => group === node.group)) totalMemories++;
   }
 
-  // 按图表层的实际节点粒度统计每日增长，避免同一条记忆被多个 owner 查询重复计数
+  // 与日历时间线使用同一批已去重节点，避免同一 session 下的多条记忆被压成一条
   const dailyMap = new Map<string, number>();
-  const seenEpisodeSessions = new Set<string>();
-  const seenAgentCaseIds = new Set<string>();
-  for (const result of getResults.values()) {
-    for (const item of result.episodes) {
-      const sessionKey = typeof item.session_id === 'string' && item.session_id
-        ? item.session_id
-        : (typeof item.id === 'string' ? item.id : '');
-      if (!sessionKey || seenEpisodeSessions.has(sessionKey)) continue;
-      seenEpisodeSessions.add(sessionKey);
-      const ts = typeof item.timestamp === 'string' ? item.timestamp : '';
-      const date = ts.slice(0, 10);
-      if (date) dailyMap.set(date, (dailyMap.get(date) ?? 0) + 1);
-    }
-    for (const item of result.agent_cases) {
-      const id = typeof item.id === 'string' ? item.id : '';
-      if (!id || seenAgentCaseIds.has(id)) continue;
-      seenAgentCaseIds.add(id);
-      const ts = typeof item.timestamp === 'string' ? item.timestamp : '';
-      const date = ts.slice(0, 10);
-      if (date) dailyMap.set(date, (dailyMap.get(date) ?? 0) + 1);
-    }
+  for (const node of nodes) {
+    if (node.group !== 'episode' && node.group !== 'agent_case') continue;
+    const date = node.timestamp?.slice(0, 10) ?? '';
+    if (date) dailyMap.set(date, (dailyMap.get(date) ?? 0) + 1);
   }
   const dailyGrowth = buildRecentDailyGrowth(dailyMap, 14);
 
