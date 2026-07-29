@@ -246,8 +246,7 @@ describe('MaintainerActor', () => {
           { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
         ],
         responses: [
-          '{"convention": "Conventional Commits 格式：<type>(<scope>): <description>"}',
-          '{"message": "fix: 删除未使用变量"}',
+          '{"retry": true, "convention": "Conventional Commits 格式：<type>(<scope>): <description>", "message": "fix: 删除未使用变量"}',
         ],
       },
     });
@@ -323,7 +322,7 @@ describe('MaintainerActor', () => {
           { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
         ],
         // LLM 判断不是格式问题
-        responses: ['{"convention": ""}'],
+        responses: ['{"retry": false, "convention": "", "message": ""}'],
       },
     });
 
@@ -354,11 +353,11 @@ describe('MaintainerActor', () => {
     expect(commitAndPush).toHaveBeenCalledTimes(1);
   });
 
-  it('hook 输出被无关内容和 ANSI 转义码淹没时仍能学习规范并重试', async () => {
+  it('长 hook 输出尾部给出自定义规则时按该规则生成提交信息', async () => {
     const provider = createMockProvider();
-    const noise = Array.from({ length: 50 }, (_, i) => `第 ${i} 行无关输出...`).join('\n');
+    const noise = Array.from({ length: 324 }, (_, i) => `第 ${i} 行 lint/test 输出...`).join('\n');
     const ansiNoise = '[33m[1m警告[22m[39m';
-    const commitError = `Worktree commit 失败: ${noise}\n${ansiNoise}\n❌ Commit message 不符合 Conventional Commits 规范。\n格式: <type>(<scope>): <description>\ntypes: feat | fix | docs`;
+    const commitError = `Worktree commit 失败: ${noise}\n${ansiNoise}\n❌ 提交标题不符合项目模板。\n要求: [任务编号] 简短说明\n示例: [MEM-42] 修正遥测重置\n当前: 批量修复 1 个 Reviewer 问题`;
     const commitAndPush = vi
       .fn()
       .mockRejectedValueOnce(new Error(commitError))
@@ -384,9 +383,7 @@ describe('MaintainerActor', () => {
           { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'done' } }] },
         ],
         responses: [
-          '{"convention": "Conventional Commits 格式：<type>(<scope>): <description>"}',
-          // LLM 生成不带 type 前缀的描述，应由兜底逻辑补为 fix:
-          '{"message": "删除未使用变量"}',
+          '{"retry": true, "convention": "提交标题必须使用 [任务编号] 简短说明 格式。", "message": "[MEM-42] 删除未使用变量"}',
         ],
       },
     });
@@ -397,6 +394,8 @@ describe('MaintainerActor', () => {
       recordProjectKnowledge: vi.fn().mockResolvedValue(undefined),
     } as unknown as IMemoryClient;
 
+    const completeJson = vi.spyOn(llmClient, 'completeJson');
+
     const actor = new MaintainerActor({
       provider,
       llmClient,
@@ -406,24 +405,19 @@ describe('MaintainerActor', () => {
       memoryClient,
     });
 
-    const decision: CognitiveDecision = {
-      action: 'fix',
-      reason: '可以修复',
-      fixDescription: '删除未使用变量',
-      confidence: 'high',
-    };
-
-    const ok = await actor.applyDecision(
+    const result = await actor.executeBatchFix(
       mockMR,
-      mockDiscussion,
-      mockFinding,
-      decision,
-      createState()
+      [{ finding: mockFinding, fileContent: 'const unused = 1;' }],
+      'Reviewer 要求删除未使用变量'
     );
 
-    expect(ok.codeApplied).toBe(true);
+    expect(result.success).toBe(true);
     expect(commitAndPush).toHaveBeenCalledTimes(2);
-    expect(commitAndPush.mock.calls[1][1]).toBe('fix: 删除未使用变量');
+    expect(commitAndPush.mock.calls[0][1]).toContain('批量修复 1 个 Reviewer 问题');
+    expect(commitAndPush.mock.calls[1][1]).toBe('[MEM-42] 删除未使用变量');
+    const recoveryPrompt = String(completeJson.mock.calls.at(-1)?.[0] ?? '');
+    expect(recoveryPrompt).not.toContain('第 0 行 lint/test 输出');
+    expect(recoveryPrompt).toContain('当前: 批量修复 1 个 Reviewer 问题');
     expect(memoryClient.recordProjectKnowledge).toHaveBeenCalled();
   });
 
@@ -464,6 +458,11 @@ describe('MaintainerActor', () => {
     expect(worktreeManager.commitAndPush).toHaveBeenCalledWith(
       'feature/test',
       expect.stringContaining('移除不应上传的文件'),
+      { setUpstream: false }
+    );
+    expect(worktreeManager.commitAndPush).toHaveBeenCalledWith(
+      'feature/test',
+      expect.not.stringMatching(/^[a-z]+(?:\([^)]*\))?:\s/i),
       { setUpstream: false }
     );
     expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
@@ -653,18 +652,21 @@ describe('提交信息输出预处理', () => {
     expect(stripAnsiCodes('无转义字符')).toBe('无转义字符');
   });
 
-  it('extractCommitRejectionSection 从冗长输出中提取 commit 规范片段', () => {
-    const noise = 'lint 警告...\n'.repeat(30);
+  it('extractCommitRejectionSection 只保留冗长输出尾部诊断窗口', () => {
+    const noise = Array.from({ length: 150 }, (_, index) => `lint 警告 ${index}`).join('\n');
     const section =
       '❌ Commit message 不符合 Conventional Commits 规范。\n格式: <type>(<scope>): <description>';
-    const extracted = extractCommitRejectionSection(`${noise}${section}`);
+    const extracted = extractCommitRejectionSection(`${noise}\n${section}`);
     expect(extracted).toContain('Commit message');
     expect(extracted).toContain('Conventional Commits');
-    expect(extracted.length).toBeLessThan(noise.length + section.length);
+    expect(extracted).not.toContain('lint 警告 0');
+    expect(extracted).toContain('lint 警告 149');
   });
 
-  it('extractCommitRejectionSection 无相关标记时返回原始前缀', () => {
-    const text = '完全无关的日志内容'.repeat(10);
-    expect(extractCommitRejectionSection(text)).toContain('完全无关的日志内容');
+  it('extractCommitRejectionSection 无相关标记时仍返回尾部诊断', () => {
+    const text = Array.from({ length: 150 }, (_, index) => `完全无关的日志内容 ${index}`).join('\n');
+    const extracted = extractCommitRejectionSection(text);
+    expect(extracted).not.toContain('完全无关的日志内容 0\n');
+    expect(extracted).toContain('完全无关的日志内容 149');
   });
 });

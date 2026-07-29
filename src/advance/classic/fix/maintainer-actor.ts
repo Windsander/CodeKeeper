@@ -495,7 +495,7 @@ export class MaintainerActor {
       await this.commitWithConventionRetry(
         mr.sourceBranch,
         changeDescription,
-        () => `chore: 移除不应上传的文件 ${basename(finding.file)}`
+        () => `移除不应上传的文件 ${basename(finding.file)}`
       );
 
       const cognitive = decision as CognitiveDecision;
@@ -670,7 +670,7 @@ export class MaintainerActor {
 
   /**
    * 提交并推送；若被项目 hook 以提交信息规范为由拒绝，
-   * 让 LLM 从 hook 输出中提取规范、写入项目记忆，并按规范重新生成 message 重试一次。
+   * 让 LLM 根据尾部诊断理解该项目的实际规则，生成替代 message 并重试一次。
    */
   private async commitWithConventionRetry(
     branch: string,
@@ -684,16 +684,25 @@ export class MaintainerActor {
       return;
     } catch (err) {
       const errorText = err instanceof Error ? err.message : String(err);
+      const diagnostic = extractCommitRejectionSection(stripAnsiCodes(errorText));
+      const diagnosticPreview = diagnostic.length > 1000 ? `…${diagnostic.slice(-1000)}` : diagnostic;
       console.warn(
-        `[MaintainerActor] commit 被拒绝，尝试从 hook 输出学习提交规范: ${errorText.slice(0, 500)}`
+        `[MaintainerActor] commit 被拒绝，尝试从 hook 尾部诊断恢复提交信息: ${diagnosticPreview}`
       );
-      const convention = await this.learnCommitConvention(errorText);
-      if (!convention) {
+      const recovery = await this.recoverCommitMessage(
+        diagnostic,
+        message,
+        changeDescription,
+        branch
+      );
+      if (!recovery) {
         // 拒绝原因与提交信息格式无关（如 lint/测试失败），不重试
         throw err;
       }
-      const retryMessage = await this.buildCommitMessage(changeDescription, buildDefaultMessage);
-      await wm.commitAndPush(branch, retryMessage, { setUpstream: false });
+      await wm.commitAndPush(branch, recovery.message, { setUpstream: false });
+      this.commitConvention = recovery.convention;
+      this.commitConventionLoaded = true;
+      await this.rememberCommitConvention(recovery.convention);
     }
   }
 
@@ -714,11 +723,9 @@ export class MaintainerActor {
           '',
           '请为以下代码修改生成一条符合该规范的完整 commit message（可包含 body）。',
           '要求：',
-          '1. message 字段必须直接以 <type> 或 <type>(<scope>): 开头，例如 fix: 描述、fix(core): 描述。',
-          '2. 不要添加解释文字、签名或 [CodeKeeper] 等额外标记。',
-          '3. 优先从修改内容本身推断 type；如果确实只是测试，可用 test:；如果只是 chore，可用 chore:。',
-          '',
-          '可使用的 type（优先从规范中选择）：feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert。',
+          '1. 只遵守上方项目规范，不要自行假设 Conventional Commits、固定 type、固定前缀或固定语言。',
+          '2. 若规范给出了格式、可选值、正则、长度或示例，必须严格遵守。',
+          '3. message 字段只包含最终提交信息，不要添加解释文字、签名或额外标记。',
           '',
           changeDescription,
           '',
@@ -732,17 +739,9 @@ export class MaintainerActor {
         }
       );
       const parsed = JSON.parse(json) as { message?: string };
-      let message = parsed.message?.trim();
+      const message = normalizeGeneratedCommitMessage(parsed.message);
       if (!message) {
         return buildDefaultMessage();
-      }
-      // 兜底校验：若 LLM 仍未生成 type 前缀，按 fix: 处理
-      if (
-        !/^(revert:\s*)?(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([^)]+\))?:\s*.+/i.test(
-          message
-        )
-      ) {
-        message = `fix: ${message}`;
       }
       return message;
     } catch (err) {
@@ -778,58 +777,93 @@ export class MaintainerActor {
     return this.commitConvention;
   }
 
-  /** 从 commit 失败的 hook 输出中提取项目提交规范，并写入项目级记忆 */
-  private async learnCommitConvention(errorOutput: string): Promise<string | undefined> {
+  /** 根据 commit 失败尾部诊断生成替代提交信息，并将识别出的规则写入项目级记忆 */
+  private async recoverCommitMessage(
+    diagnostic: string,
+    attemptedMessage: string,
+    changeDescription: string,
+    branch: string
+  ): Promise<{ convention: string; message: string } | undefined> {
     try {
-      const clean = stripAnsiCodes(errorOutput);
-      const section = extractCommitRejectionSection(clean);
-
       const json = await this.options.llmClient.completeJson(
         [
-          '以下是 git commit 被项目 hook 拒绝时的输出（已过滤，仅保留与提交信息规范最相关的部分）。',
-          '请判断拒绝原因是否与 commit message 格式规范有关。',
-          '如果是，提取该项目要求的提交信息规范（格式说明、类型列表、示例等），用一到两句话概括；',
-          '如果不是格式问题（例如 lint 或测试未通过），convention 输出空字符串。',
+          '以下是 git commit 失败输出的尾部诊断。',
+          '请判断最终失败是否由提交信息本身不符合当前项目规则引起。',
+          '项目规则可能是任意自定义格式、前缀、可选值、正则、长度、语言或模板；',
+          '不要假设项目使用 Conventional Commits，也不要使用诊断中没有给出的固定 type 列表。',
+          '如果尾部明确指出提交信息、标题、说明、message、header、subject、首行、格式或正则约束不合规，retry 才为 true。',
+          '如果真正失败原因是 lint、测试、构建、权限或 push，retry 必须为 false。',
+          'retry 为 true 时：',
+          '1. convention 用一到两句话准确概括诊断中出现的项目规则；',
+          '2. message 根据该规则和本次修改生成新的完整提交信息；',
+          '3. message 只包含提交信息，不附加解释，也不要复用已被拒绝的原始信息。',
           '',
-          '输出 JSON: { "convention": "..." }',
+          '输出 JSON: { "retry": true/false, "convention": "...", "message": "..." }',
           '',
-          '--- hook 输出 ---',
-          section.slice(0, 4000),
+          '--- 已被拒绝的提交信息 ---',
+          attemptedMessage,
+          '',
+          '--- 本次修改 ---',
+          changeDescription,
+          '',
+          '--- 当前分支 ---',
+          branch,
+          '',
+          '--- 尾部诊断 ---',
+          diagnostic,
         ].join('\n'),
         undefined,
         {
           type: 'object',
-          properties: { convention: { type: 'string' } },
-          required: ['convention'],
+          properties: {
+            retry: { type: 'boolean' },
+            convention: { type: 'string' },
+            message: { type: 'string' },
+          },
+          required: ['retry', 'convention', 'message'],
         }
       );
-      const parsed = JSON.parse(json) as { convention?: string };
+      const parsed = JSON.parse(json) as {
+        retry?: boolean;
+        convention?: string;
+        message?: string;
+      };
       const convention = parsed.convention?.trim();
-      if (!convention) {
+      const message = normalizeGeneratedCommitMessage(parsed.message);
+      if (!parsed.retry || !convention || !message || message === attemptedMessage.trim()) {
         return undefined;
       }
-      this.commitConvention = convention;
-      this.commitConventionLoaded = true;
-      const memory = this.options.memoryClient;
-      if (memory) {
-        await memory.recordProjectKnowledge([
-          {
-            id: `commit-convention-${memory.context.projectId}`,
-            category: 'convention',
-            sourceFiles: [],
-            content: `提交信息（commit message）规范：${convention}`,
-            confidence: 'high',
-            createdAt: new Date().toISOString(),
-          },
-        ]);
-        console.log(`[MaintainerActor] 已学习并记忆该项目提交规范: ${convention}`);
-      }
-      return convention;
+      return { convention, message };
     } catch (err) {
       console.warn(
-        `[MaintainerActor] 提取提交规范失败: ${err instanceof Error ? err.message : String(err)}`
+        `[MaintainerActor] 根据 hook 尾部诊断恢复提交信息失败: ${err instanceof Error ? err.message : String(err)}`
       );
       return undefined;
+    }
+  }
+
+  /** 项目规范记忆失败不应阻断已经生成的合规提交重试 */
+  private async rememberCommitConvention(convention: string): Promise<void> {
+    const memory = this.options.memoryClient;
+    if (!memory) {
+      return;
+    }
+    try {
+      await memory.recordProjectKnowledge([
+        {
+          id: `commit-convention-${memory.context.projectId}`,
+          category: 'convention',
+          sourceFiles: [],
+          content: `提交信息（commit message）规范：${convention}`,
+          confidence: 'high',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      console.log(`[MaintainerActor] 已学习并记忆该项目提交规范: ${convention}`);
+    } catch (err) {
+      console.warn(
+        `[MaintainerActor] 记录项目提交规范失败，继续提交重试: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 }
@@ -840,31 +874,17 @@ export function stripAnsiCodes(text: string): string {
   return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
 }
 
-/** 从冗长的 hook 输出中定位与 commit message 规范相关的片段 */
+/** 保留 hook 输出尾部诊断，避免前置 lint/test 日志淹没最终拒绝原因 */
 export function extractCommitRejectionSection(text: string): string {
-  const markers = [
-    'commit message',
-    'commit-message',
-    'commit-msg',
-    '提交信息',
-    'Conventional Commits',
-    'Conventional Commit',
-    '不符合',
-    '格式:',
-    '格式：',
-  ];
-  const lower = text.toLowerCase();
-  let idx = -1;
-  for (const marker of markers) {
-    const i = lower.indexOf(marker.toLowerCase());
-    if (i !== -1 && (idx === -1 || i < idx)) {
-      idx = i;
-    }
-  }
-  if (idx === -1) {
-    return text.slice(0, 4000);
-  }
-  return text.slice(idx, idx + 4000);
+  const normalized = text.replace(/\r\n?/g, '\n').trimEnd();
+  const tailLines = normalized.split('\n').slice(-120).join('\n');
+  return tailLines.slice(-8000);
+}
+
+/** 清理模型生成的提交信息，保留项目自定义格式但移除不可见空字符 */
+function normalizeGeneratedCommitMessage(message: string | undefined): string | undefined {
+  const normalized = message?.replace(/\0/g, '').replace(/\r\n?/g, '\n').trim();
+  return normalized || undefined;
 }
 
 /**
