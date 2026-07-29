@@ -177,6 +177,7 @@ function normalizeState(parsed: MrAgentState): MrAgentState {
   parsed.maintainerThreadState ??= {};
   parsed.reviewerThreadState ??= {};
   parsed.reviewCommentDelivery ??= {};
+  parsed.mrLifecycle ??= {};
   return parsed;
 }
 
@@ -226,6 +227,9 @@ function mergeOwnedState(
     }
     if (incoming.maintainerThreadState !== undefined) {
       merged.maintainerThreadState = incoming.maintainerThreadState;
+    }
+    if (incoming.mrLifecycle !== undefined) {
+      merged.mrLifecycle = incoming.mrLifecycle;
     }
   } else if (incoming.archiverState !== undefined) {
     merged.archiverState = incoming.archiverState;
@@ -374,6 +378,8 @@ export interface MrAgentState {
   >;
   /** Archiver 项目知识批次的可恢复状态。 */
   archiverState?: ArchiverState;
+  /** Maintainer 单 MR 全生命周期状态（key 为 `mr:<iid>`） */
+  mrLifecycle?: Record<string, import('./mr-lifecycle.js').MrLifecycleState>;
 }
 
 export function getStatePath(project: Project): string {

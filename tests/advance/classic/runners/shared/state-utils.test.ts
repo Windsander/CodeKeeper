@@ -134,6 +134,40 @@ describe('state-utils 角色隔离保存', () => {
     expect(JSON.parse(readFileSync(`${path}.bak`, 'utf-8')).discussions).toEqual({});
   });
 
+  it('Maintainer 保存时持久化 MR 生命周期记录且不覆盖其他角色状态', () => {
+    const project = makeProject();
+    const maintainerState = loadState(project);
+    maintainerState.mrLifecycle = {
+      'mr:7': {
+        mrIid: 7,
+        title: 'feat: x',
+        sourceBranch: 'feat/x',
+        targetBranch: 'main',
+        status: 'active',
+        startedAt: 1,
+        lastPolledAt: 2,
+        pollCount: 3,
+        metrics: {
+          discussionsTotal: 4,
+          discussionsResolved: 2,
+          findingsFixed: 1,
+          findingsRejected: 1,
+          findingsSuspended: 0,
+          fixPushes: 1,
+          humanFollowupsAfterFix: 0,
+        },
+      },
+    };
+    saveState(project, maintainerState, 'maintainer');
+
+    // 其他角色保存后生命周期记录仍然保留
+    saveState(project, loadState(project), 'reviewer');
+
+    const restored = loadState(project);
+    expect(restored.mrLifecycle?.['mr:7']?.pollCount).toBe(3);
+    expect(restored.mrLifecycle?.['mr:7']?.metrics.discussionsResolved).toBe(2);
+  });
+
   it('中文归档路径上的陈旧锁可被回收且保存后正常释放', () => {
     const project = makeProject('状态归档');
     const path = getStatePath(project);

@@ -63,6 +63,33 @@ export class GitLabClient {
   }
 
   /**
+   * 读取纯文本响应（如 job trace 日志），不走 JSON 解析。
+   */
+  private async requestText(endpoint: string): Promise<string> {
+    const url = `${this.baseUrl}/api/v4${endpoint}`;
+    const headers: Record<string, string> = { 'PRIVATE-TOKEN': this.token };
+
+    logger.debug(`GitLab API GET(text) ${endpoint}`);
+
+    let response: Response;
+    try {
+      response = await fetch(url, { method: 'GET', headers });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ url, err: message }, `GitLab API fetch failed: GET(text) ${endpoint}`);
+      throw new Error(`GitLab API fetch failed: ${message}`);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error({ status: response.status, body: errorText }, `GitLab API error: GET(text) ${endpoint}`);
+      throw new Error(`GitLab API ${response.status}: ${errorText}`);
+    }
+
+    return response.text();
+  }
+
+  /**
    * 读取 GitLab 列表接口的全部分页。
    *
    * 远端事实对账不能只依赖第一页，否则超过 100 条后会把旧 note/discussion
@@ -316,6 +343,33 @@ export class GitLabClient {
       `/projects/${this.projectId}/merge_requests?${query.toString()}`
     );
   }
+
+  /**
+   * List pipelines of a merge request (latest first)
+   */
+  async getMergeRequestPipelines(iid: number, perPage = 5): Promise<GitLabPipeline[]> {
+    return this.request<GitLabPipeline[]>(
+      'GET',
+      `/projects/${this.projectId}/merge_requests/${iid}/pipelines?per_page=${perPage}`
+    );
+  }
+
+  /**
+   * List jobs of a pipeline
+   */
+  async listPipelineJobs(pipelineId: number, perPage = 100): Promise<GitLabJob[]> {
+    return this.request<GitLabJob[]>(
+      'GET',
+      `/projects/${this.projectId}/pipelines/${pipelineId}/jobs?per_page=${perPage}`
+    );
+  }
+
+  /**
+   * Get the raw trace (log) of a job
+   */
+  async getJobTrace(jobId: number): Promise<string> {
+    return this.requestText(`/projects/${this.projectId}/jobs/${jobId}/trace`);
+  }
 }
 
 // GitLab API response types
@@ -410,4 +464,25 @@ export interface GitLabDiffPosition {
   new_path: string;
   new_line: number;
   old_line?: number;
+}
+
+export interface GitLabPipeline {
+  id: number;
+  sha: string;
+  ref: string;
+  status: string;
+  web_url?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface GitLabJob {
+  id: number;
+  name: string;
+  stage: string;
+  status: string;
+  web_url?: string;
+  failure_reason?: string;
+  started_at?: string;
+  finished_at?: string;
 }

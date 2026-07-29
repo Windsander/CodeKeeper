@@ -177,6 +177,37 @@ export interface MrShaInfo {
   startSha: string;
 }
 
+/** MR 生命周期终态感知所需的概览信息。 */
+export interface MrOverview {
+  /** GitLab MR 状态：opened / merged / closed / locked */
+  state: string;
+  /** 当前 head SHA（可能缺失） */
+  headSha?: string;
+  /** 标签列表 */
+  labels: string[];
+}
+
+/** CI 失败 job 的诊断信息。 */
+export interface CiFailedJob {
+  id: number;
+  name: string;
+  stage: string;
+  /** GitLab 失败原因枚举（如 script_failure / runner_system_failure） */
+  failureReason?: string;
+  /** 日志尾部片段，用于定位失败根因 */
+  traceTail: string;
+  webUrl?: string;
+}
+
+/** 指定 MR 的 CI 失败报告；status 非 failed 时 failedJobs 为空。 */
+export interface CiFailureReport {
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'unknown';
+  pipelineId?: number;
+  pipelineSha?: string;
+  pipelineWebUrl?: string;
+  failedJobs: CiFailedJob[];
+}
+
 import type { MrReviewFilter } from '../../types.js';
 
 /**
@@ -235,6 +266,12 @@ export interface IGitProvider {
 
   /** 获取指定 MR 的 CI 状态 */
   getCIStatus(iid: number): Promise<'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'unknown'>;
+
+  /** 获取指定 MR 的概览（生命周期终态感知） */
+  getMROverview(iid: number): Promise<MrOverview>;
+
+  /** 获取指定 MR 的 CI 失败报告（含失败 job 日志尾部） */
+  getCiFailureReport(iid: number): Promise<CiFailureReport>;
 
   /** 合并指定 MR */
   mergeMR(iid: number, options?: MergeOptions): Promise<void>;

@@ -15,11 +15,31 @@ import { CognitiveEngine } from '../cognitive-engine.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { RecallPlanner } from '../memory/recall-planner.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
-import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
+import { getArchiveRoot } from '../../types.js';
+import type {
+  MergeRequest,
+  ReviewFinding,
+  Discussion,
+  ReviewerComment,
+} from '../provider/types.js';
 import type { MrContext } from '../fix/cognitive-types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
 import { logger } from '../../../core/logger.js';
 import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
+import {
+  archiveLifecycleRecord,
+  buildMrLifecycleKey,
+  classifyCiFailure,
+  collectInterruptCandidates,
+  computeClosureStats,
+  createLifecycleState,
+  detectInterruptCommand,
+  hashFailedJobs,
+  isMrConverged,
+  MAX_CI_FIX_ATTEMPTS_PER_HEAD,
+  type MrLifecycleInterrupt,
+  type MrLifecycleState,
+} from './shared/mr-lifecycle.js';
 import {
   formatAgentFooter,
   isAgentAuthoredNote,
@@ -304,6 +324,7 @@ export class MaintainerRunner extends BaseRoleRunner {
 
     const state = loadState(project);
     state.interactiveThreads ??= {};
+    state.mrLifecycle ??= {};
 
     console.log(`[MaintainerRunner] 扫描项目 ${project.name} 的 open MRs...`);
     console.log(
@@ -325,6 +346,10 @@ export class MaintainerRunner extends BaseRoleRunner {
     console.log(`[MaintainerRunner] 项目 ${project.name} 发现 ${mrs.length} 个 open MR`);
     logMemoryUsage('开始处理项目前');
 
+    // 生命周期终态清扫：已跟踪但不再 open 的 MR，识别 merged/closed 并归档
+    await this.finalizeTerminalLifecycles(provider, mrs, state, project);
+    saveState(project, state, 'maintainer');
+
     // 默认跳过 draft；如果 filter 里显式配置了 Draft=true，则保留 draft MR
     const draftCondition = maintainerConfig.filter?.conditions.find(c => c.field === 'draft');
     const includeDraft = draftCondition?.values.includes('true') ?? false;
@@ -336,6 +361,15 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
 
       console.log(`[MaintainerRunner] 维护 MR !${mr.iid}: ${mr.title}`);
+
+      // 单 MR 全生命周期状态：首次见到时建档，每轮更新轮询水位
+      const lifecycle = this.ensureMrLifecycle(state, mr);
+      if (lifecycle.status === 'archived') {
+        console.log(
+          `[MaintainerRunner] MR !${mr.iid} 已归档（${lifecycle.endReason ?? 'unknown'}），跳过自治维护`
+        );
+        continue;
+      }
 
       let allDiscussions: Discussion[];
       let discussions: Discussion[];
@@ -355,6 +389,16 @@ export class MaintainerRunner extends BaseRoleRunner {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[MaintainerRunner] 获取 MR !${mr.iid} discussions 失败: ${message}`);
+        continue;
+      }
+
+      // 用户中断指令检测：命中后优雅退出并归档，后续轮询不再自治处理本 MR
+      const interrupt = await this.detectMrInterrupt(provider, mr, allDiscussions, lifecycle);
+      if (interrupt) {
+        lifecycle.interrupted = interrupt;
+        await this.acknowledgeInterrupt(provider, mr, lifecycle, maintainerName);
+        this.finalizeLifecycle(project, lifecycle, 'interrupted', allDiscussions);
+        saveState(project, state, 'maintainer');
         continue;
       }
 
@@ -441,65 +485,492 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       if (pendingDiscussions.length === 0) {
         console.log(`[MaintainerRunner] MR !${mr.iid} has no pending discussions`);
-        await memoryClient?.disconnect().catch(() => undefined);
-        continue;
+      } else {
+        console.log(
+          `[MaintainerRunner] MR !${mr.iid} processing ${pendingDiscussions.length} discussions`
+        );
+        await runDiscussionTasks(
+          pendingDiscussions,
+          async discussion => {
+            console.log(
+              `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
+            );
+            logMemoryUsage(`处理 discussion ${discussion.id} 前`);
+            await this.processDiscussion(
+              mr,
+              discussion,
+              provider,
+              brain,
+              actor,
+              worktreeManager,
+              maintainerName,
+              state,
+              project.rootPath,
+              memoryClient,
+              cognitiveDepth,
+              currentHeadSha
+            );
+            try {
+              const latestHeadSha = await refreshDiscussionProcessedHeadSha(
+                provider,
+                mr.iid,
+                discussion.id,
+                state
+              );
+              if (latestHeadSha) {
+                currentHeadSha = latestHeadSha;
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.warn(
+                `[MaintainerRunner] discussion ${discussion.id} 完成后刷新 MR HEAD 失败: ${message}`
+              );
+            }
+            saveState(project, state, 'maintainer');
+          },
+          (discussion, error) => {
+            // 记忆写入可能已经在异常前完成，因此不能据此推断回复也已成功发布。
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(
+              `[MaintainerRunner] discussion ${discussion.id} 处理异常，继续处理后续 discussion: ${message}`
+            );
+            saveState(project, state, 'maintainer');
+          }
+        );
       }
 
-      console.log(
-        `[MaintainerRunner] MR !${mr.iid} processing ${pendingDiscussions.length} discussions`
+      // CI 状态感知：失败时在 worktree 中做最小修复并推送，多次失败挂起等待人工
+      await this.handleCiStatus(
+        provider,
+        actor,
+        mr,
+        lifecycle,
+        maintainerConfig,
+        maintainerName,
+        currentHeadSha
       );
-      await runDiscussionTasks(
-        pendingDiscussions,
-        async discussion => {
-          console.log(
-            `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
-          );
-          logMemoryUsage(`处理 discussion ${discussion.id} 前`);
-          await this.processDiscussion(
-            mr,
-            discussion,
-            provider,
-            brain,
-            actor,
-            worktreeManager,
-            maintainerName,
-            state,
-            project.rootPath,
-            memoryClient,
-            cognitiveDepth,
-            currentHeadSha
-          );
-          try {
-            const latestHeadSha = await refreshDiscussionProcessedHeadSha(
-              provider,
-              mr.iid,
-              discussion.id,
-              state
-            );
-            if (latestHeadSha) {
-              currentHeadSha = latestHeadSha;
-            }
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            console.warn(
-              `[MaintainerRunner] discussion ${discussion.id} 完成后刷新 MR HEAD 失败: ${message}`
-            );
-          }
-          saveState(project, state, 'maintainer');
-        },
-        (discussion, error) => {
-          // 记忆写入可能已经在异常前完成，因此不能据此推断回复也已成功发布。
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(
-            `[MaintainerRunner] discussion ${discussion.id} 处理异常，继续处理后续 discussion: ${message}`
-          );
-          saveState(project, state, 'maintainer');
-        }
-      );
+
+      // 生命周期指标与收敛判定（讨论闭环率、修/辩/挂起统计、误修信号）
+      this.refreshLifecycleMetrics(lifecycle, allDiscussions, state, pendingDiscussions.length);
+      saveState(project, state, 'maintainer');
       await memoryClient?.disconnect().catch(() => undefined);
     }
 
     saveState(project, state, 'maintainer');
+  }
+
+  /**
+   * 获取/创建 MR 生命周期记录，并更新本轮轮询水位
+   */
+  private ensureMrLifecycle(state: MrAgentState, mr: MergeRequest): MrLifecycleState {
+    state.mrLifecycle ??= {};
+    const key = buildMrLifecycleKey(mr.iid);
+    state.mrLifecycle[key] ??= createLifecycleState(mr);
+    const lifecycle = state.mrLifecycle[key];
+    lifecycle.title = mr.title;
+    lifecycle.webUrl = mr.webUrl;
+    lifecycle.lastPolledAt = Date.now();
+    lifecycle.pollCount += 1;
+    return lifecycle;
+  }
+
+  /**
+   * 生命周期终态清扫
+   *
+   * 已跟踪但本轮不再出现在 open 列表中的 MR：核实其真实状态，
+   * merged/closed 则优雅退出并归档；仍 open（例如被 filter 排除）则保留等待。
+   */
+  private async finalizeTerminalLifecycles(
+    provider: GitLabProvider,
+    openMrs: MergeRequest[],
+    state: MrAgentState,
+    project: Project
+  ): Promise<void> {
+    const openIids = new Set(openMrs.map(mr => mr.iid));
+    for (const lifecycle of Object.values(state.mrLifecycle ?? {})) {
+      if (lifecycle.status === 'archived') continue;
+      if (openIids.has(lifecycle.mrIid)) continue;
+
+      let remoteState: string;
+      try {
+        remoteState = (await provider.getMROverview(lifecycle.mrIid)).state;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[MaintainerRunner] 核实 MR !${lifecycle.mrIid} 终态失败: ${message}`);
+        continue;
+      }
+
+      if (remoteState !== 'merged' && remoteState !== 'closed') continue;
+
+      // merged/closed 的 MR 通常仍可读取 discussion，尽力补齐终态闭环快照
+      let discussions: Discussion[] = [];
+      try {
+        discussions = (await provider.getDiscussionSnapshot(lifecycle.mrIid)).all;
+      } catch {
+        // 读取失败时以空快照归档，不阻断退出
+      }
+      console.log(`[MaintainerRunner] MR !${lifecycle.mrIid} 已 ${remoteState}，执行归档退出`);
+      this.finalizeLifecycle(project, lifecycle, remoteState, discussions);
+    }
+  }
+
+  /**
+   * 检测 MR 上的用户中断指令（MR 级评论 + discussion note 中的人工停止指令）
+   */
+  private async detectMrInterrupt(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    allDiscussions: Discussion[],
+    lifecycle: MrLifecycleState
+  ): Promise<MrLifecycleInterrupt | undefined> {
+    let mrNotes: ReviewerComment[] = [];
+    try {
+      mrNotes = (await provider.getReviewerCommentSnapshot(mr.iid)).all;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} 评论失败，跳过中断指令检测: ${message}`);
+      return undefined;
+    }
+    const candidates = collectInterruptCandidates(mrNotes, allDiscussions);
+    const interrupt = detectInterruptCommand(
+      candidates,
+      (author, body) => !isAgentAuthoredNote(body) && !isBotAuthor(author)
+    );
+    if (!interrupt) return undefined;
+    // 已触发过的旧指令不重复处理
+    if (interrupt.at <= (lifecycle.interrupted?.at ?? 0)) return undefined;
+    return interrupt;
+  }
+
+  /**
+   * 发布中断确认评论，告知用户 Maintainer 已停止自治维护
+   */
+  private async acknowledgeInterrupt(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    lifecycle: MrLifecycleState,
+    maintainerName: string
+  ): Promise<void> {
+    const interrupt = lifecycle.interrupted;
+    if (!interrupt) return;
+    const body = [
+      `🛑 已收到 @${interrupt.by} 的停止指令，${maintainerName} 已停止对本 MR 的自动修复与讨论处理，并归档当前维护记录。`,
+      '',
+      `> ${interrupt.command.replace(/\n/g, ' ')}`,
+      '',
+      '如需恢复自治维护，请在本 MR 中重新 @ 我说明。',
+      '',
+      formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName),
+    ].join('\n');
+    try {
+      await provider.postReviewComment(mr.iid, body);
+      console.log(`[MaintainerRunner] MR !${mr.iid} 收到用户中断指令，已发布停止确认`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] MR !${mr.iid} 中断确认评论发布失败: ${message}`);
+    }
+  }
+
+  /**
+   * CI 状态感知与自治修复
+   *
+   * - failed：区分基础设施失败（挂起）与代码问题失败（最小修复并推送）；
+   * - 同一 head 上修复次数受 MAX_CI_FIX_ATTEMPTS_PER_HEAD 约束，超限挂起；
+   * - 修复进展都写入 Maintainer 创建的 CI 跟踪 discussion，保持过程透明。
+   */
+  private async handleCiStatus(
+    provider: GitLabProvider,
+    actor: MaintainerActor,
+    mr: MergeRequest,
+    lifecycle: MrLifecycleState,
+    config: MaintainerConfig,
+    maintainerName: string,
+    currentHeadSha?: string
+  ): Promise<void> {
+    let status: string;
+    try {
+      status = await provider.getCIStatus(mr.iid);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} CI 状态失败: ${message}`);
+      return;
+    }
+
+    lifecycle.ci ??= { fixAttempts: 0, totalFixPushes: 0, updatedAt: Date.now() };
+    const ci = lifecycle.ci;
+    const prevStatus = ci.lastStatus;
+    ci.lastStatus = status;
+    ci.updatedAt = Date.now();
+
+    if (status === 'success') {
+      if (prevStatus === 'failed' && ci.discussionId && ci.totalFixPushes > 0) {
+        await this.postCiNote(
+          provider,
+          mr,
+          ci,
+          `✅ CI 已恢复通过（累计推送 ${ci.totalFixPushes} 次自动修复）。`,
+          maintainerName
+        );
+      }
+      ci.fixAttempts = 0;
+      ci.suspended = false;
+      ci.suspendReason = undefined;
+      return;
+    }
+
+    if (status !== 'failed') return;
+
+    // head 变化（自动推送或人工推送）意味着新一轮失败，重置修复计数
+    if (currentHeadSha && ci.lastHeadSha !== currentHeadSha) {
+      ci.lastHeadSha = currentHeadSha;
+      ci.lastFailedJobsHash = undefined;
+      ci.fixAttempts = 0;
+      ci.suspended = false;
+      ci.suspendReason = undefined;
+    }
+
+    let report;
+    try {
+      report = await provider.getCiFailureReport(mr.iid);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} CI 失败详情失败: ${message}`);
+      return;
+    }
+    if (report.failedJobs.length === 0) {
+      console.log(`[MaintainerRunner] MR !${mr.iid} CI 失败但未收集到失败 job，跳过`);
+      return;
+    }
+
+    const jobsHash = hashFailedJobs(report.failedJobs);
+    const jobNames = report.failedJobs.map(job => `${job.stage}/${job.name}`).join(', ');
+
+    // 基础设施/环境失败：修改代码无意义，直接挂起
+    const infraOnly = report.failedJobs.every(job => classifyCiFailure(job) === 'infra');
+    if (infraOnly) {
+      if (!ci.suspended || ci.lastFailedJobsHash !== jobsHash) {
+        await this.ensureCiDiscussion(provider, mr, ci, maintainerName, report.failedJobs);
+        await this.postCiNote(
+          provider,
+          mr,
+          ci,
+          `⏸️ CI 失败属于基础设施/环境问题（${jobNames}），非代码问题，已挂起自动修复，等待重跑或人工处理。`,
+          maintainerName
+        );
+      }
+      ci.suspended = true;
+      ci.suspendReason = 'infra-failure';
+      ci.lastFailedJobsHash = jobsHash;
+      return;
+    }
+
+    if (config.ciFixEnabled === false) {
+      console.log(`[MaintainerRunner] MR !${mr.iid} CI 失败，但项目未启用 CI 自动修复，跳过`);
+      return;
+    }
+
+    // 同一轮失败已挂起，等待人工
+    if (ci.suspended && ci.lastFailedJobsHash === jobsHash) {
+      console.log(`[MaintainerRunner] MR !${mr.iid} CI 修复已挂起，等待人工介入`);
+      return;
+    }
+
+    if (ci.fixAttempts >= MAX_CI_FIX_ATTEMPTS_PER_HEAD) {
+      await this.ensureCiDiscussion(provider, mr, ci, maintainerName, report.failedJobs);
+      if (!ci.suspended) {
+        await this.postCiNote(
+          provider,
+          mr,
+          ci,
+          `⏸️ 已尝试 ${ci.fixAttempts} 次自动修复仍未通过（${jobNames}），挂起等待人工介入。`,
+          maintainerName
+        );
+      }
+      ci.suspended = true;
+      ci.suspendReason = 'attempts-exhausted';
+      ci.lastFailedJobsHash = jobsHash;
+      return;
+    }
+
+    // 修：在 isolated worktree 中执行最小修复并推送
+    await this.ensureCiDiscussion(provider, mr, ci, maintainerName, report.failedJobs);
+    const result = await actor.executeCiFix(mr, report);
+    ci.fixAttempts += 1;
+    ci.lastFailedJobsHash = jobsHash;
+    if (result.codeApplied) {
+      ci.totalFixPushes += 1;
+      lifecycle.metrics.fixPushes += 1;
+      await this.postCiNote(
+        provider,
+        mr,
+        ci,
+        `🔧 已针对 CI 失败（${jobNames}）推送第 ${ci.totalFixPushes} 次自动修复：\n${result.appliedFiles.map(f => `- ${f}`).join('\n')}\n\n等待 pipeline 复跑。`,
+        maintainerName
+      );
+    } else {
+      await this.postCiNote(
+        provider,
+        mr,
+        ci,
+        `⚠️ CI 自动修复未成功（第 ${ci.fixAttempts}/${MAX_CI_FIX_ATTEMPTS_PER_HEAD} 次）：${result.reason}`,
+        maintainerName
+      );
+    }
+  }
+
+  /**
+   * 确保 CI 修复跟踪 discussion 存在；不存在时创建并记录 ID
+   */
+  private async ensureCiDiscussion(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    ci: NonNullable<MrLifecycleState['ci']>,
+    maintainerName: string,
+    failedJobs: Array<{ name: string; stage: string; webUrl?: string }>
+  ): Promise<void> {
+    if (ci.discussionId) return;
+    const body = [
+      `🤖 ${maintainerName} CI 修复跟踪（本线程由 Maintainer 创建，记录 pipeline 失败的自治修复进展）`,
+      '',
+      '当前失败 job：',
+      ...failedJobs.map(
+        job => `- ${job.stage}/${job.name}${job.webUrl ? `（${job.webUrl}）` : ''}`
+      ),
+      '',
+      formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName),
+    ].join('\n');
+    try {
+      ci.discussionId = await provider.createDiscussion(mr.iid, body);
+      console.log(
+        `[MaintainerRunner] MR !${mr.iid} 已创建 CI 修复跟踪 discussion ${ci.discussionId}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] MR !${mr.iid} 创建 CI 跟踪 discussion 失败: ${message}`);
+    }
+  }
+
+  /**
+   * 向 CI 修复跟踪 discussion 追加进展说明
+   */
+  private async postCiNote(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    ci: NonNullable<MrLifecycleState['ci']>,
+    text: string,
+    maintainerName: string
+  ): Promise<void> {
+    if (!ci.discussionId) return;
+    try {
+      await provider.addDiscussionNote(
+        mr.iid,
+        ci.discussionId,
+        `${text}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] MR !${mr.iid} CI 进展说明发布失败: ${message}`);
+    }
+  }
+
+  /**
+   * 刷新生命周期指标并做收敛判定
+   *
+   * 指标取当前快照而非增量：修/辩/挂起计数直接反映跨轮次记忆
+   * （maintainerThreadState.decisions）中的最新结论，天然幂等。
+   */
+  private refreshLifecycleMetrics(
+    lifecycle: MrLifecycleState,
+    allDiscussions: Discussion[],
+    state: MrAgentState,
+    pendingDiscussionCount: number
+  ): void {
+    // Maintainer 自己创建的 CI 跟踪线程不计入 reviewer 意见闭环
+    const scoped = allDiscussions.filter(d => d.id !== lifecycle.ci?.discussionId);
+    const closure = computeClosureStats(scoped);
+    const metrics = lifecycle.metrics;
+    metrics.discussionsTotal = closure.total;
+    metrics.discussionsResolved = closure.resolved;
+
+    let fixed = 0;
+    let rejected = 0;
+    let suspended = 0;
+    let humanFollowups = 0;
+    for (const discussion of scoped) {
+      const threadState = state.maintainerThreadState?.[discussion.id];
+      if (threadState) {
+        for (const decision of Object.values(threadState.decisions)) {
+          if (decision.action === 'fix' && decision.fixSucceeded) fixed += 1;
+          else if (decision.action === 'ignore' && !decision.alreadyFixed) rejected += 1;
+          else if (decision.action === 'ask') suspended += 1;
+        }
+      }
+      // 误修信号：Maintainer 宣称修复后仍有「人工」追评
+      const lastFixClaimAt = discussion.notes
+        .filter(note => isMaintainerAuthoredNote(note.body) && /✅[\s\S]*修复/.test(note.body))
+        .reduce((max, note) => Math.max(max, getCommentActivityAt(note)), 0);
+      if (lastFixClaimAt > 0 && getLastHumanNoteAt(discussion) > lastFixClaimAt) {
+        humanFollowups += 1;
+      }
+    }
+    metrics.findingsFixed = fixed;
+    metrics.findingsRejected = rejected;
+    metrics.findingsSuspended = suspended;
+    metrics.humanFollowupsAfterFix = humanFollowups;
+
+    const converged = isMrConverged({
+      pendingDiscussionCount,
+      closure,
+      ciStatus: lifecycle.ci?.lastStatus,
+      ciSuspended: lifecycle.ci?.suspended,
+    });
+    if (converged && lifecycle.status === 'active') {
+      lifecycle.status = 'converged';
+      console.log(
+        `[MaintainerRunner] MR !${lifecycle.mrIid} 意见已收敛（闭环 ${closure.resolved}/${closure.total}），进入待合并状态`
+      );
+    } else if (!converged && lifecycle.status === 'converged') {
+      lifecycle.status = 'active';
+      console.log(`[MaintainerRunner] MR !${lifecycle.mrIid} 出现新待处理事项，恢复自治维护`);
+    }
+  }
+
+  /**
+   * 生命周期归档：写入归档文件并记录终态指标，支撑收敛效率验收
+   */
+  private finalizeLifecycle(
+    project: Project,
+    lifecycle: MrLifecycleState,
+    endReason: 'merged' | 'closed' | 'interrupted',
+    discussions: Discussion[]
+  ): void {
+    lifecycle.status = 'archived';
+    lifecycle.endReason = endReason;
+    lifecycle.archivedAt = Date.now();
+
+    const scoped = discussions.filter(d => d.id !== lifecycle.ci?.discussionId);
+    const closure = computeClosureStats(scoped);
+
+    try {
+      lifecycle.archivePath = archiveLifecycleRecord(
+        getArchiveRoot(project),
+        project.id,
+        lifecycle,
+        closure
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] MR !${lifecycle.mrIid} 生命周期归档失败: ${message}`);
+    }
+
+    const metrics = lifecycle.metrics;
+    console.log(
+      `[MaintainerRunner] MR !${lifecycle.mrIid} 生命周期归档（${endReason}）：` +
+        `轮询 ${lifecycle.pollCount} 次，闭环 ${metrics.discussionsResolved}/${metrics.discussionsTotal}，` +
+        `修 ${metrics.findingsFixed} / 辩 ${metrics.findingsRejected} / 挂起 ${metrics.findingsSuspended}，` +
+        `推送 ${metrics.fixPushes} 次，误修信号 ${metrics.humanFollowupsAfterFix} 次` +
+        (lifecycle.archivePath ? `，归档：${lifecycle.archivePath}` : '')
+    );
   }
 
   /**

@@ -53,6 +53,8 @@ export interface MaintainerConfig extends BaseRoleConfig {
   resolveOthersDiscussions: boolean;
   /** 认知深度，默认 deep */
   cognitiveDepth?: 'fast' | 'standard' | 'deep';
+  /** CI 失败时是否自动执行最小修复，默认 true；false 时仅感知状态不做修复 */
+  ciFixEnabled?: boolean;
 }
 
 /**

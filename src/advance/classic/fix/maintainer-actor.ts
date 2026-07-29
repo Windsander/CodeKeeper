@@ -1,5 +1,5 @@
 import type { GitLabProvider } from '../provider/gitlab-provider.js';
-import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
+import type { MergeRequest, ReviewFinding, Discussion, CiFailureReport } from '../provider/types.js';
 import type { LlmClient } from '../../llm/client.js';
 import type { WorktreeManager } from '../worktree/worktree-manager.js';
 import type { MaintainerBrain, MaintainerDecision } from './maintainer-brain.js';
@@ -8,6 +8,7 @@ import type { MrAgentState } from '../runners/shared/state-utils.js';
 import type { IMemoryClient } from '../memory/types.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
 import type { DiscussionDeliveryResult } from '../runners/shared/discussion-delivery.js';
+import { extractFileCandidatesFromTrace } from '../runners/shared/mr-lifecycle.js';
 import {
   deliverDiscussionReply,
   isDiscussionDeliveryPending,
@@ -574,6 +575,117 @@ export class MaintainerActor {
       );
     }
     return this.withDeliveryResult(true, result);
+  }
+
+  /**
+   * 对 CI 失败执行最小修复。
+   *
+   * 把失败 job 的日志尾部作为问题上下文交给 FixToolLoop，在 isolated worktree
+   * 中完成变更与本地验证，成功后提交推送至 MR source branch。
+   * 修复动作与 CI discussion 的关联、回复由调用方（MaintainerRunner）负责。
+   */
+  async executeCiFix(
+    mr: MergeRequest,
+    report: CiFailureReport
+  ): Promise<{ codeApplied: boolean; reason: string; appliedFiles: string[] }> {
+    const failureDigest = report.failedJobs
+      .map(
+        job =>
+          `### job: ${job.name} (stage: ${job.stage}${job.failureReason ? `, reason: ${job.failureReason}` : ''})\n${job.traceTail}`
+      )
+      .join('\n\n');
+
+    // 从日志中猜测最可能出问题的仓库文件，供修复循环聚焦；失败则退化为通用描述
+    let targetFile = '(见 CI 日志)';
+    for (const job of report.failedJobs) {
+      for (const candidate of extractFileCandidatesFromTrace(job.traceTail)) {
+        try {
+          const resolved = await this.options.worktreeManager.resolveFilePath(candidate);
+          if (resolved) {
+            targetFile = candidate;
+            break;
+          }
+        } catch {
+          // 路径解析失败时继续尝试下一个候选
+        }
+      }
+      if (targetFile !== '(见 CI 日志)') break;
+    }
+
+    const syntheticFinding: ReviewFinding = {
+      severity: 'HIGH',
+      file: targetFile,
+      line: 1,
+      ruleId: 'ci-failure',
+      message: `CI pipeline 失败，失败 job: ${report.failedJobs.map(job => job.name).join(', ')}`,
+      suggestion: '根据 CI 日志定位失败根因，做最小化修复使 pipeline 恢复通过',
+      autoFixable: true,
+    };
+
+    const extraSystemPrompt = [
+      '这是 CI pipeline 失败的自动修复任务。以下是失败 job 的日志尾部：',
+      '',
+      failureDigest,
+      '',
+      '要求：',
+      '1. 只做让 CI 恢复通过所必需的最小修改，不要顺手重构或修复无关问题。',
+      '2. 先在 worktree 中定位并复现失败原因（如运行对应脚本），修复后再次本地验证。',
+      '3. 如果日志显示失败与代码无关（如 runner 故障、网络问题），不要修改任何文件，直接结束。',
+    ].join('\n');
+
+    console.log(
+      `[MaintainerActor] 执行 CI 修复: pipeline=${report.pipelineId ?? 'unknown'}, failedJobs=[${report.failedJobs.map(job => job.name).join(',')}]`
+    );
+
+    try {
+      console.log(`[MaintainerActor] 阶段=worktree 准备/更新 worktree`);
+      await this.options.worktreeManager.ensureWorktree();
+      console.log(`[MaintainerActor] 阶段=checkout 切换到 source branch: ${mr.sourceBranch}`);
+      await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
+      console.log(`[MaintainerActor] 阶段=prepare 准备运行环境`);
+      await this.options.worktreeManager.prepareEnvironment();
+
+      const loop = new FixToolLoop({
+        llmClient: this.options.llmClient,
+        worktreeManager: this.options.worktreeManager,
+        finding: syntheticFinding,
+        mr,
+        memoryClient: this.options.memoryClient,
+        recallPlanner: this.options.recallPlanner,
+        extraSystemPrompt,
+      });
+
+      const fixResult = await loop.run();
+      console.log(`[MaintainerActor] CI 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`);
+
+      if (!fixResult.success) {
+        return { codeApplied: false, reason: fixResult.reason, appliedFiles: [] };
+      }
+
+      const appliedFiles = [...loop.getAppliedFiles(), ...loop.getDeletedFiles()];
+      if (appliedFiles.length === 0) {
+        return { codeApplied: false, reason: 'CI 修复未产生任何文件变更', appliedFiles: [] };
+      }
+
+      console.log(`[MaintainerActor] 阶段=commit-push 提交 CI 修复到分支: ${mr.sourceBranch}`);
+      await this.commitWithConventionRetry(
+        mr.sourceBranch,
+        `CI pipeline 失败修复。\n失败 job: ${report.failedJobs.map(job => `${job.stage}/${job.name}`).join(', ')}\n修改文件:\n${appliedFiles.map(f => `- ${f}`).join('\n')}`,
+        () =>
+          [
+            `修复 CI 失败（${report.failedJobs.map(job => job.name).join(', ')}）`,
+            '',
+            '修改文件：',
+            ...appliedFiles.map(f => `- ${f}`),
+          ].join('\n')
+      );
+
+      return { codeApplied: true, reason: 'CI 修复已推送至 source branch', appliedFiles };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[MaintainerActor] CI 修复异常: ${reason}`);
+      return { codeApplied: false, reason, appliedFiles: [] };
+    }
   }
 
   private getMaintainerThreadState(state: MrAgentState, discussionId: string) {

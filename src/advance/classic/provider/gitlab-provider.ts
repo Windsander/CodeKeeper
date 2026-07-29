@@ -15,6 +15,9 @@ import {
   type ReviewerCommentSnapshot,
   type MergeOptions,
   type GitLabDiffPosition,
+  type MrOverview,
+  type CiFailureReport,
+  type CiFailedJob,
 } from './types.js';
 import {
   selectRecentActiveComments,
@@ -413,4 +416,74 @@ export class GitLabProvider implements IGitProvider {
       `[GitLabProvider] mergeMR 尚未实现 (iid=${iid}, options=${JSON.stringify(options)})`
     );
   }
+
+  /**
+   * 获取指定 MR 的概览信息（生命周期终态感知）
+   */
+  async getMROverview(iid: number): Promise<MrOverview> {
+    const mr = await this.client.getMergeRequest(iid);
+    const refs = (mr as unknown as { diff_refs?: { head_sha?: string } }).diff_refs;
+    const labels = (mr as unknown as { labels?: string[] }).labels;
+    return {
+      state: mr.state ?? 'unknown',
+      headSha: refs?.head_sha,
+      labels: labels ?? [],
+    };
+  }
+
+  /**
+   * 获取指定 MR 的 CI 失败报告
+   *
+   * 以 MR 最新 pipeline 为准；仅当状态为 failed 时收集失败 job 的日志尾部，
+   * 供 Maintainer 做最小化 CI 修复。单个 job 日志只保留尾部片段，避免超大 trace
+   * 占用内存；收集 job 数量上限同样受控。
+   */
+  async getCiFailureReport(iid: number): Promise<CiFailureReport> {
+    const status = await this.getCIStatus(iid);
+    if (status !== 'failed') {
+      return { status, failedJobs: [] };
+    }
+
+    const pipelines = await this.client.getMergeRequestPipelines(iid, 1);
+    const pipeline = pipelines[0];
+    if (!pipeline) {
+      return { status, failedJobs: [] };
+    }
+
+    const jobs = await this.client.listPipelineJobs(pipeline.id);
+    const failed = jobs.filter(job => job.status === 'failed').slice(0, MAX_CI_FAILURE_JOBS);
+
+    const failedJobs: CiFailedJob[] = [];
+    for (const job of failed) {
+      let traceTail = '';
+      try {
+        const trace = await this.client.getJobTrace(job.id);
+        traceTail = trace.slice(-CI_TRACE_TAIL_CHARS);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        traceTail = `(获取 job 日志失败: ${message})`;
+      }
+      failedJobs.push({
+        id: job.id,
+        name: job.name,
+        stage: job.stage,
+        failureReason: job.failure_reason,
+        traceTail,
+        webUrl: job.web_url,
+      });
+    }
+
+    return {
+      status,
+      pipelineId: pipeline.id,
+      pipelineSha: pipeline.sha,
+      pipelineWebUrl: pipeline.web_url,
+      failedJobs,
+    };
+  }
 }
+
+/** CI 失败诊断最多收集的 job 数 */
+const MAX_CI_FAILURE_JOBS = 3;
+/** 单个失败 job 保留的日志尾部字符数 */
+const CI_TRACE_TAIL_CHARS = 4000;
