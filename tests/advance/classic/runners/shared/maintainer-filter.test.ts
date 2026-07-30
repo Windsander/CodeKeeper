@@ -613,4 +613,104 @@ describe('isDiscussionPending', () => {
 
     expect(isDiscussionPending(d, state)).toBe(false);
   });
+
+  it('resolved 的 discussion 不因缺少无需修复说明而复活补发', () => {
+    // F1：人类已 resolve 的 thread 已闭环，「补发说明」不足以复活它制造噪音评论
+    const d = makeDiscussion({
+      resolved: true,
+      notes: [
+        { author: 'reviewer', body: 'src/a.ts:1 与 src/b.ts:2 都有问题', createdAt: '2026-01-01T00:00:00Z' },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': { action: 'ignore', alreadyFixed: true, reason: '已修复', failedAttempts: 0, decidedAt: 1 },
+            'src/b.ts:2': { action: 'ignore', reason: '无需修改', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('未 resolved 且缺少无需修复说明时仍进入流程补发', () => {
+    // 与上一用例对照：未 resolved 时补发逻辑保持原有行为
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer', body: 'src/a.ts:1 与 src/b.ts:2 都有问题', createdAt: '2026-01-01T00:00:00Z' },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': { action: 'ignore', alreadyFixed: true, reason: '已修复', failedAttempts: 0, decidedAt: 1 },
+            'src/b.ts:2': { action: 'ignore', reason: '无需修改', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
+  it('无需修复说明补发过一次后熔断，不因行号漂移反复补发', () => {
+    // F4：补发过一次后，远端说明逐条 file:line 匹配仍失败（行号漂移）也不再重复补发
+    const backfilledAt = Date.parse('2026-01-03T00:00:00Z');
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer', body: 'src/a.ts:1 与 src/b.ts:2 都有问题', createdAt: '2026-01-01T00:00:00Z' },
+        {
+          author: 'maintainer',
+          // 说明中只提到 src/a.ts:1（src/b.ts:2 因行号漂移匹配不上）
+          body: '✅ 已修复（无需重复修改）：\n- src/a.ts:1: 已满足要求\n\n---\n*生成于 2026/01/03 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-03T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': { action: 'ignore', alreadyFixed: true, reason: '已修复', failedAttempts: 0, decidedAt: 1 },
+            'src/b.ts:2': { action: 'ignore', reason: '无需修改', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+          noFixExplanationBackfilledAt: backfilledAt,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('补发熔断后出现新人工回复时解除熔断重新进入流程', () => {
+    const backfilledAt = Date.parse('2026-01-03T00:00:00Z');
+    const d = makeDiscussion({
+      notes: [
+        { author: 'reviewer', body: 'src/a.ts:1 与 src/b.ts:2 都有问题', createdAt: '2026-01-01T00:00:00Z' },
+        {
+          author: 'maintainer',
+          body: '✅ 已修复（无需重复修改）：\n- src/a.ts:1: 已满足要求\n\n---\n*生成于 2026/01/03 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-03T00:00:00Z',
+        },
+        { author: 'reviewer', body: 'src/b.ts:2 的说明在哪里？', createdAt: '2026-01-04T00:00:00Z' },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': { action: 'ignore', alreadyFixed: true, reason: '已修复', failedAttempts: 0, decidedAt: 1 },
+            'src/b.ts:2': { action: 'ignore', reason: '无需修改', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+          noFixExplanationBackfilledAt: backfilledAt,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
 });

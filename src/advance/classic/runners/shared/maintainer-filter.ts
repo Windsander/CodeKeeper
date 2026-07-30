@@ -119,6 +119,26 @@ function hasCompleteNoFixExplanation(
 }
 
 /**
+ * 判断「无需修复说明补发」是否已熔断。
+ *
+ * 补发过一次后，若远端说明识别仍失败（常见于行号漂移导致逐条 file:line 匹配不上），
+ * 不再仅因此反复补发；出现新人工回复或决策更新时熔断自动解除。
+ */
+export function isNoFixBackfillCapped(
+  threadState: MaintainerThreadState,
+  lastHumanNoteAt: number
+): boolean {
+  const backfilledAt = threadState.noFixExplanationBackfilledAt;
+  if (!backfilledAt) return false;
+  if (lastHumanNoteAt > backfilledAt) return false;
+  const latestDecisionAt = Object.values(threadState.decisions).reduce(
+    (latest, decision) => Math.max(latest, decision.decidedAt),
+    0
+  );
+  return latestDecisionAt <= backfilledAt;
+}
+
+/**
  * 判断 discussion 是否应该被 Maintainer 处理
  *
  * 核心原则：只有在「有新的非 Maintainer 输入」或「有需要继续重试的失败 fix」时才进入流程。
@@ -145,15 +165,18 @@ export function isDiscussionPending(
   const hasUpdatedSourceNote = sourceNoteUpdatedAt > sourceNoteBaseline;
   const hasPendingDelivery = isDiscussionDeliveryPending(threadState?.delivery);
   const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState) : false;
-  const needsNoFixExplanation = threadState
-    ? !hasCompleteNoFixExplanation(discussion, threadState) && !hasPendingRetry
-    : false;
-  if (hasPendingDelivery || needsNoFixExplanation) return true;
-  if ((discussion.resolved || !discussion.resolvable) && !hasPendingDelivery) {
-    return false;
-  }
-
   const lastHumanNoteAt = getLatestNoteTime(discussion.notes, isHumanNote);
+  const backfillCapped = threadState
+    ? isNoFixBackfillCapped(threadState, lastHumanNoteAt)
+    : false;
+  const needsNoFixExplanation = threadState
+    ? !hasCompleteNoFixExplanation(discussion, threadState) && !hasPendingRetry && !backfillCapped
+    : false;
+  if (hasPendingDelivery) return true;
+  // 已 resolved（或不可 resolve）的 thread 已被闭环：只有未完成的远端投递才允许继续，
+  // 「补发无需修复说明」不足以复活它——人类已接受结论，重复补发只会制造噪音评论。
+  if (discussion.resolved || !discussion.resolvable) return false;
+  if (needsNoFixExplanation) return true;
 
   // 交互式等待回复期间保持静默：只有出现提问之后的新人工回复，
   // 或等待超时需要收尾时，才进入流程，避免每轮轮询空转打日志。
@@ -184,10 +207,6 @@ export function isDiscussionPending(
   if (lastMaintainerNoteAt === 0 && hasConcreteFindingReference(discussion)) {
     return true;
   }
-
-  // 所有 finding 都已判定无需修复，但远端没有对应说明（可能从未发布或被清理）：
-  // 必须重新进入流程补发逐项结论并 resolve，不能只依赖本地决策状态静默跳过。
-  if (needsNoFixExplanation) return true;
 
   // 如果 Maintainer 已经回复/提问过，且之后没有新的人工 note：
   // - 有处理证据（决策记忆/统计报告/非 finding 记录）→ 跳过，防重复回复与自我追问；

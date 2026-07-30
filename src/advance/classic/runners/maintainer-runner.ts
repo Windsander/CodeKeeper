@@ -50,7 +50,7 @@ import {
 } from './shared/review-utils.js';
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { focusedContextToString } from '../fix/focused-context-streamer.js';
-import { isDiscussionPending, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
+import { isDiscussionPending, isNoFixBackfillCapped, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
 import { isCiReviewBody, parseStructuredCiReview } from './shared/ci-review-parser.js';
 import {
   getFindingKey,
@@ -1547,7 +1547,8 @@ export class MaintainerRunner extends BaseRoleRunner {
         existing.failedAttempts < MAX_FIX_RETRY_ATTEMPTS;
       const noFixExplanationMissing =
         existing?.action === 'ignore' &&
-        !this.hasNoFixExplanationForItems(discussion, [`${finding.file}:${finding.line}`]);
+        !this.hasNoFixExplanationForItems(discussion, [`${finding.file}:${finding.line}`]) &&
+        !isNoFixBackfillCapped(threadState, lastHumanNoteAt);
       if (
         existing &&
         !staleFinding &&
@@ -1583,6 +1584,7 @@ export class MaintainerRunner extends BaseRoleRunner {
           state
         );
         console.log(`[MaintainerRunner] finding ${key} 的远端无需修复说明缺失，已补发并 resolve`);
+        threadState.noFixExplanationBackfilledAt = Date.now();
         threadState.lastHumanNoteAt = lastHumanNoteAt;
         recordProcessed();
         return;
@@ -1971,6 +1973,11 @@ export class MaintainerRunner extends BaseRoleRunner {
       if (!summaryResult || summaryResult.replyPosted) {
         threadState.lastSummaryHash = summaryHash;
         threadState.lastSummaryAt = Date.now();
+        // 含无需修复/已修复说明的 summary 发布成功即视为补发完成，
+        // 后续不再仅因远端说明识别失败（如行号漂移）而重复补发。
+        if (noFixItems.length > 0) {
+          threadState.noFixExplanationBackfilledAt = Date.now();
+        }
       } else {
         console.warn(
           `[MaintainerRunner] discussion ${discussion.id} summary 投递未完成，保留 hash 以便下轮重试: ${summaryResult.error ?? '未知错误'}`

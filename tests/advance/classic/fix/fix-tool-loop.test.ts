@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { FixToolLoop } from '../../../../src/advance/classic/fix/fix-tool-loop.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
+import { defaultPromptLoader } from '../../../../src/advance/llm/prompts/loader.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type {
   ReviewFinding,
@@ -298,6 +299,87 @@ describe('FixToolLoop', () => {
       alreadyFixed: true,
       reason: '当前代码已经满足 Reviewer 要求',
     });
+  });
+
+  it('只读上限后回灌回查结论并给最后行动机会，LLM 修改后修复成功', async () => {
+    const loadedPrompts: string[] = [];
+    const spyLoader = {
+      load: (name: string, vars?: Record<string, string>) => {
+        loadedPrompts.push(`${name} ${JSON.stringify(vars ?? {})}`);
+        return defaultPromptLoader.load(name, vars);
+      },
+      register: () => undefined,
+      setAssetDir: () => undefined,
+    };
+    const recheckAlreadyFixed = vi.fn().mockResolvedValue({
+      alreadyFixed: false,
+      reason: '问题仍存在：缺少 TODO 注释',
+      evidence: '第 25 行未见 TODO 标记',
+    });
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts', startLine: 1, endLine: 10 } }] },
+        { toolCalls: [{ id: '2', name: 'read_file', input: { relPath: 'src/index.ts', startLine: 11, endLine: 20 } }] },
+        { toolCalls: [{ id: '3', name: 'read_file', input: { relPath: 'src/index.ts', startLine: 21, endLine: 30 } }] },
+        // 最后行动机会内实际修改
+        { toolCalls: [{ id: '4', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        { toolCalls: [{ id: '5', name: 'finish', input: { success: true, reason: 'done' } }] },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 20,
+      maxReadOnlySteps: 3,
+      readOnlyReminderStep: 2,
+      finalActingSteps: 3,
+      recheckAlreadyFixed,
+      promptLoader: spyLoader,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(true);
+    expect(recheckAlreadyFixed).toHaveBeenCalledTimes(1);
+    // 谢幕消息必须携带回查结论（带诊断谢幕，而非机械暴毙）
+    const finalRound = loadedPrompts.find(entry => entry.startsWith('fix-tool-loop-final-acting-round'));
+    expect(finalRound).toBeDefined();
+    expect(finalRound).toContain('缺少 TODO 注释');
+    expect(finalRound).toContain('第 25 行未见 TODO');
+  });
+
+  it('最后行动机会内仍只读探索则失败，失败原因携带回查结论', async () => {
+    const recheckAlreadyFixed = vi.fn().mockResolvedValue({
+      alreadyFixed: false,
+      reason: '问题仍存在：缺少 TODO 注释',
+      evidence: '第 25 行未见 TODO 标记',
+    });
+    const readResponses = Array.from({ length: 6 }, (_, index) => ({
+      toolCalls: [
+        {
+          id: String(index + 1),
+          name: 'read_file',
+          input: { relPath: 'src/index.ts', startLine: index * 10 + 1, endLine: index * 10 + 10 },
+        },
+      ],
+    }));
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient(readResponses),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      maxSteps: 20,
+      maxReadOnlySteps: 3,
+      readOnlyReminderStep: 2,
+      finalActingSteps: 3,
+      recheckAlreadyFixed,
+    });
+
+    const result = await loop.run();
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('缺少 TODO 注释');
+    expect(result.reason).toContain('第 25 行未见 TODO');
+    expect(result.reason).toContain('最后一轮带诊断的行动机会');
   });
   it('可配置 maxStepsWithoutProgress，缩短无进展早退阈值', async () => {
     const loop = new FixToolLoop({

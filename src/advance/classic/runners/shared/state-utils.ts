@@ -324,6 +324,12 @@ export interface MaintainerThreadState {
   lastSummaryAt?: number;
   /** 上一次发布 summary 的内容哈希，用于去重 */
   lastSummaryHash?: string;
+  /**
+   * 「无需修复说明」补发熔断时间戳。
+   * 补发过一次后置位；此后若远端说明识别仍失败（如行号漂移），
+   * 不再仅因此重复补发——除非有新人工回复或决策更新。
+   */
+  noFixExplanationBackfilledAt?: number;
   /** 当前或最近一次远端回复投递状态 */
   delivery?: DiscussionDeliveryState;
   lastProcessedHeadSha?: string;
