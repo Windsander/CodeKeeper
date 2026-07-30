@@ -17,6 +17,19 @@ import { FixToolLoop } from './fix-tool-loop.js';
 import { formatAgentFooter, MAINTAINER_ROLE_LABEL } from '../runners/shared/review-utils.js';
 import { basename } from 'node:path';
 import { defaultPromptLoader } from '../../llm/prompts/loader.js';
+import {
+  classifyCommitFailure,
+  detectCommitConvention,
+  distillCommitFailure,
+  extractCommitRejectionSection,
+  stripAnsiCodes,
+  buildDefaultFixMessage as pipelineBuildDefaultFixMessage,
+  buildDefaultBatchMessage as pipelineBuildDefaultBatchMessage,
+  buildDefaultDeleteMessage,
+} from './commit-pipeline.js';
+
+// 兼容既有引用（含测试）：从本模块再导出，实现统一收敛到 commit-pipeline
+export { stripAnsiCodes, extractCommitRejectionSection };
 
 export interface MaintainerActorOptions {
   /** GitLab API 提供者 */
@@ -347,8 +360,13 @@ export class MaintainerActor {
         .join('\n');
       if (appliedFiles.size > 0 || deletedFiles.size > 0) {
         console.log(`[MaintainerActor] 阶段=commit-push 批量提交到分支: ${mr.sourceBranch}`);
-        await this.commitWithConventionRetry(mr.sourceBranch, changeDescription, () =>
-          buildDefaultBatchMessage(Array.from(appliedFiles), Array.from(deletedFiles))
+        const baseFinding = fixableItems[0].finding;
+        await this.commitWithConventionRetry(
+          mr.sourceBranch,
+          changeDescription,
+          () => buildDefaultBatchMessage(Array.from(appliedFiles), Array.from(deletedFiles)),
+          distilledFailure =>
+            this.reflowAfterHookFailure(mr, baseFinding, distilledFailure, originalComment)
         );
       }
 
@@ -434,7 +452,9 @@ export class MaintainerActor {
       await this.commitWithConventionRetry(
         mr.sourceBranch,
         `问题: ${finding.message}\n规则: ${finding.ruleId ?? 'N/A'}\n文件: ${finding.file}:${finding.line}`,
-        () => buildDefaultFixMessage(finding)
+        () => buildDefaultFixMessage(finding),
+        distilledFailure =>
+          this.reflowAfterHookFailure(mr, syntheticFinding, distilledFailure, extraSystemPrompt)
       );
 
       const cognitive = decision as CognitiveDecision;
@@ -496,7 +516,8 @@ export class MaintainerActor {
       await this.commitWithConventionRetry(
         mr.sourceBranch,
         changeDescription,
-        () => `移除不应上传的文件 ${basename(finding.file)}`
+        () => buildDefaultDeleteMessage(basename(finding.file)),
+        distilledFailure => this.reflowAfterHookFailure(mr, finding, distilledFailure)
       );
 
       const cognitive = decision as CognitiveDecision;
@@ -673,11 +694,12 @@ export class MaintainerActor {
         `CI pipeline 失败修复。\n失败 job: ${report.failedJobs.map(job => `${job.stage}/${job.name}`).join(', ')}\n修改文件:\n${appliedFiles.map(f => `- ${f}`).join('\n')}`,
         () =>
           [
-            `修复 CI 失败（${report.failedJobs.map(job => job.name).join(', ')}）`,
+            `fix(ci): 修复 CI 失败（${report.failedJobs.map(job => job.name).join(', ')}）`,
             '',
             '修改文件：',
             ...appliedFiles.map(f => `- ${f}`),
-          ].join('\n')
+          ].join('\n'),
+        distilledFailure => this.reflowAfterHookFailure(mr, syntheticFinding, distilledFailure)
       );
 
       return { codeApplied: true, reason: 'CI 修复已推送至 source branch', appliedFiles };
@@ -781,13 +803,18 @@ export class MaintainerActor {
   }
 
   /**
-   * 提交并推送；若被项目 hook 以提交信息规范为由拒绝，
-   * 让 LLM 根据尾部诊断理解该项目的实际规则，生成替代 message 并重试一次。
+   * 提交并推送（提交管道）。
+   *
+   * 失败时先由框架机械预处理：归类（commit-message/lint/test/typecheck/permission/push）+
+   * 蒸馏（≤10 行诊断）。commit-message 类按项目规则重写 message 重试一次；
+   * lint/test/typecheck 类通过 reflow 回流修复循环、修复后重试一次；
+   * 其余情况只把蒸馏诊断抛给上层——发布到 MR 的永远不是 hook 原文。
    */
   private async commitWithConventionRetry(
     branch: string,
     changeDescription: string,
-    buildDefaultMessage: () => string
+    buildDefaultMessage: () => string,
+    reflow?: (distilledFailure: string) => Promise<boolean>
   ): Promise<void> {
     const wm = this.options.worktreeManager;
     const message = await this.buildCommitMessage(changeDescription, buildDefaultMessage);
@@ -795,27 +822,82 @@ export class MaintainerActor {
       await wm.commitAndPush(branch, message, { setUpstream: false });
       return;
     } catch (err) {
-      const errorText = err instanceof Error ? err.message : String(err);
-      const diagnostic = extractCommitRejectionSection(stripAnsiCodes(errorText));
-      const diagnosticPreview = diagnostic.length > 1000 ? `…${diagnostic.slice(-1000)}` : diagnostic;
-      console.warn(
-        `[MaintainerActor] commit 被拒绝，尝试从 hook 尾部诊断恢复提交信息: ${diagnosticPreview}`
-      );
-      const recovery = await this.recoverCommitMessage(
-        diagnostic,
-        message,
-        changeDescription,
-        branch
-      );
-      if (!recovery) {
-        // 拒绝原因与提交信息格式无关（如 lint/测试失败），不重试
-        throw err;
+      const rawText = err instanceof Error ? err.message : String(err);
+      const kind = classifyCommitFailure(rawText);
+      const distilled = distillCommitFailure(rawText);
+      console.warn(`[MaintainerActor] commit 失败（分类=${kind}），蒸馏诊断:\n${distilled}`);
+
+      if (kind === 'commit-message') {
+        const diagnostic = extractCommitRejectionSection(stripAnsiCodes(rawText));
+        const recovery = await this.recoverCommitMessage(
+          diagnostic,
+          message,
+          changeDescription,
+          branch
+        );
+        if (recovery) {
+          await wm.commitAndPush(branch, recovery.message, { setUpstream: false });
+          this.commitConvention = recovery.convention;
+          this.commitConventionLoaded = true;
+          await this.rememberCommitConvention(recovery.convention);
+          return;
+        }
       }
-      await wm.commitAndPush(branch, recovery.message, { setUpstream: false });
-      this.commitConvention = recovery.convention;
-      this.commitConventionLoaded = true;
-      await this.rememberCommitConvention(recovery.convention);
+
+      // L3：lint/test/typecheck 类拒绝回流修复循环一次，有新变更则重试提交
+      if ((kind === 'lint' || kind === 'test' || kind === 'typecheck') && reflow) {
+        console.log(`[MaintainerActor] ${kind} 类 hook 失败回流修复循环`);
+        const changed = await reflow(distilled);
+        if (changed) {
+          await wm.commitAndPush(branch, message, { setUpstream: false });
+          return;
+        }
+        console.warn(`[MaintainerActor] 回流未产生新文件变更，不再重试提交`);
+      }
+
+      throw new Error(distilled);
     }
+  }
+
+  /**
+   * L3：hook lint/test 类拒绝后的修复回流。
+   * 用蒸馏诊断构造合成 finding，驱动一轮标准 FixToolLoop 消除校验错误；
+   * 返回是否产生了新的文件变更（有变更才值得重试提交）。
+   */
+  private async reflowAfterHookFailure(
+    mr: MergeRequest,
+    baseFinding: ReviewFinding,
+    distilledFailure: string,
+    extraSystemPrompt?: string
+  ): Promise<boolean> {
+    const reflowFinding: ReviewFinding = {
+      ...baseFinding,
+      line: 1,
+      message: `pre-commit hook 校验未通过：${distilledFailure}`,
+      suggestion: '根据蒸馏诊断修复 lint/test/typecheck 错误，使本地校验通过',
+      autoFixable: true,
+    };
+    const loop = new FixToolLoop({
+      llmClient: this.options.llmClient,
+      worktreeManager: this.options.worktreeManager,
+      finding: reflowFinding,
+      mr,
+      memoryClient: this.options.memoryClient,
+      recallPlanner: this.options.recallPlanner,
+      extraSystemPrompt: [
+        '此前修复已完成，但提交被 pre-commit hook 拒绝。以下是框架蒸馏后的失败诊断，请据此消除校验错误后 finish：',
+        distilledFailure,
+        extraSystemPrompt ?? '',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(reflowFinding),
+    });
+    const result = await loop.run();
+    console.log(
+      `[MaintainerActor] hook 失败回流结果: success=${result.success}, reason=${result.reason}`
+    );
+    return loop.getAppliedFiles().length > 0 || loop.getDeletedFiles().length > 0;
   }
 
   /** 按已记忆的项目规范生成提交信息；无规范时使用朴素默认 */
@@ -864,27 +946,42 @@ export class MaintainerActor {
     return buildDefaultMessage();
   }
 
-  /** 从项目记忆召回提交信息规范（实例级缓存） */
+  /**
+   * 提交规范三级兜底：EverOS 记忆 → 仓库静态探测（commitlint/husky）→ 调用方的合规默认。
+   * 实例级缓存，避免每次提交都召回记忆/扫描磁盘。
+   */
   private async getCommitConvention(): Promise<string | undefined> {
     if (this.commitConventionLoaded) {
       return this.commitConvention;
     }
     this.commitConventionLoaded = true;
     const memory = this.options.memoryClient;
-    if (!memory) {
-      return undefined;
+    if (memory) {
+      try {
+        const recalled = await memory.recallProjectKnowledge(
+          'commit message 提交信息规范 convention git 提交格式'
+        );
+        this.commitConvention = recalled.find(
+          item => typeof item === 'string' && /commit|提交/i.test(item)
+        );
+      } catch (err) {
+        console.warn(
+          `[MaintainerActor] 召回提交规范记忆失败: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     }
-    try {
-      const recalled = await memory.recallProjectKnowledge(
-        'commit message 提交信息规范 convention git 提交格式'
-      );
-      this.commitConvention = recalled.find(
-        item => typeof item === 'string' && /commit|提交/i.test(item)
-      );
-    } catch (err) {
-      console.warn(
-        `[MaintainerActor] 召回提交规范记忆失败: ${err instanceof Error ? err.message : String(err)}`
-      );
+    if (!this.commitConvention) {
+      // 第二级：静态探测仓库 hook/lint 配置，命中即视为 Conventional Commits 项目
+      try {
+        this.commitConvention = detectCommitConvention(this.options.worktreeManager.getWorktreePath());
+        if (this.commitConvention) {
+          console.log(`[MaintainerActor] 静态探测到项目提交规范: ${this.commitConvention}`);
+        }
+      } catch (err) {
+        console.warn(
+          `[MaintainerActor] 静态探测提交规范失败: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     }
     return this.commitConvention;
   }
@@ -980,19 +1077,6 @@ export class MaintainerActor {
   }
 }
 
-/** 去除 ANSI 转义码，避免 hook 输出中的颜色控制字符干扰规范提取 */
-export function stripAnsiCodes(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-}
-
-/** 保留 hook 输出尾部诊断，避免前置 lint/test 日志淹没最终拒绝原因 */
-export function extractCommitRejectionSection(text: string): string {
-  const normalized = text.replace(/\r\n?/g, '\n').trimEnd();
-  const tailLines = normalized.split('\n').slice(-120).join('\n');
-  return tailLines.slice(-8000);
-}
-
 /** 清理模型生成的提交信息，保留项目自定义格式但移除不可见空字符 */
 function normalizeGeneratedCommitMessage(message: string | undefined): string | undefined {
   const normalized = message?.replace(/\0/g, '').replace(/\r\n?/g, '\n').trim();
@@ -1009,27 +1093,19 @@ function sanitizeCommitSubject(message: string): string {
 }
 
 /**
- * 朴素默认提交信息：不预设任何项目格式。
- * 若目标项目 hook 拒绝，会触发提交规范学习并重试。
+ * 合规默认提交信息：Conventional Commits 形态（第三级兜底）。
+ * 若项目实际规范不同，hook 拒绝后会触发规范学习并按项目规则重写。
  */
 function buildDefaultFixMessage(finding: ReviewFinding): string {
-  return [
-    sanitizeCommitSubject(finding.message),
-    '',
-    `规则: ${finding.ruleId ?? 'N/A'}`,
-    `文件: ${finding.file}:${finding.line}`,
-  ].join('\n');
+  return pipelineBuildDefaultFixMessage({
+    message: sanitizeCommitSubject(finding.message),
+    ruleId: finding.ruleId,
+    file: finding.file,
+    line: finding.line,
+  });
 }
 
-/** 朴素默认批量提交信息 */
+/** 合规默认批量提交信息 */
 function buildDefaultBatchMessage(appliedFiles: string[], deletedFiles: string[]): string {
-  const total = appliedFiles.length + deletedFiles.length;
-  const lines = [`批量修复 ${total} 个 Reviewer 问题`, ''];
-  if (appliedFiles.length > 0) {
-    lines.push('修改文件：', ...appliedFiles.map(f => `- ${f}`), '');
-  }
-  if (deletedFiles.length > 0) {
-    lines.push('删除文件：', ...deletedFiles.map(f => `- ${f}`), '');
-  }
-  return lines.join('\n');
+  return pipelineBuildDefaultBatchMessage(appliedFiles, deletedFiles);
 }

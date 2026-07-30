@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   MaintainerActor,
   stripAnsiCodes,
@@ -39,12 +39,21 @@ const mockMR: MergeRequest = {
   webUrl: '',
 };
 
-const mockDiscussion: Discussion = {
-  id: 'd-1',
-  resolvable: true,
-  resolved: false,
-  notes: [],
-};
+/**
+ * 每个用例使用独立的 discussion 夹具。
+ * deliverDiscussionReply 会就地写入 resolved/notes，模块级共享对象会跨用例污染，
+ * 导致后续用例因 discussion.resolved 已为 true 而断言不到 resolveDiscussion 调用。
+ */
+let mockDiscussion: Discussion;
+
+beforeEach(() => {
+  mockDiscussion = {
+    id: 'd-1',
+    resolvable: true,
+    resolved: false,
+    notes: [],
+  };
+});
 
 const mockFinding: ReviewFinding = {
   severity: 'MEDIUM',
@@ -460,9 +469,10 @@ describe('MaintainerActor', () => {
       expect.stringContaining('移除不应上传的文件'),
       { setUpstream: false }
     );
+    // F2：无项目记忆/静态探测命中时，默认提交信息也必须具备合规形态
     expect(worktreeManager.commitAndPush).toHaveBeenCalledWith(
       'feature/test',
-      expect.not.stringMatching(/^[a-z]+(?:\([^)]*\))?:\s/i),
+      expect.stringMatching(/^chore\(review\): 移除不应上传的文件/),
       { setUpstream: false }
     );
     expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
@@ -668,5 +678,87 @@ describe('提交信息输出预处理', () => {
     const extracted = extractCommitRejectionSection(text);
     expect(extracted).not.toContain('完全无关的日志内容 0\n');
     expect(extracted).toContain('完全无关的日志内容 149');
+  });
+});
+
+describe('提交管道（F3/L3）', () => {
+  it('lint 类 hook 失败回流修复循环，消除错误后重试提交成功', async () => {
+    const lintFailure =
+      'Worktree commit 失败:\nsrc/index.ts\n  2:7  error  no-unused-vars\n✖ 3 problems (3 errors, 0 warnings)';
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValueOnce(new Error(lintFailure))
+      .mockResolvedValue(undefined);
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi
+        .fn()
+        .mockResolvedValue({ alreadyFixed: false, reason: '校验错误仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      // 第一轮修复：改文件 + finish
+      { toolCalls: [{ id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+      // 回流轮：根据蒸馏诊断再改 + finish
+      { toolCalls: [{ id: '3', name: 'write_file', input: { relPath: 'src/index.ts', content: 'lint-fixed' } }] },
+      { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'lint done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+
+    const result = await actor.executeBatchFix(
+      mockMR,
+      [{ finding: mockFinding, fileContent: 'const unused = 1;' }],
+      'Reviewer 要求删除未使用变量'
+    );
+
+    expect(result.success).toBe(true);
+    expect(commitAndPush).toHaveBeenCalledTimes(2);
+  });
+
+  it('permission 类失败不回流不重试，错误为 ≤10 行蒸馏诊断而非原文', async () => {
+    const noise = Array.from({ length: 200 }, (_, i) => `第 ${i} 行 hook 日志输出`).join('\n');
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValue(new Error(`${noise}\nremote: Permission to repo denied (403).`));
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi
+        .fn()
+        .mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      { toolCalls: [{ id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '删除未使用变量',
+      fixDescription: '删除未使用变量',
+      analysis: '存在未使用变量',
+      consideredOptions: ['删除'],
+      reasoning: '删除更干净',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(mockMR, mockDiscussion, mockFinding, decision, createState());
+
+    expect(result.codeApplied).toBe(false);
+    expect(commitAndPush).toHaveBeenCalledTimes(1);
+    expect(result.error).toContain('【提交失败分类: permission】');
+    expect(result.error).not.toContain('第 0 行 hook 日志输出');
+    expect(result.error?.split('\n').length).toBeLessThanOrEqual(10);
   });
 });
