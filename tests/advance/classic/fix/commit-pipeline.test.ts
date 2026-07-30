@@ -1,7 +1,7 @@
 /**
  * commit-pipeline 单元测试
  *
- * 夹具取材自 example_desktop MR !1558 的真实失败现场（见回归文档）。
+ * 夹具取材自真实 MR 的失败现场（已按 RULES §3 脱敏，见回归文档）。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -20,7 +20,7 @@ import {
 const CONVENTIONAL = /^[a-z]+(?:\([^)]*\))?:\s/i;
 
 describe('classifyCommitFailure', () => {
-  it('!1558 现场：几千行 lint 噪音尾部的 commit-msg 拒绝归类为 commit-message', () => {
+  it('真实现场：几千行 lint 噪音尾部的 commit-msg 拒绝归类为 commit-message', () => {
     const lintNoise = Array.from(
       { length: 500 },
       (_, i) => `src/some/file-${i}.ts\n  ${i}:26  warning  Forbidden non-null assertion`

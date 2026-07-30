@@ -1,14 +1,14 @@
 /**
  * ask-gate 单元测试（L2）
  *
- * 正面夹具取材自 example_desktop MR !1558 的真实索问。
+ * 正面夹具取材自真实 MR 的索问（已按 RULES §3 脱敏）。
  */
 
 import { describe, it, expect } from 'vitest';
 import { isSelfAnswerableQuestion, isRepoContentReply } from '../../../../src/advance/classic/fix/ask-gate.js';
 
 describe('isSelfAnswerableQuestion', () => {
-  it('!1558 现场：索要仓库内文件内容被拦截', () => {
+  it('真实现场：索要仓库内文件内容被拦截', () => {
     expect(
       isSelfAnswerableQuestion(
         '请提供 packages/example-memory/src/core/foundation/telemetry/tracker.ts 文件的内容，以便分析全局 tracker 的当前实现，以及评估三种修复方案对 telemetry 模块的影响。'

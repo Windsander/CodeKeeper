@@ -1,9 +1,10 @@
 /**
- * G2：MR !1558 真实快照回放 harness
+ * G2：真实 MR 快照回放 harness
  *
- * 数据来源：tests/fixtures/mr-1558/discussions.json
+ * 数据来源：tests/fixtures/real-mr-snapshot/discussions.json
  * 由 .tmp-mr-analysis/extract_fixture.py 从 GitLab 页面快照（2026-07-30 抓取）提取，
- * 快照本身体积过大不入库；fixture 保留了全部 25 条讨论的评论时间线。
+ * 快照本身体积过大不入库；fixture 保留了全部 25 条讨论的评论时间线，
+ * 已按 RULES §3 去品牌化/去真实路径脱敏（.tmp-mr-analysis/sanitize_fixture.py）。
  *
  * 该 MR 曾暴露三类 Maintainer 失控模式，本 harness 用真实评论正文做回归断言：
  * 1. 重复评论：已发过「✅ 已修复」的 discussion 被再次补发 already-fixed 说明
@@ -35,7 +36,7 @@ import {
 
 const FIXTURE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
-  '../../../fixtures/mr-1558/discussions.json'
+  '../../../fixtures/real-mr-snapshot/discussions.json'
 );
 
 interface FixtureNote {
@@ -86,7 +87,7 @@ function baselinedState(d: FixtureDiscussion): Pick<
   };
 }
 
-describe('MR !1558 fixture 完整性', () => {
+describe('真实 MR fixture 完整性', () => {
   it('覆盖 25 条讨论与关键失控场景', () => {
     expect(fixture).toHaveLength(25);
     // 重复 already-fixed 补发的两条讨论
@@ -142,7 +143,7 @@ describe('过滤层回放：闭环讨论不复活', () => {
     const threadState: MaintainerThreadState = {
       decisions: {
         // 行号漂移场景：note 正文匹配不到该 fileLine，识别不完整
-        'docs/internal/plans/2026-06-24-memory-telemetry-plan.md:99': {
+        'docs/internal/plans/2026-06-24-telemetry-plan.md:99': {
           action: 'ignore',
           alreadyFixed: true,
           reason: '文件已删除',
@@ -168,7 +169,7 @@ describe('过滤层回放：闭环讨论不复活', () => {
     const backfilledAt = Date.parse(d.notes[2].at!);
     const threadState: MaintainerThreadState = {
       decisions: {
-        'docs/internal/specs/2026-06-24-memory-telemetry-design.md:1': {
+        'docs/internal/specs/2026-06-24-telemetry-design.md:1': {
           action: 'ignore',
           alreadyFixed: true,
           reason: '文件已删除',
