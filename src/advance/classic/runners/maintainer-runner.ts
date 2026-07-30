@@ -51,6 +51,8 @@ import {
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { focusedContextToString } from '../fix/focused-context-streamer.js';
 import { isDiscussionPending, isNoFixBackfillCapped, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
+import { isSelfAnswerableQuestion } from '../fix/ask-gate.js';
+import { sanitizeEverOSId } from '../memory/types.js';
 import { isCiReviewBody, parseStructuredCiReview } from './shared/ci-review-parser.js';
 import {
   getFindingKey,
@@ -1619,6 +1621,29 @@ export class MaintainerRunner extends BaseRoleRunner {
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
       );
 
+      // M7：Reviewer 推翻了此前的「无需修复/已修复」判断，写入反思供 already-fixed 回查参考
+      if (
+        existing?.action === 'ignore' &&
+        hasNewHumanNote &&
+        decision.action === 'fix' &&
+        memoryClient
+      ) {
+        try {
+          await memoryClient.recordReflection({
+            caseKey: sanitizeEverOSId(`case-mr-${mr.iid}-${finding.file}-${finding.line}`),
+            reflection:
+              `此前判断为无需修复/已修复（${existing.reason}），` +
+              `Reviewer 新回复后重新判断为需要修复（${decision.reason}）。` +
+              `后续 already-fixed 回查应参考本次推翻，避免重复误判。`,
+            outcome: 'failure',
+          });
+          console.log(`[MaintainerRunner] finding ${key} 判断被推翻，已写入反思记忆`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[MaintainerRunner] 判断推翻反思写入失败，继续处理: ${message}`);
+        }
+      }
+
       // 人工新回复触发的重评估：若结论与历史一致，不重复回复，仅刷新状态
       if (
         existing &&
@@ -1827,9 +1852,32 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
 
       if (decision.action === 'ask') {
+        const question = decision.question ?? decision.reason;
+        // L2 ask 门禁：仓库内可自查的索问不进入提问汇总，转为修复自查项
+        if (decision.question && isSelfAnswerableQuestion(decision.question)) {
+          console.log(
+            `[MaintainerRunner] ask 门禁拦截 ${key} 的仓库内可自查索问，转为修复自查: ${decision.question}`
+          );
+          threadState.decisions[key].action = 'fix';
+          fixableItems.push({
+            finding: {
+              ...finding,
+              suggestion: [
+                finding.suggestion ?? '',
+                `（框架门禁：原提问被判定为仓库内可自行查阅，禁止向 Reviewer 索要文件内容/代码片段；请自行读取相关代码后完成修复：${decision.question}）`,
+              ]
+                .filter(Boolean)
+                .join('\n'),
+            },
+            fileContent: focusedContextToString(focusedContent),
+            scope: decision.scope,
+            deleteFile: decision.deleteFile,
+          });
+          continue;
+        }
         askedItems.push({
           fileLine: `${finding.file}:${finding.line}`,
-          text: decision.question ?? decision.reason,
+          text: question,
         });
         continue;
       }

@@ -27,6 +27,7 @@ import {
   buildDefaultBatchMessage as pipelineBuildDefaultBatchMessage,
   buildDefaultDeleteMessage,
 } from './commit-pipeline.js';
+import { isSelfAnswerableQuestion } from './ask-gate.js';
 
 // 兼容既有引用（含测试）：从本模块再导出，实现统一收敛到 commit-pipeline
 export { stripAnsiCodes, extractCommitRejectionSection };
@@ -113,6 +114,30 @@ export class MaintainerActor {
       }
       case 'ask': {
         const question = decision.question ?? defaultPromptLoader.load('maintainer-ask-clarify');
+        // L2 ask 门禁：仓库内可自查的索问不出现在 MR 上，转为修复自查；
+        // 自查失败才退回提问，且使用修复失败模板而非原索问。
+        if (decision.question && isSelfAnswerableQuestion(decision.question)) {
+          console.log(
+            `[MaintainerActor] ask 门禁拦截仓库内可自查的索问，转为修复自查: ${decision.question}`
+          );
+          decision.action = 'fix';
+          decision.fixDescription = [
+            decision.fixDescription,
+            `原提问被框架门禁拦截（所索信息在仓库内可自行查阅，禁止向 Reviewer 索要文件内容/代码片段）：${decision.question}`,
+          ]
+            .filter(Boolean)
+            .join('\n');
+          const result = await this.executeFix(mr, discussion, finding, decision, state);
+          if (!result.codeApplied) {
+            const fallbackQuestion = defaultPromptLoader.load('maintainer-fix-failed-ask', {
+              fileLine: `${finding.file}:${finding.line}`,
+            });
+            decision.question = fallbackQuestion;
+            const askResult = await this.ask(mr, discussion, fallbackQuestion, finding.file, state);
+            return this.mergeActionResults(result, askResult, false);
+          }
+          return result;
+        }
         return this.ask(mr, discussion, question, finding.file, state);
       }
       case 'ignore': {
@@ -317,6 +342,7 @@ export class MaintainerActor {
         }
 
         if (!result.success) {
+          await this.recordFixOutcome(mr.iid, finding, false, result.reason);
           return {
             success: false,
             reason: result.reason,
@@ -436,6 +462,7 @@ export class MaintainerActor {
       );
 
       if (fixResult.alreadyFixed) {
+        await this.recordFixOutcome(mr.iid, finding, true, `already-fixed: ${fixResult.reason}`);
         decision.action = 'ignore';
         decision.alreadyFixed = true;
         decision.reason = fixResult.reason;
@@ -445,6 +472,7 @@ export class MaintainerActor {
       }
 
       if (!fixResult.success) {
+        await this.recordFixOutcome(mr.iid, finding, false, fixResult.reason);
         return this.emptyActionResult(false, fixResult.reason);
       }
 
@@ -471,10 +499,12 @@ export class MaintainerActor {
       if (delivery.resolved) {
         console.log(`[MaintainerActor] 已修复并 resolve discussion ${discussion.id}`);
       }
+      await this.recordFixOutcome(mr.iid, finding, true, '修复已推送并回复');
       return this.withDeliveryResult(true, delivery);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       console.error(`[MaintainerActor] 修复异常: ${reason}`);
+      await this.recordFixOutcome(mr.iid, finding, false, reason);
       return this.emptyActionResult(false, reason);
     }
   }
@@ -856,6 +886,34 @@ export class MaintainerActor {
       }
 
       throw new Error(distilled);
+    }
+  }
+
+  /**
+   * M7：修复循环终局写入 EverOS（成功/失败都记录，失败原因含模式线索）。
+   * 与 brain.decide 的决策级记录互补：这里记录的是修复循环的真实结果。
+   */
+  private async recordFixOutcome(
+    mrIid: number,
+    finding: ReviewFinding,
+    success: boolean,
+    reason: string
+  ): Promise<void> {
+    const memory = this.options.memoryClient;
+    if (!memory) {
+      return;
+    }
+    try {
+      await memory.recordFixAttempt({
+        mrIid,
+        file: finding.file,
+        line: finding.line,
+        success,
+        reason: `outcome:${success ? 'success' : 'failure'} | ${reason}`.slice(0, 1500),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerActor] 修复终局记忆写入失败: ${message}`);
     }
   }
 

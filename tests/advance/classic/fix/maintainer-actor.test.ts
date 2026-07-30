@@ -762,3 +762,132 @@ describe('提交管道（F3/L3）', () => {
     expect(result.error?.split('\n').length).toBeLessThanOrEqual(10);
   });
 });
+
+describe('ask 门禁（L2）与修复终局插桩（M7）', () => {
+  it('仓库内可自查的索问被门禁拦截，转为修复自查且不发布原索问', async () => {
+    const provider = createMockProvider();
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi
+        .fn()
+        .mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      { toolCalls: [{ id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'ask',
+      reason: '需要文件内容才能分析',
+      question: '请提供 src/index.ts 文件的内容，以便分析当前实现。',
+      analysis: '缺少文件内容',
+      consideredOptions: ['索要文件'],
+      reasoning: '没有文件无法分析',
+      confidence: 'low',
+    };
+
+    const result = await actor.applyDecision(mockMR, mockDiscussion, mockFinding, decision, createState());
+
+    // 门禁后转为修复：走了 commit，且从未把原索问发布到 MR
+    expect(result.codeApplied).toBe(true);
+    expect(worktreeManager.commitAndPush).toHaveBeenCalled();
+    const postedBodies = provider.addDiscussionNote.mock.calls.map(call => String(call[2]));
+    expect(postedBodies.some(body => body.includes('请提供 src/index.ts 文件的内容'))).toBe(false);
+  });
+
+  it('修复循环失败时写入 EverOS 终局记录（outcome:failure）', async () => {
+    const memoryClient = {
+      context: { projectId: 'p1' },
+      recordFixAttempt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IMemoryClient;
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi
+        .fn()
+        .mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      { toolCalls: [{ id: '1', name: 'finish', input: { success: false, reason: '无法定位根因' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+      memoryClient,
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '修复未使用变量',
+      fixDescription: '删除未使用变量',
+      analysis: '存在未使用变量',
+      consideredOptions: ['删除'],
+      reasoning: '删除更干净',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(mockMR, mockDiscussion, mockFinding, decision, createState());
+
+    expect(result.codeApplied).toBe(false);
+    expect(memoryClient.recordFixAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mrIid: mockMR.iid,
+        file: mockFinding.file,
+        success: false,
+        reason: expect.stringContaining('outcome:failure'),
+      })
+    );
+  });
+
+  it('修复成功时写入 EverOS 终局记录（outcome:success）', async () => {
+    const memoryClient = {
+      context: { projectId: 'p1' },
+      recordFixAttempt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IMemoryClient;
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi
+        .fn()
+        .mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      { toolCalls: [{ id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+      memoryClient,
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '修复未使用变量',
+      fixDescription: '删除未使用变量',
+      analysis: '存在未使用变量',
+      consideredOptions: ['删除'],
+      reasoning: '删除更干净',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(mockMR, mockDiscussion, mockFinding, decision, createState());
+
+    expect(result.codeApplied).toBe(true);
+    expect(memoryClient.recordFixAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        reason: expect.stringContaining('outcome:success'),
+      })
+    );
+  });
+});
