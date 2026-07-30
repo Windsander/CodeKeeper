@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isDiscussionPending } from '../../../../../src/advance/classic/runners/shared/maintainer-filter.js';
+import { isDiscussionPending, isJudgmentFlipped } from '../../../../../src/advance/classic/runners/shared/maintainer-filter.js';
 import type { Discussion } from '../../../../../src/advance/classic/provider/types.js';
-import type { MrAgentState } from '../../../../../src/advance/classic/runners/shared/state-utils.js';
+import type { MrAgentState, MaintainerFindingDecision } from '../../../../../src/advance/classic/runners/shared/state-utils.js';
 
 function makeDiscussion(overrides: Partial<Discussion> = {}): Discussion {
   return {
@@ -712,5 +712,45 @@ describe('isDiscussionPending', () => {
       },
     });
     expect(isDiscussionPending(d, state)).toBe(true);
+  });
+});
+
+describe('isJudgmentFlipped（M7 推翻判定）', () => {
+  const ignoreDecision: MaintainerFindingDecision = {
+    action: 'ignore',
+    reason: '此前判断无需修复',
+    failedAttempts: 0,
+    decidedAt: 1,
+  };
+
+  it('ignore + 新人工回复 + 新决策 fix → 判定为推翻', () => {
+    expect(isJudgmentFlipped(ignoreDecision, true, 'fix')).toBe(true);
+  });
+
+  it('alreadyFixed 的 ignore 被推翻同样成立', () => {
+    expect(isJudgmentFlipped({ ...ignoreDecision, alreadyFixed: true }, true, 'fix')).toBe(true);
+  });
+
+  it('无新人工回复不判定为推翻（Agent 自动重扫不带新信息）', () => {
+    expect(isJudgmentFlipped(ignoreDecision, false, 'fix')).toBe(false);
+  });
+
+  it('此前是 fix 决策不算推翻', () => {
+    const fixDecision: MaintainerFindingDecision = {
+      action: 'fix',
+      reason: '此前修复失败',
+      failedAttempts: 1,
+      decidedAt: 1,
+    };
+    expect(isJudgmentFlipped(fixDecision, true, 'fix')).toBe(false);
+  });
+
+  it('新决策仍是 ignore/ask 不算推翻', () => {
+    expect(isJudgmentFlipped(ignoreDecision, true, 'ignore')).toBe(false);
+    expect(isJudgmentFlipped(ignoreDecision, true, 'ask')).toBe(false);
+  });
+
+  it('无历史决策不算推翻', () => {
+    expect(isJudgmentFlipped(undefined, true, 'fix')).toBe(false);
   });
 });

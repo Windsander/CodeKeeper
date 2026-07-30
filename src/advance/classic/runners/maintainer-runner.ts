@@ -50,7 +50,7 @@ import {
 } from './shared/review-utils.js';
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { focusedContextToString } from '../fix/focused-context-streamer.js';
-import { isDiscussionPending, isNoFixBackfillCapped, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
+import { isDiscussionPending, isNoFixBackfillCapped, isJudgmentFlipped, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
 import { isSelfAnswerableQuestion } from '../fix/ask-gate.js';
 import { sanitizeEverOSId } from '../memory/types.js';
 import { isCiReviewBody, parseStructuredCiReview } from './shared/ci-review-parser.js';
@@ -1622,12 +1622,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       );
 
       // M7：Reviewer 推翻了此前的「无需修复/已修复」判断，写入反思供 already-fixed 回查参考
-      if (
-        existing?.action === 'ignore' &&
-        hasNewHumanNote &&
-        decision.action === 'fix' &&
-        memoryClient
-      ) {
+      if (isJudgmentFlipped(existing, hasNewHumanNote, decision.action) && memoryClient) {
         try {
           await memoryClient.recordReflection({
             caseKey: sanitizeEverOSId(`case-mr-${mr.iid}-${finding.file}-${finding.line}`),

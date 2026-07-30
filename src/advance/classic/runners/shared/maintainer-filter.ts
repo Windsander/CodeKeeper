@@ -139,6 +139,20 @@ export function isNoFixBackfillCapped(
 }
 
 /**
+ * 判断「Reviewer 推翻了此前的无需修复/已修复判断」。
+ *
+ * 此前结论为 ignore（含 alreadyFixed），出现新人工回复后重新决策为 fix——
+ * 说明此前的无需修复判断被人类推翻，应写入反思记忆供 already-fixed 回查参考（M7）。
+ */
+export function isJudgmentFlipped(
+  existing: MaintainerFindingDecision | undefined,
+  hasNewHumanNote: boolean,
+  newAction: MaintainerFindingDecision['action']
+): boolean {
+  return existing?.action === 'ignore' && hasNewHumanNote && newAction === 'fix';
+}
+
+/**
  * 判断 discussion 是否应该被 Maintainer 处理
  *
  * 核心原则：只有在「有新的非 Maintainer 输入」或「有需要继续重试的失败 fix」时才进入流程。
