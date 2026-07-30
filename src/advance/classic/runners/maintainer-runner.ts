@@ -51,7 +51,7 @@ import {
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { focusedContextToString } from '../fix/focused-context-streamer.js';
 import { isDiscussionPending, isNoFixBackfillCapped, isJudgmentFlipped, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
-import { isSelfAnswerableQuestion } from '../fix/ask-gate.js';
+import { isSelfAnswerableQuestion, isRepoContentReply } from '../fix/ask-gate.js';
 import { sanitizeEverOSId } from '../memory/types.js';
 import { isCiReviewBody, parseStructuredCiReview } from './shared/ci-review-parser.js';
 import {
@@ -1158,7 +1158,9 @@ export class MaintainerRunner extends BaseRoleRunner {
             maintainerName,
             state,
             projectRootPath,
-            interactiveFilePath
+            interactiveFilePath,
+            interactiveQuestion,
+            memoryClient
           );
         } catch (error) {
           state.interactiveThreads[discussion.id] = {
@@ -2062,7 +2064,9 @@ export class MaintainerRunner extends BaseRoleRunner {
     maintainerName: string,
     state: MrAgentState,
     projectRootPath: string,
-    filePath: string | undefined
+    filePath: string | undefined,
+    interactiveQuestion?: string,
+    memoryClient?: MemoryClient
   ): Promise<void> {
     if (!filePath) {
       console.warn(
@@ -2104,6 +2108,35 @@ export class MaintainerRunner extends BaseRoleRunner {
       maintainerName,
     });
     console.log(`[MaintainerRunner] LLM 决策: action=${decision.action}`);
+
+    // G7：交互提问获人工回复后直接转修复，若回复内容本是仓库内可查信息，
+    // 说明这次提问疑似漏过了 ask 门禁——作为模式库漏判候选回流 EverOS。
+    if (
+      decision.action === 'fix' &&
+      interactiveQuestion &&
+      !isSelfAnswerableQuestion(interactiveQuestion) &&
+      memoryClient
+    ) {
+      const lastHumanReply = discussion.notes
+        .filter(note => !isAgentAuthoredNote(note.body) && !isBotAuthor(note.author))
+        .sort((a, b) => getCommentActivityAt(b) - getCommentActivityAt(a))[0];
+      if (lastHumanReply && isRepoContentReply(lastHumanReply.body)) {
+        try {
+          await memoryClient.recordReflection({
+            caseKey: sanitizeEverOSId(`ask-gate-miss-mr-${mr.iid}-${discussion.id}`),
+            reflection:
+              `此前向 Reviewer 提问「${interactiveQuestion.slice(0, 200)}」，` +
+              `Reviewer 回复中包含仓库内可查信息（代码/文件路径），随后直接修复（${decision.reason}）。` +
+              `该提问疑似可被 ask 门禁拦截，SELF_ANSWERABLE_PATTERNS 模式库可参考补充。`,
+            outcome: 'failure',
+          });
+          console.log(`[MaintainerRunner] discussion ${discussion.id} 疑似 ask 门禁漏判，已写入反思记忆`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[MaintainerRunner] ask 门禁漏判反思写入失败: ${message}`);
+        }
+      }
+    }
 
     const syntheticFindingForApply: ReviewFinding = {
       severity: 'MEDIUM',

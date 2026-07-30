@@ -33,3 +33,18 @@ export function isSelfAnswerableQuestion(question: string): boolean {
   if (!normalized) return false;
   return SELF_ANSWERABLE_PATTERNS.some(pattern => pattern.test(normalized));
 }
+
+/**
+ * 判断 Reviewer 的回复是否「本身就是仓库内可查信息」（代码块或文件路径引用）。
+ *
+ * 用途（G7）：交互提问收到人工回复后直接转修复，若回复内容其实躺在仓库里，
+ * 说明这次提问疑似本可被门禁拦截——作为漏判候选回流 EverOS 供模式库扩充。
+ * 保守判定：只认代码围栏与带扩展名的文件路径，纯文字方案讨论不算。
+ */
+export function isRepoContentReply(body: string): boolean {
+  if (!body) return false;
+  if (/```/.test(body)) return true;
+  return /[\w@~.-]+(?:\/[\w@~.()-]+)+\.(?:ts|tsx|js|jsx|mts|cts|py|go|java|rs|vue|json|ya?ml|toml|md)(?::\d+)?\b/.test(
+    body
+  );
+}

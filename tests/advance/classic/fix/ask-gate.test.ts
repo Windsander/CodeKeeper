@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isSelfAnswerableQuestion } from '../../../../src/advance/classic/fix/ask-gate.js';
+import { isSelfAnswerableQuestion, isRepoContentReply } from '../../../../src/advance/classic/fix/ask-gate.js';
 
 describe('isSelfAnswerableQuestion', () => {
   it('!1558 现场：索要仓库内文件内容被拦截', () => {
@@ -40,5 +40,26 @@ describe('isSelfAnswerableQuestion', () => {
 
   it('空问题放行', () => {
     expect(isSelfAnswerableQuestion('')).toBe(false);
+  });
+});
+
+
+describe('isRepoContentReply（G7 漏判候选信号）', () => {
+  it('含代码围栏的回复判定为仓库内容', () => {
+    expect(isRepoContentReply('可以直接这样改：\n```ts\nresetTracker(this);\n```')).toBe(true);
+  });
+
+  it('含文件路径引用的回复判定为仓库内容', () => {
+    expect(isRepoContentReply('参考 packages/core/src/tracker.ts:913 的 dispose 实现')).toBe(true);
+    expect(isRepoContentReply('配置在 config/deploy.yaml 里')).toBe(true);
+  });
+
+  it('纯方案讨论/意图澄清回复不判定为仓库内容', () => {
+    expect(isRepoContentReply('保留兼容旧接口，按方案二处理')).toBe(false);
+    expect(isRepoContentReply('这是有意设计，多实例场景允许丢失')).toBe(false);
+  });
+
+  it('空回复不判定为仓库内容', () => {
+    expect(isRepoContentReply('')).toBe(false);
   });
 });
