@@ -1,11 +1,11 @@
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import { logger } from './core/logger.js';
 import { runReview, runLearning } from './index.js';
 import type { ProjectConfig } from './types.js';
 
 interface ScheduledJob {
   task: string;
-  job: cron.ScheduledTask;
+  job: ScheduledTask;
 }
 
 const jobs: ScheduledJob[] = [];
@@ -84,7 +84,6 @@ function scheduleJob(
       }
     },
     {
-      scheduled: true,
       timezone,
     }
   );
