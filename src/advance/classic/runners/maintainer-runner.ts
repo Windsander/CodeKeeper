@@ -427,6 +427,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         memoryClient,
         recallPlanner,
         checkpoint: () => saveState(project, state, 'maintainer'),
+        metrics: lifecycle.metrics,
       });
 
       const reconciliationResults = await this.reconcileTrackedDiscussionDeliveries(
@@ -574,6 +575,16 @@ export class MaintainerRunner extends BaseRoleRunner {
     lifecycle.lastPolledAt = Date.now();
     lifecycle.pollCount += 1;
     return lifecycle;
+  }
+
+  /** 自增一个 M 系列过程指标（M4/M5 由 runner 侧写入） */
+  private incrLifecycleMetric(
+    state: MrAgentState,
+    mr: MergeRequest,
+    key: 'duplicateSummarySkips' | 'askGateInterceptions'
+  ): void {
+    const metrics = this.ensureMrLifecycle(state, mr).metrics;
+    metrics[key] = (metrics[key] ?? 0) + 1;
   }
 
   /**
@@ -1850,6 +1861,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         const question = decision.question ?? decision.reason;
         // L2 ask 门禁：仓库内可自查的索问不进入提问汇总，转为修复自查项
         if (decision.question && isSelfAnswerableQuestion(decision.question)) {
+          this.incrLifecycleMetric(state, mr, 'askGateInterceptions');
           console.log(
             `[MaintainerRunner] ask 门禁拦截 ${key} 的仓库内可自查索问，转为修复自查: ${decision.question}`
           );
@@ -2027,6 +2039,10 @@ export class MaintainerRunner extends BaseRoleRunner {
         );
       }
     } else {
+      // M4：有汇总结果但内容无变化 → 去重生效，命中「已发过、跳过」
+      if (hasResults) {
+        this.incrLifecycleMetric(state, mr, 'duplicateSummarySkips');
+      }
       console.log(
         `[MaintainerRunner] discussion ${discussion.id} summary 无变化或无需发布，跳过（hasResults=${hasResults}, changed=${summaryChanged}）`
       );

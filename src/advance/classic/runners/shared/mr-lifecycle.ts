@@ -63,6 +63,19 @@ export interface MrLifecycleMetrics {
    * 作为「误修」信号：自动修复结论被人工再次质疑。
    */
   humanFollowupsAfterFix: number;
+  // ---- M 系列过程指标（可选，兼容旧归档；达标线见 docs/goals/maintainer-llm-centric-goal.md） ----
+  /** M1 只读熔断前动用了「最后一轮行动机会」的轮数 */
+  readOnlyFinalActingRounds?: number;
+  /** M2 commit 首次尝试即成功（未经合规改写）次数 */
+  commitFirstTryPasses?: number;
+  /** M3 commit 首次尝试被合规校验拒绝、进入兜底改写的次数 */
+  commitFirstTryRejections?: number;
+  /** M4 补发说明/汇总命中「已发过、跳过」的次数（去重生效） */
+  duplicateSummarySkips?: number;
+  /** M5 ask 门禁拦截（自答问题转修复自查）次数 */
+  askGateInterceptions?: number;
+  /** M6 hook 失败（lint/test/typecheck）后回流的次数 */
+  hookFailureReflows?: number;
 }
 
 /** 用户中断指令记录 */

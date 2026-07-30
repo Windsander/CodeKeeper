@@ -399,6 +399,14 @@ export class FixToolLoop {
   }
 
   /**
+   * 本轮 run() 是否动用了「最后一轮行动机会」（只读熔断前的 final acting round）。
+   * 供外部过程指标（readOnlyFinalActingRounds）使用。
+   */
+  wasFinalActingRoundUsed(): boolean {
+    return this.finalActingRoundUsed;
+  }
+
+  /**
    * 估算消息历史的总字符数，用于诊断上下文膨胀。
    * 需覆盖所有部分类型：text、tool_result.content、tool_use.input。
    */

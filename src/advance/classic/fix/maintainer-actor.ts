@@ -9,6 +9,7 @@ import type { IMemoryClient } from '../memory/types.js';
 import type { RecallPlanner } from '../memory/recall-planner.js';
 import type { DiscussionDeliveryResult } from '../runners/shared/discussion-delivery.js';
 import { extractFileCandidatesFromTrace } from '../runners/shared/mr-lifecycle.js';
+import type { MrLifecycleMetrics } from '../runners/shared/mr-lifecycle.js';
 import {
   deliverDiscussionReply,
   isDiscussionDeliveryPending,
@@ -49,6 +50,8 @@ export interface MaintainerActorOptions {
   recallPlanner?: RecallPlanner;
   /** 远端副作用状态变化后的即时 checkpoint */
   checkpoint?: () => void;
+  /** 可选的 M 系列过程指标计数器（M1/M2/M3/M5/M6 由本类自增） */
+  metrics?: MrLifecycleMetrics;
 }
 
 export interface MaintainerActionResult {
@@ -76,6 +79,28 @@ export class MaintainerActor {
   private commitConventionLoaded = false;
 
   constructor(private readonly options: MaintainerActorOptions) {}
+
+  /** 自增一个 M 系列过程指标（metrics 未注入时静默跳过） */
+  private incrMetric(
+    key:
+      | 'readOnlyFinalActingRounds'
+      | 'commitFirstTryPasses'
+      | 'commitFirstTryRejections'
+      | 'askGateInterceptions'
+      | 'hookFailureReflows'
+  ): void {
+    const m = this.options.metrics;
+    if (m) {
+      m[key] = (m[key] ?? 0) + 1;
+    }
+  }
+
+  /** loop.run() 之后检查是否动用了最后一轮行动机会，计入 M1 */
+  private trackFinalActingRound(loop: FixToolLoop): void {
+    if (loop.wasFinalActingRoundUsed()) {
+      this.incrMetric('readOnlyFinalActingRounds');
+    }
+  }
 
   /**
    * 对单条 finding/discussion 应用决策
@@ -117,6 +142,7 @@ export class MaintainerActor {
         // L2 ask 门禁：仓库内可自查的索问不出现在 MR 上，转为修复自查；
         // 自查失败才退回提问，且使用修复失败模板而非原索问。
         if (decision.question && isSelfAnswerableQuestion(decision.question)) {
+          this.incrMetric('askGateInterceptions');
           console.log(
             `[MaintainerActor] ask 门禁拦截仓库内可自查的索问，转为修复自查: ${decision.question}`
           );
@@ -328,6 +354,7 @@ export class MaintainerActor {
         });
 
         const result = await loop.run();
+        this.trackFinalActingRound(loop);
         console.log(
           `[MaintainerActor] finding ${finding.file}:${finding.line} 修复结果: success=${result.success}, reason=${result.reason}`
         );
@@ -457,6 +484,7 @@ export class MaintainerActor {
       });
 
       const fixResult = await loop.run();
+      this.trackFinalActingRound(loop);
       console.log(
         `[MaintainerActor] 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`
       );
@@ -707,6 +735,7 @@ export class MaintainerActor {
       });
 
       const fixResult = await loop.run();
+      this.trackFinalActingRound(loop);
       console.log(`[MaintainerActor] CI 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`);
 
       if (!fixResult.success) {
@@ -850,8 +879,10 @@ export class MaintainerActor {
     const message = await this.buildCommitMessage(changeDescription, buildDefaultMessage);
     try {
       await wm.commitAndPush(branch, message, { setUpstream: false });
+      this.incrMetric('commitFirstTryPasses');
       return;
     } catch (err) {
+      this.incrMetric('commitFirstTryRejections');
       const rawText = err instanceof Error ? err.message : String(err);
       const kind = classifyCommitFailure(rawText);
       const distilled = distillCommitFailure(rawText);
@@ -928,6 +959,7 @@ export class MaintainerActor {
     distilledFailure: string,
     extraSystemPrompt?: string
   ): Promise<boolean> {
+    this.incrMetric('hookFailureReflows');
     const reflowFinding: ReviewFinding = {
       ...baseFinding,
       line: 1,
@@ -952,6 +984,7 @@ export class MaintainerActor {
       recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(reflowFinding),
     });
     const result = await loop.run();
+    this.trackFinalActingRound(loop);
     console.log(
       `[MaintainerActor] hook 失败回流结果: success=${result.success}, reason=${result.reason}`
     );
