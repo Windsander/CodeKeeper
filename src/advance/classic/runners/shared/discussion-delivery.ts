@@ -1,5 +1,6 @@
 import type { Discussion, IGitProvider, MergeRequest } from '../../provider/types.js';
 import type { DiscussionDeliveryState } from './state-utils.js';
+import { compactDiscussionReplyBody, hashDiscussionReplyBody } from './reply-safety.js';
 
 export interface DiscussionDeliveryResult {
   replyPosted: boolean;
@@ -7,15 +8,6 @@ export interface DiscussionDeliveryResult {
   resolved: boolean;
   pending: boolean;
   error?: string;
-}
-
-function stableHash(text: string): string {
-  let hash = 0;
-  for (let index = 0; index < text.length; index++) {
-    hash = (hash << 5) - hash + text.charCodeAt(index);
-    hash |= 0;
-  }
-  return String(hash);
 }
 
 export function isDiscussionDeliveryPending(
@@ -38,31 +30,42 @@ export async function deliverDiscussionReply(params: {
   discussion: Discussion;
   body: string;
   resolve: boolean;
-  awaitingReply?: { question: string; filePath: string };
+  awaitingReply?: { question: string; filePath: string; askedAt?: number };
   delivery: DiscussionDeliveryState | undefined;
   setDelivery: (delivery: DiscussionDeliveryState) => void;
   checkpoint: () => void;
 }): Promise<DiscussionDeliveryResult> {
   const { provider, mr, discussion, resolve, setDelivery, checkpoint } = params;
-  const requestedHash = stableHash(params.body);
-  const reusable = params.delivery?.replyHash === requestedHash ? params.delivery : undefined;
+  const safeBody = compactDiscussionReplyBody(params.body);
+  const requestedHash = hashDiscussionReplyBody(safeBody);
+  const existingSafeBody = params.delivery
+    ? compactDiscussionReplyBody(params.delivery.replyBody)
+    : undefined;
+  const reusable =
+    params.delivery &&
+    (params.delivery.replyHash === requestedHash || existingSafeBody === safeBody)
+      ? params.delivery
+      : undefined;
   const delivery: DiscussionDeliveryState = reusable ?? {
-    replyBody: params.body,
+    replyBody: safeBody,
     replyHash: requestedHash,
     replyStatus: 'pending',
     resolveRequired: resolve,
     resolveStatus: resolve ? 'pending' : 'not-required',
     attempts: 0,
+    createdAt: Date.now(),
     updatedAt: Date.now(),
   };
 
-  delivery.replyBody = reusable?.replyBody ?? params.body;
+  delivery.replyBody = safeBody;
+  delivery.replyHash = requestedHash;
+  delivery.createdAt ??= Date.now();
   delivery.resolveRequired = resolve;
   if (params.awaitingReply) {
     delivery.awaitingReply = true;
     delivery.question = params.awaitingReply.question;
     delivery.filePath = params.awaitingReply.filePath;
-    delivery.awaitingReplyAt ??= Date.now();
+    delivery.awaitingReplyAt ??= params.awaitingReply.askedAt ?? Date.now();
   }
   if (!resolve) delivery.resolveStatus = 'not-required';
   delivery.updatedAt = Date.now();
@@ -70,7 +73,10 @@ export async function deliverDiscussionReply(params: {
   checkpoint();
 
   const existingNote = discussion.notes.find(
-    note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
+    note =>
+      note.id === delivery.replyNoteId ||
+      note.body === delivery.replyBody ||
+      compactDiscussionReplyBody(note.body) === delivery.replyBody
   );
   if (existingNote) {
     delivery.replyStatus = 'posted';

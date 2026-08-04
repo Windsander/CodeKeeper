@@ -65,6 +65,26 @@ function getLatestNoteTime(
   return latest;
 }
 
+function normalizeQuestionForMatch(text: string): string {
+  return text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/** 判断等待中的提问是否仍在远端 discussion 中可见。 */
+export function hasVisibleMaintainerQuestion(
+  discussion: Discussion,
+  askedAt: number,
+  question: string
+): boolean {
+  const normalizedQuestion = normalizeQuestionForMatch(question);
+  if (!normalizedQuestion) return false;
+  const marker = normalizedQuestion.slice(0, 120);
+  return discussion.notes.some(note => {
+    if (!isMaintainerAuthoredNote(note.body)) return false;
+    if (getCommentActivityAt(note) < askedAt - 1000) return false;
+    return normalizeQuestionForMatch(note.body).includes(marker);
+  });
+}
+
 /**
  * 判断一条 note 是否来自真正的人类（非任何 Agent、非自动化 bot）
  */
@@ -180,9 +200,7 @@ export function isDiscussionPending(
   const hasPendingDelivery = isDiscussionDeliveryPending(threadState?.delivery);
   const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState) : false;
   const lastHumanNoteAt = getLatestNoteTime(discussion.notes, isHumanNote);
-  const backfillCapped = threadState
-    ? isNoFixBackfillCapped(threadState, lastHumanNoteAt)
-    : false;
+  const backfillCapped = threadState ? isNoFixBackfillCapped(threadState, lastHumanNoteAt) : false;
   const needsNoFixExplanation = threadState
     ? !hasCompleteNoFixExplanation(discussion, threadState) && !hasPendingRetry && !backfillCapped
     : false;
@@ -199,16 +217,17 @@ export function isDiscussionPending(
     const askedAt = interactive.askedAt;
     // 提问 note 已被删除（如人工清理）时，交互状态已脏：
     // 放行进入流程，让 processDiscussion 清理状态并重新评估
-    const askNoteStillExists = discussion.notes.some(note => {
-      if (!isMaintainerAuthoredNote(note.body)) return false;
-      return getCommentActivityAt(note) >= askedAt - 1000;
-    });
+    const askNoteStillExists = hasVisibleMaintainerQuestion(
+      discussion,
+      askedAt,
+      interactive.question
+    );
     if (!askNoteStillExists) {
       return true;
     }
     const hasNewReply = lastHumanNoteAt > askedAt;
     const timedOut = Date.now() - askedAt > INTERACTIVE_REPLY_TIMEOUT_MS;
-    return hasNewReply || timedOut;
+    return hasPendingRetry || hasNewReply || timedOut;
   }
 
   const lastMaintainerNoteAt = getLatestNoteTime(discussion.notes, note =>

@@ -1,8 +1,14 @@
 import type { GitLabProvider } from '../provider/gitlab-provider.js';
-import type { MergeRequest, ReviewFinding, Discussion, CiFailureReport } from '../provider/types.js';
+import type {
+  MergeRequest,
+  ReviewFinding,
+  Discussion,
+  CiFailureReport,
+} from '../provider/types.js';
 import type { LlmClient } from '../../llm/client.js';
-import type { WorktreeManager } from '../worktree/worktree-manager.js';
+import type { WorktreeChangedFile, WorktreeManager } from '../worktree/worktree-manager.js';
 import type { MaintainerBrain, MaintainerDecision } from './maintainer-brain.js';
+import type { IssueScope } from './issue-scope.js';
 import type { CognitiveDecision } from './cognitive-types.js';
 import type { MrAgentState } from '../runners/shared/state-utils.js';
 import type { IMemoryClient } from '../memory/types.js';
@@ -29,6 +35,7 @@ import {
   buildDefaultDeleteMessage,
 } from './commit-pipeline.js';
 import { isSelfAnswerableQuestion } from './ask-gate.js';
+import { compactDiscussionReason } from '../runners/shared/reply-safety.js';
 
 // 兼容既有引用（含测试）：从本模块再导出，实现统一收敛到 commit-pipeline
 export { stripAnsiCodes, extractCommitRejectionSection };
@@ -61,6 +68,29 @@ export interface MaintainerActionResult {
   awaitingReply: boolean;
   pending: boolean;
   error?: string;
+}
+
+export type BatchFixItemStatus = 'fixed' | 'already-fixed' | 'failed' | 'deferred';
+
+export interface BatchFixItemResult {
+  file: string;
+  line: number;
+  status: BatchFixItemStatus;
+  reason?: string;
+}
+
+export interface BatchFixResult {
+  success: boolean;
+  reason: string;
+  appliedFiles: string[];
+  deletedFiles: string[];
+  alreadyFixedItems: Array<{ file: string; line: number; reason: string }>;
+  itemResults: BatchFixItemResult[];
+}
+
+export interface ApplyDecisionOptions {
+  /** 单次修复失败后是否立即向 Reviewer 求助；Runner 默认自行管理重试次数。 */
+  askOnFixFailure?: boolean;
 }
 
 /**
@@ -102,6 +132,92 @@ export class MaintainerActor {
     }
   }
 
+  /** 修复任务允许坏基线进入工具循环，但依赖安装失败仍然直接中断。 */
+  private async prepareRepairEnvironment(): Promise<string | undefined> {
+    const result = await this.options.worktreeManager.prepareEnvironment({
+      allowCompileFailure: true,
+    });
+    return result?.compilePackagesFailure;
+  }
+
+  /** 把修复前已存在的编译失败明确标记为基线，避免错误归因到当前 finding。 */
+  private buildBaselineFailurePrompt(failure?: string): string | undefined {
+    if (!failure) return undefined;
+    return [
+      '环境准备阶段检测到 source branch 在本轮修改前已经无法通过 compile:packages。',
+      '以下内容属于修复前基线：不要把它归因到当前 finding；如果诊断明确指向当前 finding 的目标文件，可一并消除，否则只确保本轮不新增错误。',
+      compactDiscussionReason(failure, 4_000),
+    ].join('\n\n');
+  }
+
+  private normalizeRepoPath(filePath: string): string {
+    return filePath.replace(/\\/g, '/').replace(/^\.\//, '');
+  }
+
+  /** 优先读取 git status；测试替身未实现时才退回工具循环记录。 */
+  private async listChangedFiles(
+    fallbackApplied: string[] = [],
+    fallbackDeleted: string[] = []
+  ): Promise<WorktreeChangedFile[]> {
+    const manager = this.options.worktreeManager as WorktreeManager & {
+      listChangedFiles?: () => Promise<WorktreeChangedFile[]>;
+    };
+    if (typeof manager.listChangedFiles === 'function') {
+      return (await manager.listChangedFiles()).map(file => ({
+        path: this.normalizeRepoPath(file.path),
+        deleted: file.deleted,
+      }));
+    }
+
+    const changed = new Map<string, WorktreeChangedFile>();
+    for (const filePath of fallbackApplied) {
+      const path = this.normalizeRepoPath(filePath);
+      changed.set(path, { path, deleted: false });
+    }
+    for (const filePath of fallbackDeleted) {
+      const path = this.normalizeRepoPath(filePath);
+      changed.set(path, { path, deleted: true });
+    }
+    return Array.from(changed.values());
+  }
+
+  private async resolveTargetPaths(filePath: string): Promise<Set<string>> {
+    const targets = new Set([this.normalizeRepoPath(filePath)]);
+    try {
+      const resolved = await this.options.worktreeManager.resolveFilePath(filePath);
+      if (resolved) targets.add(this.normalizeRepoPath(resolved));
+    } catch {
+      // 路径解析失败时保留 Reviewer 给出的原始路径做保守校验
+    }
+    return targets;
+  }
+
+  private assertWriteScope(
+    changes: WorktreeChangedFile[],
+    allowedPaths: Set<string>,
+    context: string
+  ): void {
+    const unexpected = changes
+      .map(file => file.path)
+      .filter(filePath => !allowedPaths.has(this.normalizeRepoPath(filePath)));
+    if (unexpected.length > 0) {
+      throw new Error(`${context} 越界修改了非目标文件: ${unexpected.join(', ')}`);
+    }
+  }
+
+  private syncChangedFileSets(
+    changes: WorktreeChangedFile[],
+    appliedFiles: Set<string>,
+    deletedFiles: Set<string>
+  ): void {
+    appliedFiles.clear();
+    deletedFiles.clear();
+    for (const change of changes) {
+      if (change.deleted) deletedFiles.add(change.path);
+      else appliedFiles.add(change.path);
+    }
+  }
+
   /**
    * 对单条 finding/discussion 应用决策
    */
@@ -110,13 +226,15 @@ export class MaintainerActor {
     discussion: Discussion,
     finding: ReviewFinding,
     decision: MaintainerDecision,
-    state: MrAgentState
+    state: MrAgentState,
+    options: ApplyDecisionOptions = {}
   ): Promise<MaintainerActionResult> {
+    const askOnFixFailure = options.askOnFixFailure ?? true;
     switch (decision.action) {
       case 'fix': {
         if (decision.deleteFile) {
           const result = await this.executeDeleteFileFix(mr, discussion, finding, decision, state);
-          if (!result.codeApplied) {
+          if (!result.codeApplied && askOnFixFailure) {
             const question = defaultPromptLoader.load('maintainer-delete-failed-ask', {
               file: finding.file,
             });
@@ -127,7 +245,7 @@ export class MaintainerActor {
           return result;
         }
         const result = await this.executeFix(mr, discussion, finding, decision, state);
-        if (!result.codeApplied) {
+        if (!result.codeApplied && askOnFixFailure) {
           const question = defaultPromptLoader.load('maintainer-fix-failed-ask', {
             fileLine: `${finding.file}:${finding.line}`,
           });
@@ -154,7 +272,7 @@ export class MaintainerActor {
             .filter(Boolean)
             .join('\n');
           const result = await this.executeFix(mr, discussion, finding, decision, state);
-          if (!result.codeApplied) {
+          if (!result.codeApplied && askOnFixFailure) {
             const fallbackQuestion = defaultPromptLoader.load('maintainer-fix-failed-ask', {
               fileLine: `${finding.file}:${finding.line}`,
             });
@@ -183,29 +301,42 @@ export class MaintainerActor {
     askedItems: Array<{ fileLine: string; text: string }>,
     ignoredItems: Array<{ fileLine: string; reason: string }>,
     alreadyFixedItems: Array<{ fileLine: string; reason: string }>,
-    state: MrAgentState
+    state: MrAgentState,
+    deferredItems: string[] = []
   ): Promise<DiscussionDeliveryResult> {
     const sections: string[] = [];
+    const existingAwaiting = state.interactiveThreads?.[discussion.id];
 
     if (fixedItems.length > 0) {
       sections.push(`✅ 已自动修复并推送：\n${fixedItems.map(item => `- ${item}`).join('\n')}`);
     }
     if (alreadyFixedItems.length > 0) {
       sections.push(
-        `✅ 已修复（无需重复修改）：\n${alreadyFixedItems.map(item => `- ${item.fileLine}: ${item.reason}`).join('\n')}`
+        `✅ 已修复（无需重复修改）：\n${alreadyFixedItems.map(item => `- ${item.fileLine}: ${compactDiscussionReason(item.reason)}`).join('\n')}`
       );
     }
     if (failedItems.length > 0) {
-      sections.push(`⏸️ 尝试修复未成功：\n${failedItems.map(item => `- ${item}`).join('\n')}`);
+      sections.push(
+        `⏸️ 尝试修复未成功：\n${failedItems.map(item => `- ${compactDiscussionReason(item)}`).join('\n')}`
+      );
+    }
+    if (deferredItems.length > 0) {
+      sections.push(
+        `⏭️ 本轮暂缓，将继续处理：\n${deferredItems.map(item => `- ${item}`).join('\n')}`
+      );
     }
     if (askedItems.length > 0) {
       sections.push(
         `❓ 需要 Reviewer 澄清：\n${askedItems.map(item => `- ${item.fileLine}: ${item.text}`).join('\n')}`
       );
+    } else if (existingAwaiting) {
+      sections.push(
+        `❓ 仍待 Reviewer 澄清：\n- ${existingAwaiting.filePath || '当前 finding'}: ${existingAwaiting.question}`
+      );
     }
     if (ignoredItems.length > 0) {
       sections.push(
-        `📝 已忽略：\n${ignoredItems.map(item => `- ${item.fileLine}: ${item.reason}`).join('\n')}`
+        `📝 已忽略：\n${ignoredItems.map(item => `- ${item.fileLine}: ${compactDiscussionReason(item.reason)}`).join('\n')}`
       );
     }
 
@@ -216,13 +347,32 @@ export class MaintainerActor {
 
     const body = `${sections.join('\n\n')}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, this.options.maintainerName)}`;
     console.log(
-      `[MaintainerActor] discussion ${discussion.id} 汇总回复 counts=fixed:${fixedItems.length},alreadyFixed:${alreadyFixedItems.length},failed:${failedItems.length},asked:${askedItems.length},ignored:${ignoredItems.length}`
+      `[MaintainerActor] discussion ${discussion.id} 汇总回复 counts=fixed:${fixedItems.length},alreadyFixed:${alreadyFixedItems.length},failed:${failedItems.length},deferred:${deferredItems.length},asked:${askedItems.length},ignored:${ignoredItems.length}`
     );
 
     // 已修复、已确认无需重复修改、已忽略都属于终态；无失败/待澄清项时 resolve。
     const completedItems = fixedItems.length + alreadyFixedItems.length + ignoredItems.length;
-    const shouldResolve = completedItems > 0 && failedItems.length === 0 && askedItems.length === 0;
-    const pendingQuestion = askedItems[0];
+    const existingAskedAt =
+      existingAwaiting?.askedAt ??
+      state.maintainerThreadState?.[discussion.id]?.delivery?.awaitingReplyAt;
+    const pendingQuestion = askedItems[0]
+      ? {
+          question: askedItems[0].text,
+          filePath: askedItems[0].fileLine.split(':')[0],
+          askedAt: existingAskedAt,
+        }
+      : existingAwaiting
+        ? {
+            question: existingAwaiting.question,
+            filePath: existingAwaiting.filePath ?? '',
+            askedAt: existingAwaiting.askedAt,
+          }
+        : undefined;
+    const shouldResolve =
+      completedItems > 0 &&
+      failedItems.length === 0 &&
+      deferredItems.length === 0 &&
+      !pendingQuestion;
     const result = await this.deliverReply(
       mr,
       discussion,
@@ -230,17 +380,16 @@ export class MaintainerActor {
       shouldResolve,
       state,
       pendingQuestion
-        ? { question: pendingQuestion.text, filePath: pendingQuestion.fileLine.split(':')[0] }
-        : undefined
     );
 
-    if (result.replyPosted && askedItems.length > 0) {
+    if (result.replyPosted && pendingQuestion) {
       this.setAwaitingReply(
         state,
         discussion.id,
-        askedItems[0].text,
-        askedItems[0].fileLine,
-        state.maintainerThreadState?.[discussion.id]?.delivery?.awaitingReplyAt
+        pendingQuestion.question,
+        pendingQuestion.filePath,
+        pendingQuestion.askedAt ??
+          state.maintainerThreadState?.[discussion.id]?.delivery?.awaitingReplyAt
       );
       this.options.checkpoint?.();
       console.log(`[MaintainerActor] 汇总 discussion ${discussion.id} 有待澄清项，等待回复`);
@@ -272,13 +421,7 @@ export class MaintainerActor {
     if (!isDiscussionDeliveryPending(threadState?.delivery)) return null;
     const delivery = threadState?.delivery;
     if (!delivery) return null;
-    return this.deliverReply(
-      mr,
-      discussion,
-      delivery.replyBody,
-      delivery.resolveRequired,
-      state
-    );
+    return this.deliverReply(mr, discussion, delivery.replyBody, delivery.resolveRequired, state);
   }
 
   /** 对账任意已记录投递，包括远端可能已被删除的完成态回复。 */
@@ -289,13 +432,7 @@ export class MaintainerActor {
   ): Promise<DiscussionDeliveryResult | null> {
     const delivery = state.maintainerThreadState?.[discussion.id]?.delivery;
     if (!delivery) return null;
-    return this.deliverReply(
-      mr,
-      discussion,
-      delivery.replyBody,
-      delivery.resolveRequired,
-      state
-    );
+    return this.deliverReply(mr, discussion, delivery.replyBody, delivery.resolveRequired, state);
   }
 
   /**
@@ -306,17 +443,66 @@ export class MaintainerActor {
     fixableItems: Array<{
       finding: ReviewFinding;
       fileContent: string;
+      scope?: IssueScope;
       deleteFile?: boolean;
     }>,
-    originalComment: string
-  ): Promise<{
-    success: boolean;
-    reason: string;
-    appliedFiles: string[];
-    deletedFiles: string[];
-    alreadyFixedItems: Array<{ file: string; line: number; reason: string }>;
-  }> {
+    _originalComment: string
+  ): Promise<BatchFixResult> {
     console.log(`[MaintainerActor] 开始批量修复，${fixableItems.length} 个 finding`);
+
+    type PendingBatchFixItemResult = Omit<BatchFixItemResult, 'status'> & {
+      status: BatchFixItemStatus | 'pending-commit';
+    };
+    const appliedFiles = new Set<string>();
+    const deletedFiles = new Set<string>();
+    const approvedChangedPaths = new Set<string>();
+    const alreadyFixedItems: Array<{ file: string; line: number; reason: string }> = [];
+    const itemResults: PendingBatchFixItemResult[] = [];
+    let currentIndex = 0;
+    let commitStarted = false;
+
+    const addDeferredItems = (startIndex: number, reason: string): void => {
+      for (const item of fixableItems.slice(startIndex)) {
+        if (
+          itemResults.some(
+            result => result.file === item.finding.file && result.line === item.finding.line
+          )
+        ) {
+          continue;
+        }
+        itemResults.push({
+          file: item.finding.file,
+          line: item.finding.line,
+          status: 'deferred',
+          reason,
+        });
+      }
+    };
+
+    const buildResult = (success: boolean, reason: string): BatchFixResult => ({
+      success,
+      reason: compactDiscussionReason(reason),
+      appliedFiles: Array.from(appliedFiles),
+      deletedFiles: Array.from(deletedFiles),
+      alreadyFixedItems,
+      itemResults: itemResults.map(result => ({
+        ...result,
+        status:
+          result.status === 'pending-commit'
+            ? success
+              ? 'fixed'
+              : commitStarted
+                ? 'failed'
+                : 'deferred'
+            : result.status,
+        reason:
+          result.status === 'pending-commit' && !success
+            ? commitStarted
+              ? compactDiscussionReason(reason)
+              : '批量事务尚未提交，将在下一轮重新处理'
+            : result.reason,
+      })),
+    });
 
     try {
       console.log(`[MaintainerActor] 阶段=worktree 准备/更新 worktree`);
@@ -324,21 +510,45 @@ export class MaintainerActor {
       console.log(`[MaintainerActor] 阶段=checkout 切换到 source branch: ${mr.sourceBranch}`);
       await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
       console.log(`[MaintainerActor] 阶段=prepare 准备运行环境`);
-      await this.options.worktreeManager.prepareEnvironment();
+      const baselineFailure = await this.prepareRepairEnvironment();
+      const baselineFailurePrompt = this.buildBaselineFailurePrompt(baselineFailure);
 
-      const appliedFiles = new Set<string>();
-      const deletedFiles = new Set<string>();
-      const alreadyFixedItems: Array<{ file: string; line: number; reason: string }> = [];
-
-      for (const item of fixableItems) {
+      for (currentIndex = 0; currentIndex < fixableItems.length; currentIndex++) {
+        const item = fixableItems[currentIndex];
         const { finding } = item;
         if (item.deleteFile) {
           console.log(`[MaintainerActor] 批量修复中删除文件: ${finding.file}`);
           const resolved = await this.options.worktreeManager.resolveFilePath(finding.file);
-          if (resolved) {
-            await this.options.worktreeManager.removeFile(resolved);
-            deletedFiles.add(finding.file);
+          if (!resolved) {
+            const reason = `无法定位待删除文件 ${finding.file}`;
+            itemResults.push({
+              file: finding.file,
+              line: finding.line,
+              status: 'failed',
+              reason,
+            });
+            addDeferredItems(currentIndex + 1, '前序 finding 未完成，本轮尚未执行');
+            await this.recordFixOutcome(mr.iid, finding, false, reason);
+            return buildResult(false, reason);
           }
+          await this.options.worktreeManager.removeFile(resolved);
+          const targetPaths = new Set([
+            this.normalizeRepoPath(finding.file),
+            this.normalizeRepoPath(resolved),
+          ]);
+          const changes = await this.listChangedFiles(Array.from(appliedFiles), [
+            ...Array.from(deletedFiles),
+            finding.file,
+          ]);
+          const allowedPaths = new Set([...approvedChangedPaths, ...targetPaths]);
+          this.assertWriteScope(changes, allowedPaths, `finding ${finding.file}:${finding.line}`);
+          this.syncChangedFileSets(changes, appliedFiles, deletedFiles);
+          for (const change of changes) approvedChangedPaths.add(change.path);
+          itemResults.push({
+            file: finding.file,
+            line: finding.line,
+            status: 'pending-commit',
+          });
           continue;
         }
 
@@ -349,7 +559,15 @@ export class MaintainerActor {
           mr,
           memoryClient: this.options.memoryClient,
           recallPlanner: this.options.recallPlanner,
-          extraSystemPrompt: `这是同一条 discussion 中的批量修复任务之一。原始评论：\n${originalComment}`,
+          extraSystemPrompt: [
+            `这是同一条 discussion 中的批量修复任务之一。当前只处理 ${finding.file}:${finding.line}；严禁引用、判断或复用同一 discussion 中其他 finding 的文件、函数和证据。`,
+            item.scope === 'cross-file'
+              ? '该 finding 被识别为跨文件问题；仅在 Reviewer 问题确实要求时修改必要调用点。'
+              : '该 finding 是局部问题，只允许修改目标文件。',
+            baselineFailurePrompt,
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
         });
 
@@ -360,44 +578,89 @@ export class MaintainerActor {
         );
 
         if (result.alreadyFixed) {
+          const reason = compactDiscussionReason(result.evidence || result.reason);
           alreadyFixedItems.push({
             file: finding.file,
             line: finding.line,
-            reason: result.evidence || result.reason,
+            reason,
           });
+          itemResults.push({
+            file: finding.file,
+            line: finding.line,
+            status: 'already-fixed',
+            reason,
+          });
+          await this.recordFixOutcome(mr.iid, finding, true, `already-fixed: ${reason}`);
           continue;
         }
 
         if (!result.success) {
-          await this.recordFixOutcome(mr.iid, finding, false, result.reason);
-          return {
-            success: false,
-            reason: result.reason,
-            appliedFiles: Array.from(appliedFiles),
-            deletedFiles: Array.from(deletedFiles),
-            alreadyFixedItems,
-          };
+          const reason = compactDiscussionReason(result.reason);
+          itemResults.push({
+            file: finding.file,
+            line: finding.line,
+            status: 'failed',
+            reason,
+          });
+          addDeferredItems(currentIndex + 1, '前序 finding 未完成，本轮尚未执行');
+          await this.recordFixOutcome(mr.iid, finding, false, reason);
+          return buildResult(false, reason);
         }
 
-        for (const f of loop.getAppliedFiles()) {
-          appliedFiles.add(f);
+        const loopAppliedFiles = loop.getAppliedFiles();
+        const loopDeletedFiles = loop.getDeletedFiles();
+        const changes = await this.listChangedFiles(
+          [...Array.from(appliedFiles), ...loopAppliedFiles],
+          [...Array.from(deletedFiles), ...loopDeletedFiles]
+        );
+        const targetPaths = await this.resolveTargetPaths(finding.file);
+        const changedPaths = new Set(changes.map(change => change.path));
+        const targetChanged = Array.from(targetPaths).some(target => changedPaths.has(target));
+        const introducedChange = changes.some(change => !approvedChangedPaths.has(change.path));
+        if (item.scope !== 'cross-file') {
+          const allowedPaths = new Set([...approvedChangedPaths, ...targetPaths]);
+          this.assertWriteScope(changes, allowedPaths, `finding ${finding.file}:${finding.line}`);
         }
-        for (const f of loop.getDeletedFiles()) {
-          deletedFiles.add(f);
+        if (
+          (item.scope === 'cross-file' && !introducedChange) ||
+          (!targetChanged && item.scope !== 'cross-file')
+        ) {
+          const reason = '修复循环未修改 finding 指向的目标文件';
+          itemResults.push({
+            file: finding.file,
+            line: finding.line,
+            status: 'failed',
+            reason,
+          });
+          addDeferredItems(currentIndex + 1, '前序 finding 未完成，本轮尚未执行');
+          await this.recordFixOutcome(mr.iid, finding, false, reason);
+          return buildResult(false, reason);
         }
+        this.syncChangedFileSets(changes, appliedFiles, deletedFiles);
+        for (const change of changes) approvedChangedPaths.add(change.path);
+        itemResults.push({
+          file: finding.file,
+          line: finding.line,
+          status: 'pending-commit',
+        });
       }
 
       if (appliedFiles.size === 0 && deletedFiles.size === 0 && alreadyFixedItems.length === 0) {
-        return {
-          success: false,
-          reason: '没有文件被修改或删除',
-          appliedFiles: [],
-          deletedFiles: [],
-          alreadyFixedItems: [],
-        };
+        return buildResult(false, '没有文件被修改、删除，也没有确认 already-fixed');
       }
 
       const changeDescription = [
+        `修复项：\n${fixableItems
+          .filter(item =>
+            itemResults.some(
+              result =>
+                result.status === 'pending-commit' &&
+                result.file === item.finding.file &&
+                result.line === item.finding.line
+            )
+          )
+          .map(item => `- ${item.finding.file}:${item.finding.line} — ${item.finding.message}`)
+          .join('\n')}`,
         appliedFiles.size > 0
           ? `修改文件：\n${Array.from(appliedFiles)
               .map(f => `- ${f}`)
@@ -414,29 +677,62 @@ export class MaintainerActor {
       if (appliedFiles.size > 0 || deletedFiles.size > 0) {
         console.log(`[MaintainerActor] 阶段=commit-push 批量提交到分支: ${mr.sourceBranch}`);
         const baseFinding = fixableItems[0].finding;
+        commitStarted = true;
         await this.commitWithConventionRetry(
           mr.sourceBranch,
           changeDescription,
           () => buildDefaultBatchMessage(Array.from(appliedFiles), Array.from(deletedFiles)),
-          distilledFailure =>
-            this.reflowAfterHookFailure(mr, baseFinding, distilledFailure, originalComment)
+          distilledFailure => this.reflowAfterHookFailure(mr, baseFinding, distilledFailure),
+          async () => {
+            const changes = await this.listChangedFiles(
+              Array.from(appliedFiles),
+              Array.from(deletedFiles)
+            );
+            this.assertWriteScope(changes, approvedChangedPaths, '批量修复提交前校验');
+          }
         );
       }
 
-      return {
-        success: true,
-        reason:
-          appliedFiles.size > 0 || deletedFiles.size > 0
-            ? '批量修复已推送至 source branch'
-            : '所有 finding 在当前代码中均已修复，无需提交',
-        appliedFiles: Array.from(appliedFiles),
-        deletedFiles: Array.from(deletedFiles),
-        alreadyFixedItems,
-      };
+      const reason =
+        appliedFiles.size > 0 || deletedFiles.size > 0
+          ? '批量修复已推送至 source branch'
+          : '所有 finding 在当前代码中均已修复，无需提交';
+      for (const result of itemResults) {
+        if (result.status === 'pending-commit') {
+          const finding = fixableItems.find(
+            item => item.finding.file === result.file && item.finding.line === result.line
+          )?.finding;
+          if (finding) await this.recordFixOutcome(mr.iid, finding, true, reason);
+        }
+      }
+      return buildResult(true, reason);
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = compactDiscussionReason(err instanceof Error ? err.message : String(err));
       console.error(`[MaintainerActor] 批量修复异常: ${reason}`);
-      return { success: false, reason, appliedFiles: [], deletedFiles: [], alreadyFixedItems: [] };
+      if (commitStarted) {
+        for (const result of itemResults) {
+          if (result.status !== 'pending-commit') continue;
+          const finding = fixableItems.find(
+            item => item.finding.file === result.file && item.finding.line === result.line
+          )?.finding;
+          if (finding) await this.recordFixOutcome(mr.iid, finding, false, reason);
+        }
+      } else if (currentIndex < fixableItems.length) {
+        const finding = fixableItems[currentIndex].finding;
+        if (
+          !itemResults.some(result => result.file === finding.file && result.line === finding.line)
+        ) {
+          itemResults.push({
+            file: finding.file,
+            line: finding.line,
+            status: 'failed',
+            reason,
+          });
+          await this.recordFixOutcome(mr.iid, finding, false, reason);
+        }
+        addDeferredItems(currentIndex + 1, '前序 finding 异常中断，本轮尚未执行');
+      }
+      return buildResult(false, reason);
     }
   }
 
@@ -470,7 +766,8 @@ export class MaintainerActor {
       await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
 
       console.log(`[MaintainerActor] 阶段=prepare 准备运行环境`);
-      await this.options.worktreeManager.prepareEnvironment();
+      const baselineFailure = await this.prepareRepairEnvironment();
+      const baselineFailurePrompt = this.buildBaselineFailurePrompt(baselineFailure);
 
       const loop = new FixToolLoop({
         llmClient: this.options.llmClient,
@@ -479,7 +776,15 @@ export class MaintainerActor {
         mr,
         memoryClient: this.options.memoryClient,
         recallPlanner: this.options.recallPlanner,
-        extraSystemPrompt,
+        extraSystemPrompt: [
+          extraSystemPrompt,
+          decision.scope === 'cross-file'
+            ? '该 finding 被识别为跨文件问题；仅修改解决 Reviewer 问题所必需的文件。'
+            : '该 finding 是局部问题，只允许修改目标文件。',
+          baselineFailurePrompt,
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
         recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
       });
 
@@ -504,13 +809,34 @@ export class MaintainerActor {
         return this.emptyActionResult(false, fixResult.reason);
       }
 
+      const changes = await this.listChangedFiles(loop.getAppliedFiles(), loop.getDeletedFiles());
+      if (changes.length === 0) {
+        return this.emptyActionResult(false, '修复循环结束后 git 工作区没有实际变更');
+      }
+      const targetPaths = await this.resolveTargetPaths(finding.file);
+      if (decision.scope !== 'cross-file') {
+        this.assertWriteScope(changes, targetPaths, `finding ${finding.file}:${finding.line}`);
+        const targetChanged = changes.some(change => targetPaths.has(change.path));
+        if (!targetChanged) {
+          return this.emptyActionResult(false, '修复循环未修改 finding 指向的目标文件');
+        }
+      }
+      const approvedChangedPaths = new Set(changes.map(change => change.path));
+
       console.log(`[MaintainerActor] 阶段=commit-push 提交并推送修复到分支: ${mr.sourceBranch}`);
       await this.commitWithConventionRetry(
         mr.sourceBranch,
         `问题: ${finding.message}\n规则: ${finding.ruleId ?? 'N/A'}\n文件: ${finding.file}:${finding.line}`,
         () => buildDefaultFixMessage(finding),
         distilledFailure =>
-          this.reflowAfterHookFailure(mr, syntheticFinding, distilledFailure, extraSystemPrompt)
+          this.reflowAfterHookFailure(mr, syntheticFinding, distilledFailure, extraSystemPrompt),
+        async () => {
+          const currentChanges = await this.listChangedFiles(
+            loop.getAppliedFiles(),
+            loop.getDeletedFiles()
+          );
+          this.assertWriteScope(currentChanges, approvedChangedPaths, '单条修复提交前校验');
+        }
       );
 
       const cognitive = decision as CognitiveDecision;
@@ -558,7 +884,7 @@ export class MaintainerActor {
       await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
 
       console.log(`[MaintainerActor] 阶段=prepare 准备运行环境`);
-      await this.options.worktreeManager.prepareEnvironment();
+      await this.prepareRepairEnvironment();
 
       const resolvedPath = await this.options.worktreeManager.resolveFilePath(finding.file);
       if (!resolvedPath) {
@@ -568,6 +894,13 @@ export class MaintainerActor {
 
       console.log(`[MaintainerActor] 阶段=delete 删除文件: ${resolvedPath}`);
       await this.options.worktreeManager.removeFile(resolvedPath);
+      const changes = await this.listChangedFiles([], [finding.file]);
+      const targetPaths = new Set([
+        this.normalizeRepoPath(finding.file),
+        this.normalizeRepoPath(resolvedPath),
+      ]);
+      this.assertWriteScope(changes, targetPaths, `删除 finding ${finding.file}:${finding.line}`);
+      const approvedChangedPaths = new Set(changes.map(change => change.path));
 
       const changeDescription = `Reviewer 指出文件 ${finding.file} 不应上传，已从 MR 中删除。`;
       console.log(`[MaintainerActor] 阶段=commit-push 提交删除到分支: ${mr.sourceBranch}`);
@@ -575,7 +908,11 @@ export class MaintainerActor {
         mr.sourceBranch,
         changeDescription,
         () => buildDefaultDeleteMessage(basename(finding.file)),
-        distilledFailure => this.reflowAfterHookFailure(mr, finding, distilledFailure)
+        distilledFailure => this.reflowAfterHookFailure(mr, finding, distilledFailure),
+        async () => {
+          const currentChanges = await this.listChangedFiles([], [finding.file]);
+          this.assertWriteScope(currentChanges, approvedChangedPaths, '删除修复提交前校验');
+        }
       );
 
       const cognitive = decision as CognitiveDecision;
@@ -681,7 +1018,7 @@ export class MaintainerActor {
         try {
           const resolved = await this.options.worktreeManager.resolveFilePath(candidate);
           if (resolved) {
-            targetFile = candidate;
+            targetFile = this.normalizeRepoPath(resolved);
             break;
           }
         } catch {
@@ -722,7 +1059,8 @@ export class MaintainerActor {
       console.log(`[MaintainerActor] 阶段=checkout 切换到 source branch: ${mr.sourceBranch}`);
       await this.options.worktreeManager.checkoutBranch(mr.sourceBranch);
       console.log(`[MaintainerActor] 阶段=prepare 准备运行环境`);
-      await this.options.worktreeManager.prepareEnvironment();
+      const baselineFailure = await this.prepareRepairEnvironment();
+      const baselineFailurePrompt = this.buildBaselineFailurePrompt(baselineFailure);
 
       const loop = new FixToolLoop({
         llmClient: this.options.llmClient,
@@ -731,21 +1069,25 @@ export class MaintainerActor {
         mr,
         memoryClient: this.options.memoryClient,
         recallPlanner: this.options.recallPlanner,
-        extraSystemPrompt,
+        extraSystemPrompt: [extraSystemPrompt, baselineFailurePrompt].filter(Boolean).join('\n\n'),
       });
 
       const fixResult = await loop.run();
       this.trackFinalActingRound(loop);
-      console.log(`[MaintainerActor] CI 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`);
+      console.log(
+        `[MaintainerActor] CI 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`
+      );
 
       if (!fixResult.success) {
         return { codeApplied: false, reason: fixResult.reason, appliedFiles: [] };
       }
 
-      const appliedFiles = [...loop.getAppliedFiles(), ...loop.getDeletedFiles()];
-      if (appliedFiles.length === 0) {
+      const changes = await this.listChangedFiles(loop.getAppliedFiles(), loop.getDeletedFiles());
+      const appliedFiles = changes.map(change => change.path);
+      if (changes.length === 0) {
         return { codeApplied: false, reason: 'CI 修复未产生任何文件变更', appliedFiles: [] };
       }
+      const approvedChangedPaths = new Set(appliedFiles);
 
       console.log(`[MaintainerActor] 阶段=commit-push 提交 CI 修复到分支: ${mr.sourceBranch}`);
       await this.commitWithConventionRetry(
@@ -758,7 +1100,14 @@ export class MaintainerActor {
             '修改文件：',
             ...appliedFiles.map(f => `- ${f}`),
           ].join('\n'),
-        distilledFailure => this.reflowAfterHookFailure(mr, syntheticFinding, distilledFailure)
+        distilledFailure => this.reflowAfterHookFailure(mr, syntheticFinding, distilledFailure),
+        async () => {
+          const currentChanges = await this.listChangedFiles(
+            loop.getAppliedFiles(),
+            loop.getDeletedFiles()
+          );
+          this.assertWriteScope(currentChanges, approvedChangedPaths, 'CI 修复提交前校验');
+        }
       );
 
       return { codeApplied: true, reason: 'CI 修复已推送至 source branch', appliedFiles };
@@ -785,7 +1134,7 @@ export class MaintainerActor {
     body: string,
     resolve: boolean,
     state: MrAgentState,
-    awaitingReply?: { question: string; filePath: string }
+    awaitingReply?: { question: string; filePath: string; askedAt?: number }
   ): Promise<DiscussionDeliveryResult> {
     const threadState = this.getMaintainerThreadState(state, discussion.id);
     return deliverDiscussionReply({
@@ -873,51 +1222,67 @@ export class MaintainerActor {
     branch: string,
     changeDescription: string,
     buildDefaultMessage: () => string,
-    reflow?: (distilledFailure: string) => Promise<boolean>
+    reflow?: (distilledFailure: string) => Promise<boolean>,
+    verifyChanges?: () => Promise<void>
   ): Promise<void> {
     const wm = this.options.worktreeManager;
-    const message = await this.buildCommitMessage(changeDescription, buildDefaultMessage);
-    try {
-      await wm.commitAndPush(branch, message, { setUpstream: false });
-      this.incrMetric('commitFirstTryPasses');
-      return;
-    } catch (err) {
-      this.incrMetric('commitFirstTryRejections');
-      const rawText = err instanceof Error ? err.message : String(err);
-      const kind = classifyCommitFailure(rawText);
-      const distilled = distillCommitFailure(rawText);
-      console.warn(`[MaintainerActor] commit 失败（分类=${kind}），蒸馏诊断:\n${distilled}`);
+    let message = await this.buildCommitMessage(changeDescription, buildDefaultMessage);
+    let recoveredConvention: string | undefined;
+    let commitMessageRecoveryAttempted = false;
+    let hookReflowAttempted = false;
 
-      if (kind === 'commit-message') {
-        const diagnostic = extractCommitRejectionSection(stripAnsiCodes(rawText));
-        const recovery = await this.recoverCommitMessage(
-          diagnostic,
-          message,
-          changeDescription,
-          branch
-        );
-        if (recovery) {
-          await wm.commitAndPush(branch, recovery.message, { setUpstream: false });
-          this.commitConvention = recovery.convention;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await verifyChanges?.();
+      try {
+        await wm.commitAndPush(branch, message, { setUpstream: false });
+        if (attempt === 0) this.incrMetric('commitFirstTryPasses');
+        if (recoveredConvention) {
+          this.commitConvention = recoveredConvention;
           this.commitConventionLoaded = true;
-          await this.rememberCommitConvention(recovery.convention);
-          return;
+          await this.rememberCommitConvention(recoveredConvention);
         }
-      }
+        return;
+      } catch (err) {
+        if (attempt === 0) this.incrMetric('commitFirstTryRejections');
+        const rawText = err instanceof Error ? err.message : String(err);
+        const kind = classifyCommitFailure(rawText);
+        const distilled = distillCommitFailure(rawText);
+        console.warn(`[MaintainerActor] commit 失败（分类=${kind}），蒸馏诊断:\n${distilled}`);
 
-      // L3：lint/test/typecheck 类拒绝回流修复循环一次，有新变更则重试提交
-      if ((kind === 'lint' || kind === 'test' || kind === 'typecheck') && reflow) {
-        console.log(`[MaintainerActor] ${kind} 类 hook 失败回流修复循环`);
-        const changed = await reflow(distilled);
-        if (changed) {
-          await wm.commitAndPush(branch, message, { setUpstream: false });
-          return;
+        if (kind === 'commit-message' && !commitMessageRecoveryAttempted) {
+          commitMessageRecoveryAttempted = true;
+          const diagnostic = extractCommitRejectionSection(stripAnsiCodes(rawText));
+          const recovery = await this.recoverCommitMessage(
+            diagnostic,
+            message,
+            changeDescription,
+            branch
+          );
+          if (recovery) {
+            message = recovery.message;
+            recoveredConvention = recovery.convention;
+            continue;
+          }
         }
-        console.warn(`[MaintainerActor] 回流未产生新文件变更，不再重试提交`);
-      }
 
-      throw new Error(distilled);
+        // L3：lint/test/typecheck 类拒绝回流修复循环一次，有新变更则重试提交
+        if (
+          (kind === 'lint' || kind === 'test' || kind === 'typecheck') &&
+          reflow &&
+          !hookReflowAttempted
+        ) {
+          hookReflowAttempted = true;
+          console.log(`[MaintainerActor] ${kind} 类 hook 失败回流修复循环`);
+          const changed = await reflow(distilled);
+          if (changed) continue;
+          console.warn(`[MaintainerActor] 回流未产生新文件变更，不再重试提交`);
+        }
+
+        throw new Error(distilled);
+      }
     }
+
+    throw new Error('提交重试次数已耗尽');
   }
 
   /**
@@ -1064,7 +1429,9 @@ export class MaintainerActor {
     if (!this.commitConvention) {
       // 第二级：静态探测仓库 hook/lint 配置，命中即视为 Conventional Commits 项目
       try {
-        this.commitConvention = detectCommitConvention(this.options.worktreeManager.getWorktreePath());
+        this.commitConvention = detectCommitConvention(
+          this.options.worktreeManager.getWorktreePath()
+        );
         if (this.commitConvention) {
           console.log(`[MaintainerActor] 静态探测到项目提交规范: ${this.commitConvention}`);
         }

@@ -71,6 +71,13 @@ function isTruncatedStopReason(stopReason: string): boolean {
   return stopReason === 'length' || stopReason === 'max_tokens';
 }
 
+/** 兼容旧模型：识别“无需改动/已经修复”的自然语言 finish 原因。 */
+export function looksLikeAlreadyFixedClaim(reason: string): boolean {
+  return /already\s+(?:been\s+)?(?:fixed|resolved)|no\s+(?:additional\s+)?(?:code\s+)?change|无需(?:额外|再次|重复)?修改|无需再改|已(?:经)?修复|问题(?:已)?不存在|当前代码.{0,20}(?:满足|已包含|已覆盖)/i.test(
+    reason
+  );
+}
+
 export class FixToolLoop {
   private readonly llmClient: LlmClient;
   private readonly worktreeManager: WorktreeManager;
@@ -628,8 +635,28 @@ export class FixToolLoop {
   private async handleFinish(finishCall: ToolCall): Promise<FixAttemptResult> {
     const success = finishCall.input.success === true;
     const reason = String(finishCall.input.reason ?? '');
+    const hasNoFileChanges = this.appliedFiles.size === 0 && this.deletedFiles.size === 0;
+    const claimsAlreadyFixed =
+      finishCall.input.alreadyFixed === true || (!success && looksLikeAlreadyFixedClaim(reason));
+
+    if (hasNoFileChanges && claimsAlreadyFixed) {
+      const rechecked = await this.tryRecheckAlreadyFixed();
+      if (rechecked) return rechecked;
+      return {
+        success: false,
+        reason: [
+          '模型判断问题已经修复，但框架回查未确认该结论。',
+          this.lastRecheckVerdict?.reason ?? (reason || '未提供可验证证据'),
+        ].join(' '),
+      };
+    }
 
     if (success) {
+      if (hasNoFileChanges) {
+        const rechecked = await this.tryRecheckAlreadyFixed();
+        if (rechecked) return rechecked;
+      }
+
       // LLM 可能直接调用 finish 却忘记调用 validate；自动补一次验证，避免"未调用 validate"的误判。
       if (!this.lastValidationResult?.passed) {
         const raw = await this.worktreeManager.validate();
@@ -651,7 +678,7 @@ export class FixToolLoop {
         };
       }
 
-      if (this.appliedFiles.size === 0 && this.deletedFiles.size === 0) {
+      if (hasNoFileChanges) {
         return {
           success: false,
           reason: this.promptLoader.load('fix-tool-loop-no-change-failure-reason'),

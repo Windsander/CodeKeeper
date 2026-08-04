@@ -69,6 +69,8 @@ export interface DiscussionDeliveryState {
   resolveStatus: 'not-required' | 'pending' | 'resolved' | 'failed';
   /** 累计远端投递尝试次数 */
   attempts: number;
+  /** 首次生成该投递正文的时间戳；用于淘汰跨多轮遗留的陈旧回复 */
+  createdAt?: number;
   /** 最近一次投递错误 */
   lastError?: string;
   /** 回复成功后是否应进入等待人工回复状态 */
@@ -281,6 +283,8 @@ export interface MaintainerFindingDecision {
   question?: string;
   /** fix 时是否标记为删除文件 */
   deleteFile?: boolean;
+  /** finding 的改动范围，用于重试时继续执行写入边界校验。 */
+  scope?: 'trivial' | 'local' | 'cross-file' | 'needs-clarification';
   /** fix 失败时的累计重试次数 */
   failedAttempts: number;
   /** fix 是否已经成功 */
@@ -333,6 +337,8 @@ export interface MaintainerThreadState {
   /** 当前或最近一次远端回复投递状态 */
   delivery?: DiscussionDeliveryState;
   lastProcessedHeadSha?: string;
+  /** Maintainer 历史状态自愈迁移版本。 */
+  repairVersion?: number;
 }
 
 /**

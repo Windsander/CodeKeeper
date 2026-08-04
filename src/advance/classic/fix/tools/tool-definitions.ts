@@ -34,11 +34,15 @@ export const WRITE_FILE_TOOL: ToolDefinition = {
     type: 'object',
     properties: {
       relPath: { type: 'string', description: '文件相对路径' },
-      content: { type: 'string', description: '本段要写入的内容（overwrite 为完整内容，append 为追加片段）' },
+      content: {
+        type: 'string',
+        description: '本段要写入的内容（overwrite 为完整内容，append 为追加片段）',
+      },
       mode: {
         type: 'string',
         enum: ['overwrite', 'append'],
-        description: '写入模式：overwrite 覆盖整文件（默认）；append 追加到文件末尾，用于分段写大文件',
+        description:
+          '写入模式：overwrite 覆盖整文件（默认）；append 追加到文件末尾，用于分段写大文件',
       },
     },
     required: ['relPath', 'content'],
@@ -61,8 +65,7 @@ export const DELETE_FILE_TOOL: ToolDefinition = {
 
 export const APPLY_PATCH_TOOL: ToolDefinition = {
   name: 'apply_patch',
-  description:
-    '将标准 unified diff 应用到 worktree。若 git apply 失败会尝试自研 patch 应用器。',
+  description: '将标准 unified diff 应用到 worktree。若 git apply 失败会尝试自研 patch 应用器。',
   input_schema: {
     type: 'object',
     properties: {
@@ -87,7 +90,8 @@ export const RUN_SCRIPT_TOOL: ToolDefinition = {
       args: {
         type: 'array',
         items: { type: 'string' },
-        description: '可选的额外参数，会附加在 npm script 之后，例如 ["packages/foo/src/bar.test.ts"]',
+        description:
+          '可选的额外参数，会附加在 npm script 之后，例如 ["packages/foo/src/bar.test.ts"]',
       },
     },
     required: ['script'],
@@ -153,7 +157,8 @@ export const SEARCH_IN_FILE_TOOL: ToolDefinition = {
 
 export const SEARCH_WORKSPACE_TOOL: ToolDefinition = {
   name: 'search_workspace',
-  description: '在 Git 跟踪文件中搜索关键字，返回跨文件匹配位置。用于查找调用点、dispose、生命周期或共享类型引用。',
+  description:
+    '在 Git 跟踪文件中搜索关键字，返回跨文件匹配位置。用于查找调用点、dispose、生命周期或共享类型引用。',
   input_schema: {
     type: 'object',
     properties: {
@@ -210,7 +215,7 @@ export const READ_OUTPUT_FILE_TOOL: ToolDefinition = {
 export const FINISH_TOOL: ToolDefinition = {
   name: 'finish',
   description:
-    '当你认为修复已完成、无法继续或需要 Reviewer 澄清时调用，结束工具循环。',
+    '当你认为修复已完成、问题在当前代码中已不存在、无法继续或需要 Reviewer 澄清时调用，结束工具循环。',
   input_schema: {
     type: 'object',
     properties: {
@@ -221,6 +226,15 @@ export const FINISH_TOOL: ToolDefinition = {
       reason: {
         type: 'string',
         description: '说明当前状态，失败时解释原因',
+      },
+      alreadyFixed: {
+        type: 'boolean',
+        description:
+          '如果读取当前代码后确认 finding 已被其他提交修复、无需再改，设为 true；框架会再次独立回查，不会直接采信',
+      },
+      evidence: {
+        type: 'string',
+        description: 'alreadyFixed=true 时给出仅来自当前目标 finding 的具体代码证据',
       },
     },
     required: ['success', 'reason'],

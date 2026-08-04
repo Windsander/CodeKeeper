@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { FixToolLoop } from '../../../../src/advance/classic/fix/fix-tool-loop.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import { defaultPromptLoader } from '../../../../src/advance/llm/prompts/loader.js';
@@ -190,6 +190,47 @@ describe('FixToolLoop', () => {
     expect(loop.getAppliedFiles()).toEqual([]);
   });
 
+  it('finish 显式声明 alreadyFixed 时经框架回查后返回独立终态', async () => {
+    const recheckAlreadyFixed = vi.fn().mockResolvedValue({
+      alreadyFixed: true,
+      reason: '当前目标文件已经包含所需保护',
+      evidence: 'guardValue 在返回前完成空值检查',
+    });
+    const loop = new FixToolLoop({
+      llmClient: createMockLlmClient([
+        {
+          toolCalls: [
+            {
+              id: '1',
+              name: 'finish',
+              input: {
+                success: false,
+                alreadyFixed: true,
+                reason: '问题已由其他提交修复',
+                evidence: 'guardValue 已完成检查',
+              },
+            },
+          ],
+        },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      finding: mockFinding,
+      mr: mockMR,
+      recheckAlreadyFixed,
+    });
+
+    const result = await loop.run();
+
+    expect(recheckAlreadyFixed).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      success: true,
+      alreadyFixed: true,
+      reason: '当前目标文件已经包含所需保护',
+      evidence: 'guardValue 在返回前完成空值检查',
+    });
+    expect(loop.getAppliedFiles()).toEqual([]);
+  });
+
   it('读取同一文件的不同窗口视为有进展，不因 5 步无进展早退', async () => {
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([
@@ -318,11 +359,39 @@ describe('FixToolLoop', () => {
     });
     const loop = new FixToolLoop({
       llmClient: createMockLlmClient([
-        { toolCalls: [{ id: '1', name: 'read_file', input: { relPath: 'src/index.ts', startLine: 1, endLine: 10 } }] },
-        { toolCalls: [{ id: '2', name: 'read_file', input: { relPath: 'src/index.ts', startLine: 11, endLine: 20 } }] },
-        { toolCalls: [{ id: '3', name: 'read_file', input: { relPath: 'src/index.ts', startLine: 21, endLine: 30 } }] },
+        {
+          toolCalls: [
+            {
+              id: '1',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 1, endLine: 10 },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '2',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 11, endLine: 20 },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '3',
+              name: 'read_file',
+              input: { relPath: 'src/index.ts', startLine: 21, endLine: 30 },
+            },
+          ],
+        },
         // 最后行动机会内实际修改
-        { toolCalls: [{ id: '4', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } }] },
+        {
+          toolCalls: [
+            { id: '4', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+          ],
+        },
         { toolCalls: [{ id: '5', name: 'finish', input: { success: true, reason: 'done' } }] },
       ]),
       worktreeManager: createMockWorktreeManager(),
@@ -341,7 +410,9 @@ describe('FixToolLoop', () => {
     expect(result.success).toBe(true);
     expect(recheckAlreadyFixed).toHaveBeenCalledTimes(1);
     // 谢幕消息必须携带回查结论（带诊断谢幕，而非机械暴毙）
-    const finalRound = loadedPrompts.find(entry => entry.startsWith('fix-tool-loop-final-acting-round'));
+    const finalRound = loadedPrompts.find(entry =>
+      entry.startsWith('fix-tool-loop-final-acting-round')
+    );
     expect(finalRound).toBeDefined();
     expect(finalRound).toContain('缺少 TODO 注释');
     expect(finalRound).toContain('第 25 行未见 TODO');

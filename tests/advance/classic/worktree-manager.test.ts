@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { WorktreeManager, WorktreeError } from '../../../src/advance/classic/worktree/worktree-manager';
+import {
+  WorktreeManager,
+  WorktreeError,
+} from '../../../src/advance/classic/worktree/worktree-manager';
 
 const mockClone = vi.fn();
 const mockFetch = vi.fn();
@@ -51,6 +54,7 @@ describe('WorktreeManager', () => {
     remoteUrl = 'https://git.example.com/group/project.git';
     vi.clearAllMocks();
     mockGetConfig.mockResolvedValue({ value: '' });
+    mockStatus.mockResolvedValue({ files: [] });
   });
 
   afterEach(() => {
@@ -75,11 +79,10 @@ describe('WorktreeManager', () => {
     await manager.ensureWorktree();
 
     expect(mockClone).toHaveBeenCalledOnce();
-    expect(mockClone).toHaveBeenCalledWith(
-      remoteUrl,
-      manager.getWorktreePath(),
-      ['--origin', 'origin']
-    );
+    expect(mockClone).toHaveBeenCalledWith(remoteUrl, manager.getWorktreePath(), [
+      '--origin',
+      'origin',
+    ]);
   });
 
   it('ensureWorktree 已存在时应 fetch 更新', async () => {
@@ -303,6 +306,45 @@ describe('WorktreeManager', () => {
     expect(runScript).toHaveBeenCalledWith('compile:packages', manager.getWorktreePath());
   });
 
+  it('prepareEnvironment 修复模式应保留基线编译失败并继续', async () => {
+    mkdirSync(join(tmp, '.codekeeper-worktree', 'p1'), { recursive: true });
+    writeFileSync(
+      join(tmp, '.codekeeper-worktree', 'p1', 'package.json'),
+      JSON.stringify({ scripts: { 'compile:packages': 'npm run build' } })
+    );
+    const install = vi.fn().mockResolvedValue({ success: true });
+    const runScript = vi.fn().mockResolvedValue({
+      success: false,
+      reason: 'src/module.ts(12,3): error TS2305: missing export',
+    });
+    const manager = new WorktreeManager({
+      projectId: 'p1',
+      rootPath,
+      remoteUrl,
+      install,
+      runScript,
+    });
+
+    const result = await manager.prepareEnvironment({ allowCompileFailure: true });
+
+    expect(result.compilePackagesFailure).toContain('error TS2305');
+  });
+
+  it('listChangedFiles 应返回 git status 中的权威变更', async () => {
+    mockStatus.mockResolvedValue({
+      files: [
+        { path: 'src/a.ts', index: 'M', working_dir: ' ' },
+        { path: 'virtual/module-b.ts', index: 'D', working_dir: ' ' },
+      ],
+    });
+    const manager = new WorktreeManager({ projectId: 'p1', rootPath, remoteUrl });
+
+    await expect(manager.listChangedFiles()).resolves.toEqual([
+      { path: 'src/a.ts', deleted: false },
+      { path: 'virtual/module-b.ts', deleted: true },
+    ]);
+  });
+
   it('runScript 应透传 args 参数', async () => {
     mkdirSync(join(tmp, '.codekeeper-worktree', 'p1'), { recursive: true });
     const runScript = vi.fn().mockResolvedValue({ success: true });
@@ -315,6 +357,8 @@ describe('WorktreeManager', () => {
 
     await manager.runScript('test', ['packages/foo/src/bar.test.ts']);
 
-    expect(runScript).toHaveBeenCalledWith('test', manager.getWorktreePath(), ['packages/foo/src/bar.test.ts']);
+    expect(runScript).toHaveBeenCalledWith('test', manager.getWorktreePath(), [
+      'packages/foo/src/bar.test.ts',
+    ]);
   });
 });

@@ -11,6 +11,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { stripTerminalControlCodes } from '../runners/shared/reply-safety.js';
 
 /** commit/push 失败的机械归类 */
 export type CommitFailureKind =
@@ -24,8 +25,7 @@ export type CommitFailureKind =
 
 /** 去除 ANSI 转义码，避免 hook 输出中的颜色控制字符干扰规范提取 */
 export function stripAnsiCodes(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  return stripTerminalControlCodes(text);
 }
 
 /** 保留 hook 输出尾部诊断，避免前置 lint/test 日志淹没最终拒绝原因 */
@@ -85,8 +85,11 @@ export function distillCommitFailure(rawError: string, maxLines = 10): string {
     .split('\n')
     .filter(line => line.trim().length > 0);
   const evidenceBudget = Math.max(1, maxLines - 1);
-  const evidence = tail.slice(-evidenceBudget);
-  return [`【提交失败分类: ${kind}】${KIND_GUIDANCE[kind]}`, ...evidence].join('\n');
+  const evidence = tail
+    .slice(-evidenceBudget)
+    .map(line => (line.length > 800 ? `${line.slice(0, 799)}…` : line));
+  const distilled = [`【提交失败分类: ${kind}】${KIND_GUIDANCE[kind]}`, ...evidence].join('\n');
+  return distilled.length > 6_000 ? `${distilled.slice(0, 5_999)}…` : distilled;
 }
 
 /** commitlint/husky 等静态配置探测结果 */
@@ -150,9 +153,12 @@ export function buildDefaultFixMessage(finding: {
   line: number;
 }): string {
   const subject = ensureConventionalSubject(finding.message, 'fix', 'review');
-  return [subject, '', `规则: ${finding.ruleId ?? 'N/A'}`, `文件: ${finding.file}:${finding.line}`].join(
-    '\n'
-  );
+  return [
+    subject,
+    '',
+    `规则: ${finding.ruleId ?? 'N/A'}`,
+    `文件: ${finding.file}:${finding.line}`,
+  ].join('\n');
 }
 
 /** 合规的批量修复默认提交信息 */
