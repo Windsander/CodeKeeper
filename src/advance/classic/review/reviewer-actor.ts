@@ -158,8 +158,10 @@ export class ReviewerActor {
       return this.options.provider.postReviewComment(mr.iid, body);
     }
 
-    options.state.reviewCommentDelivery ??= {};
-    const deliveryState = (options.state.reviewCommentDelivery[options.stateKey] ??= {});
+    const state = options.state;
+    const stateKey = options.stateKey;
+    state.reviewCommentDelivery ??= {};
+    const deliveryState = (state.reviewCommentDelivery[stateKey] ??= {});
     const result = await deliverReviewComment({
       provider: this.options.provider,
       mr,
@@ -170,7 +172,7 @@ export class ReviewerActor {
         deliveryState[kind] = delivery;
       },
       checkpoint: () => {
-        if (this.options.project) saveState(this.options.project, options.state!, 'reviewer');
+        if (this.options.project) saveState(this.options.project, state, 'reviewer');
       },
     });
     if (!result.posted || result.noteId === undefined) {

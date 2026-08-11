@@ -15,7 +15,7 @@
     "test": "node scripts/test.mjs",
     "test:vitest": "node node_modules/vitest/vitest.mjs run",
     "test:watch": "node node_modules/vitest/vitest.mjs",
-    "lint": "ESLINT_USE_FLAT_CONFIG=false node node_modules/eslint/bin/eslint.js src --ext ts",
+    "lint": "node scripts/lint.mjs",
     "format": "node node_modules/prettier/bin/prettier.cjs --check .",
     "format:fix": "node node_modules/prettier/bin/prettier.cjs --write .",
     "rebuild-native": "cd node_modules/better-sqlite3 && npm run build-release",
