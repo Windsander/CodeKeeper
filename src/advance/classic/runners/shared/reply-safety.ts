@@ -16,10 +16,15 @@ const STRONG_DIAGNOSTIC_PATTERN =
   /error\s+TS\d+|syntaxerror|typeerror|referenceerror|assertionerror|no exported member|cannot find|could not resolve|is not assignable|expected \d+ arguments?|permission denied|authentication failed|fatal:/i;
 const FALLBACK_DIAGNOSTIC_PATTERN = /\b(?:error|failed|failure|rejected)\b/i;
 
+const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
+  `${String.fromCharCode(0x1b)}\\[[0-9;]*[a-zA-Z]`,
+  'g'
+);
+const NULL_CHARACTER = String.fromCharCode(0);
+
 /** 去除 ANSI 与空字符，避免终端控制序列泄漏到 Git 平台。 */
 export function stripTerminalControlCodes(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\0/g, '');
+  return text.replace(ANSI_ESCAPE_SEQUENCE_PATTERN, '').split(NULL_CHARACTER).join('');
 }
 
 function capLine(line: string, maxChars = MAX_REPLY_LINE_CHARS): string {
