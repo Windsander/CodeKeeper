@@ -1,5 +1,14 @@
 import simpleGit, { type SimpleGit, CleanOptions } from 'simple-git';
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, statSync, unlinkSync, createReadStream } from 'node:fs';
+import {
+  readFileSync,
+  writeFileSync,
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  statSync,
+  unlinkSync,
+  createReadStream,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -31,6 +40,24 @@ export interface RunScriptResult {
   reason?: string;
 }
 
+export interface PrepareEnvironmentOptions {
+  /**
+   * 修复任务允许 source branch 在进入工具循环前已经无法通过 workspace 编译。
+   * 依赖安装失败仍然属于硬错误，只有 compile:packages 失败可降级为基线诊断。
+   */
+  allowCompileFailure?: boolean;
+}
+
+export interface PrepareEnvironmentResult {
+  /** 修复前已经存在的 workspace 编译失败，供上层注入修复上下文。 */
+  compilePackagesFailure?: string;
+}
+
+export interface WorktreeChangedFile {
+  path: string;
+  deleted: boolean;
+}
+
 export interface WorkspaceSearchMatch {
   file: string;
   line: number;
@@ -58,7 +85,11 @@ export interface WorktreeManagerOptions {
   gitUserEmail?: string;
 }
 
-async function defaultRunScript(script: string, cwd: string, args?: string[]): Promise<RunScriptResult> {
+async function defaultRunScript(
+  script: string,
+  cwd: string,
+  args?: string[]
+): Promise<RunScriptResult> {
   try {
     // Windows 上 npm 是 .cmd 脚本，execFile 直接执行需要 shell 支持
     const npmArgs = args && args.length > 0 ? ['run', script, '--', ...args] : ['run', script];
@@ -70,7 +101,9 @@ async function defaultRunScript(script: string, cwd: string, args?: string[]): P
   } catch (err) {
     logger.warn({ err, script }, `运行 ${script} 失败`);
     const execErr = err as Error & { stdout?: string; stderr?: string };
-    const reason = [execErr.message, execErr.stdout ?? '', execErr.stderr ?? ''].filter(Boolean).join('\n');
+    const reason = [execErr.message, execErr.stdout ?? '', execErr.stderr ?? '']
+      .filter(Boolean)
+      .join('\n');
     return { success: false, reason };
   }
 }
@@ -102,7 +135,9 @@ async function defaultRunSetupCommand(command: string, cwd: string): Promise<Run
   } catch (err) {
     logger.warn({ err, command }, 'worktree setup 命令失败');
     const execErr = err as Error & { stdout?: string; stderr?: string };
-    const reason = [execErr.message, execErr.stdout ?? '', execErr.stderr ?? ''].filter(Boolean).join('\n');
+    const reason = [execErr.message, execErr.stdout ?? '', execErr.stderr ?? '']
+      .filter(Boolean)
+      .join('\n');
     return { success: false, reason };
   }
 }
@@ -153,10 +188,7 @@ export class WorktreeManager {
         '创建 worktree'
       );
       try {
-        await simpleGit().clone(this.options.remoteUrl, this.worktreePath, [
-          '--origin',
-          'origin',
-        ]);
+        await simpleGit().clone(this.options.remoteUrl, this.worktreePath, ['--origin', 'origin']);
       } catch (err) {
         throw new WorktreeError('clone', err);
       }
@@ -212,12 +244,14 @@ export class WorktreeManager {
    * 对于 monorepo，若 package.json 中定义了 compile:packages 脚本，
    * 会在安装依赖后额外执行编译，确保 workspace 包可被 typecheck 解析。
    */
-  async prepareEnvironment(): Promise<void> {
+  async prepareEnvironment(
+    options: PrepareEnvironmentOptions = {}
+  ): Promise<PrepareEnvironmentResult> {
     const packageJsonPath = join(this.worktreePath, 'package.json');
     const nodeModulesPath = join(this.worktreePath, 'node_modules');
     if (!existsSync(packageJsonPath)) {
       logger.info({ worktreePath: this.worktreePath }, 'worktree 无 package.json，跳过环境准备');
-      return;
+      return {};
     }
 
     let needInstall = true;
@@ -241,21 +275,39 @@ export class WorktreeManager {
 
     // monorepo workspace 包需要额外编译才能被 typecheck 解析
     try {
-      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { scripts?: Record<string, string> };
+      const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as {
+        scripts?: Record<string, string>;
+      };
       if (pkg.scripts?.['compile:packages']) {
         logger.info({ worktreePath: this.worktreePath }, 'worktree 编译 workspace 包');
         const runner = this.options.runScript ?? defaultRunScript;
         const compileResult = await runner('compile:packages', this.worktreePath);
         if (!compileResult.success) {
-          throw new WorktreeError('compile:packages', compileResult.reason ?? '编译 workspace 包失败');
+          if (options.allowCompileFailure) {
+            const reason = compileResult.reason ?? '编译 workspace 包失败';
+            logger.warn(
+              { worktreePath: this.worktreePath },
+              'worktree 基线编译失败，保留诊断并继续进入修复循环'
+            );
+            return { compilePackagesFailure: reason };
+          }
+          throw new WorktreeError(
+            'compile:packages',
+            compileResult.reason ?? '编译 workspace 包失败'
+          );
         }
       }
     } catch (err) {
       if (err instanceof WorktreeError) {
         throw err;
       }
-      logger.warn({ err, worktreePath: this.worktreePath }, '读取 package.json 或编译 workspace 包失败');
+      logger.warn(
+        { err, worktreePath: this.worktreePath },
+        '读取 package.json 或编译 workspace 包失败'
+      );
     }
+
+    return {};
   }
 
   /**
@@ -276,7 +328,10 @@ export class WorktreeManager {
     const targetPath = join(this.worktreePath, relPath);
     const stats = statSync(targetPath);
     if (stats.size > MAX_READ_FILE_SIZE) {
-      throw new WorktreeError('read', `文件 ${relPath} 过大（${stats.size} bytes），超过 ${MAX_READ_FILE_SIZE} bytes 读取上限`);
+      throw new WorktreeError(
+        'read',
+        `文件 ${relPath} 过大（${stats.size} bytes），超过 ${MAX_READ_FILE_SIZE} bytes 读取上限`
+      );
     }
     return readFileSync(targetPath, 'utf-8');
   }
@@ -346,14 +401,7 @@ export class WorktreeManager {
     if (!normalizedKeyword || maxResults <= 0) return [];
 
     try {
-      const output = await this.getGit().raw([
-        'grep',
-        '-n',
-        '-I',
-        '-F',
-        '--',
-        normalizedKeyword,
-      ]);
+      const output = await this.getGit().raw(['grep', '-n', '-I', '-F', '--', normalizedKeyword]);
       return output
         .split(/\r?\n/)
         .filter(Boolean)
@@ -445,19 +493,17 @@ export class WorktreeManager {
       const result = await this.getGit().raw(['ls-files', '-z', '--exclude-standard']);
       const files = result
         .split('\0')
-        .filter((f) => f.length > 0)
-        .map((f) => f.replace(/\\/g, '/'));
+        .filter(f => f.length > 0)
+        .map(f => f.replace(/\\/g, '/'));
 
-      const matches = files.filter(
-        (f) => f === basename || f.endsWith(`/${basename}`)
-      );
+      const matches = files.filter(f => f === basename || f.endsWith(`/${basename}`));
 
       if (matches.length === 1) {
         return matches[0];
       }
 
       // 若有多项匹配，尝试用原始 relPath 做子路径匹配
-      const subPathMatch = files.find((f) => f.endsWith(relPath.replace(/\\/g, '/')));
+      const subPathMatch = files.find(f => f.endsWith(relPath.replace(/\\/g, '/')));
       if (subPathMatch) {
         return subPathMatch;
       }
@@ -533,7 +579,12 @@ export class WorktreeManager {
    *
    * 返回两项校验是否分别通过。
    */
-  async validate(): Promise<{ lint: boolean; typecheck: boolean; lintReason?: string; typecheckReason?: string }> {
+  async validate(): Promise<{
+    lint: boolean;
+    typecheck: boolean;
+    lintReason?: string;
+    typecheckReason?: string;
+  }> {
     const runner = this.options.runScript ?? defaultRunScript;
 
     const [lint, typecheck] = await Promise.all([
@@ -547,6 +598,15 @@ export class WorktreeManager {
       lintReason: lint.reason,
       typecheckReason: typecheck.reason,
     };
+  }
+
+  /** 读取 git 工作区的权威变更列表，避免只依赖工具调用记录而漏掉脚本产生的修改。 */
+  async listChangedFiles(): Promise<WorktreeChangedFile[]> {
+    const status = await this.getGit().status();
+    return status.files.map(file => ({
+      path: file.path.replace(/\\/g, '/'),
+      deleted: file.index === 'D' || file.working_dir === 'D',
+    }));
   }
 
   /**

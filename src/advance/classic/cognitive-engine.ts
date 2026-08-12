@@ -95,6 +95,15 @@ const ALREADY_FIXED_CHECK_TOOL: ToolDefinition = {
       alreadyFixed: { type: 'boolean' },
       reason: { type: 'string' },
       evidence: { type: 'string' },
+      evidenceSnippet: {
+        type: 'string',
+        description:
+          'alreadyFixed=true 时，从当前目标文件或已提供的额外文件上下文中原样摘录的最小代码片段',
+      },
+      evidenceLine: {
+        type: 'number',
+        description: 'evidenceSnippet 在对应文件中的起始行号；无法确定时可省略',
+      },
       needsMoreContext: {
         type: 'boolean',
         description:
@@ -105,6 +114,75 @@ const ALREADY_FIXED_CHECK_TOOL: ToolDefinition = {
     additionalProperties: false,
   },
 };
+
+function normalizeEvidenceFragment(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function extractPathReferences(text: string): string[] {
+  return Array.from(
+    text.matchAll(/[A-Za-z0-9_.@*~:-]+(?:[\\/][A-Za-z0-9_.@*~()-]+)+\.[A-Za-z0-9]+/g),
+    match => match[0].replace(/\\/g, '/').toLowerCase()
+  );
+}
+
+function extractDistinctiveCodeAnchors(text: string): string[] {
+  const withoutPaths = text.replace(
+    /[A-Za-z0-9_.@*~:-]+(?:[\\/][A-Za-z0-9_.@*~()-]+)+\.[A-Za-z0-9]+/g,
+    ' '
+  );
+  return Array.from(
+    withoutPaths.matchAll(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g),
+    match => match[0]
+  ).filter(
+    token =>
+      token.includes('_') || /[a-z][A-Z]/.test(token) || (token.match(/[A-Z]/g)?.length ?? 0) >= 2
+  );
+}
+
+/** already-fixed 证据必须能绑定到当前 finding 的文件或显式补充上下文。 */
+export function isAlreadyFixedEvidenceGrounded(params: {
+  findingFile: string;
+  fileContent: string;
+  extraFileContexts?: string[];
+  evidence?: string;
+  evidenceSnippet?: string;
+}): boolean {
+  const evidence = params.evidence?.trim() ?? '';
+  const evidenceSnippet = params.evidenceSnippet?.trim() ?? '';
+  if (!evidence && !evidenceSnippet) return false;
+
+  const extraContexts = params.extraFileContexts ?? [];
+  const corpus = [params.fileContent, ...extraContexts].join('\n');
+  const normalizedCorpus = normalizeEvidenceFragment(corpus);
+  const allowedPaths = new Set([
+    params.findingFile.replace(/\\/g, '/').toLowerCase(),
+    ...extraContexts.flatMap(extractPathReferences),
+  ]);
+
+  for (const path of extractPathReferences(`${evidence}\n${evidenceSnippet}`)) {
+    if (
+      !Array.from(allowedPaths).some(allowed => allowed.endsWith(path) || path.endsWith(allowed))
+    ) {
+      return false;
+    }
+  }
+
+  if (evidenceSnippet && !normalizedCorpus.includes(normalizeEvidenceFragment(evidenceSnippet))) {
+    return false;
+  }
+
+  const quotedAnchors = Array.from(evidence.matchAll(/`([^`\n]{2,160})`/g), match => match[1])
+    .map(normalizeEvidenceFragment)
+    .filter(anchor => /[a-z_$]/i.test(anchor) && !extractPathReferences(anchor).length);
+  const distinctiveAnchors = extractDistinctiveCodeAnchors(evidence).map(normalizeEvidenceFragment);
+  const codeAnchors = [...new Set([...quotedAnchors, ...distinctiveAnchors])];
+  if (codeAnchors.some(anchor => !normalizedCorpus.includes(anchor))) {
+    return false;
+  }
+
+  return true;
+}
 
 const FAST_DECISION_TOOL: ToolDefinition = {
   name: 'fast_decision',
@@ -398,7 +476,9 @@ export class CognitiveEngine {
     try {
       const matches = await manager.searchWorkspace(keyword);
       if (matches.length === 0) return null;
-      const lines = matches.map(match => `- ${match.file}:${match.line} ${match.content}`).join('\n');
+      const lines = matches
+        .map(match => `- ${match.file}:${match.line} ${match.content}`)
+        .join('\n');
       return `## 工作区中 ${keyword} 的匹配位置\n${lines}`;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -478,8 +558,29 @@ export class CognitiveEngine {
         alreadyFixed?: boolean;
         reason?: string;
         evidence?: string;
+        evidenceSnippet?: string;
+        evidenceLine?: number;
         needsMoreContext?: boolean;
       };
+      if (
+        input.alreadyFixed === true &&
+        !isAlreadyFixedEvidenceGrounded({
+          findingFile: context.finding.file,
+          fileContent,
+          extraFileContexts: context.extraFileContexts,
+          evidence: input.evidence,
+          evidenceSnippet: input.evidenceSnippet,
+        })
+      ) {
+        console.warn(
+          `[CognitiveEngine] already_fixed_check (${sourceLabel}) 证据与目标 finding 不匹配: ${context.finding.file}:${context.finding.line}`
+        );
+        return {
+          alreadyFixed: false,
+          reason: 'already-fixed 证据无法绑定到当前 finding 的代码上下文，拒绝复用该结论',
+          needsMoreContext: sourceLabel === '聚焦窗口',
+        };
+      }
       return {
         alreadyFixed: input.alreadyFixed === true,
         reason: input.reason ?? '未说明理由',

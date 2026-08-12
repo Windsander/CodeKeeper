@@ -3,9 +3,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isDiscussionPending } from '../../../../../src/advance/classic/runners/shared/maintainer-filter.js';
+import {
+  isDiscussionPending,
+  isJudgmentFlipped,
+} from '../../../../../src/advance/classic/runners/shared/maintainer-filter.js';
 import type { Discussion } from '../../../../../src/advance/classic/provider/types.js';
-import type { MrAgentState } from '../../../../../src/advance/classic/runners/shared/state-utils.js';
+import type {
+  MrAgentState,
+  MaintainerFindingDecision,
+} from '../../../../../src/advance/classic/runners/shared/state-utils.js';
 
 function makeDiscussion(overrides: Partial<Discussion> = {}): Discussion {
   return {
@@ -155,6 +161,58 @@ describe('isDiscussionPending', () => {
     expect(isDiscussionPending(d, state)).toBe(false);
   });
 
+  it('交互式等待不会阻塞同 discussion 内仍可重试的 fix', () => {
+    const now = Date.now();
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'reviewer-agent',
+          body: 'src/a.ts:10 需要确认，src/b.ts:20 仍需修复',
+          createdAt: new Date(now - 60_000).toISOString(),
+        },
+        {
+          author: 'maintainer',
+          body: '请确认业务意图\n\n---\n*生成于 2026/08/03 10:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: new Date(now - 30_000).toISOString(),
+        },
+      ],
+    });
+    const state = makeState({
+      interactiveThreads: {
+        'd-1': {
+          status: 'awaiting-reply',
+          askedAt: now - 30_000,
+          question: '请确认业务意图',
+          filePath: 'src/a.ts',
+        },
+      },
+      processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 30_000 } },
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:10': {
+              action: 'ask',
+              reason: '需要人工确认',
+              failedAttempts: 0,
+              decidedAt: now - 30_000,
+            },
+            'src/b.ts:20': {
+              action: 'fix',
+              reason: '需要继续修复',
+              failedAttempts: 1,
+              fixSucceeded: false,
+              decidedAt: now - 30_000,
+            },
+          },
+          activeFindingKeys: ['src/a.ts:10', 'src/b.ts:20'],
+          lastReviewerNoteAt: now - 60_000,
+        },
+      },
+    });
+
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
   it('交互式等待中出现新人工回复时进入流程', () => {
     const now = Date.now();
     const d = makeDiscussion({
@@ -209,6 +267,37 @@ describe('isDiscussionPending', () => {
       },
       processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 30_000 } },
     });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
+  it('提问被删除后不能用无关进度回复维持等待状态', () => {
+    const now = Date.now();
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'human',
+          body: '这里为什么要这么改？',
+          createdAt: new Date(now - 60_000).toISOString(),
+        },
+        {
+          author: 'maintainer',
+          body: '⏭️ 其他 finding 将在下一轮继续处理\n\n---\n*生成于 2026/08/03 10:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: new Date(now - 10_000).toISOString(),
+        },
+      ],
+    });
+    const state = makeState({
+      interactiveThreads: {
+        'd-1': {
+          status: 'awaiting-reply',
+          askedAt: now - 30_000,
+          question: '请确认预期行为',
+          filePath: 'src/a.ts',
+        },
+      },
+      processedDiscussions: { 'd-1': { noteCount: 2, processedAt: now - 10_000 } },
+    });
+
     expect(isDiscussionPending(d, state)).toBe(true);
   });
 
@@ -612,5 +701,189 @@ describe('isDiscussionPending', () => {
     });
 
     expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('resolved 的 discussion 不因缺少无需修复说明而复活补发', () => {
+    // F1：人类已 resolve 的 thread 已闭环，「补发说明」不足以复活它制造噪音评论
+    const d = makeDiscussion({
+      resolved: true,
+      notes: [
+        {
+          author: 'reviewer',
+          body: 'src/a.ts:1 与 src/b.ts:2 都有问题',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': {
+              action: 'ignore',
+              alreadyFixed: true,
+              reason: '已修复',
+              failedAttempts: 0,
+              decidedAt: 1,
+            },
+            'src/b.ts:2': { action: 'ignore', reason: '无需修改', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('未 resolved 且缺少无需修复说明时仍进入流程补发', () => {
+    // 与上一用例对照：未 resolved 时补发逻辑保持原有行为
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'reviewer',
+          body: 'src/a.ts:1 与 src/b.ts:2 都有问题',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': {
+              action: 'ignore',
+              alreadyFixed: true,
+              reason: '已修复',
+              failedAttempts: 0,
+              decidedAt: 1,
+            },
+            'src/b.ts:2': { action: 'ignore', reason: '无需修改', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+
+  it('无需修复说明补发过一次后熔断，不因行号漂移反复补发', () => {
+    // F4：补发过一次后，远端说明逐条 file:line 匹配仍失败（行号漂移）也不再重复补发
+    const backfilledAt = Date.parse('2026-01-03T00:00:00Z');
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'reviewer',
+          body: 'src/a.ts:1 与 src/b.ts:2 都有问题',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          author: 'maintainer',
+          // 说明中只提到 src/a.ts:1（src/b.ts:2 因行号漂移匹配不上）
+          body: '✅ 已修复（无需重复修改）：\n- src/a.ts:1: 已满足要求\n\n---\n*生成于 2026/01/03 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-03T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': {
+              action: 'ignore',
+              alreadyFixed: true,
+              reason: '已修复',
+              failedAttempts: 0,
+              decidedAt: 1,
+            },
+            'src/b.ts:2': { action: 'ignore', reason: '无需修改', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+          noFixExplanationBackfilledAt: backfilledAt,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(false);
+  });
+
+  it('补发熔断后出现新人工回复时解除熔断重新进入流程', () => {
+    const backfilledAt = Date.parse('2026-01-03T00:00:00Z');
+    const d = makeDiscussion({
+      notes: [
+        {
+          author: 'reviewer',
+          body: 'src/a.ts:1 与 src/b.ts:2 都有问题',
+          createdAt: '2026-01-01T00:00:00Z',
+        },
+        {
+          author: 'maintainer',
+          body: '✅ 已修复（无需重复修改）：\n- src/a.ts:1: 已满足要求\n\n---\n*生成于 2026/01/03 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: '2026-01-03T00:00:00Z',
+        },
+        {
+          author: 'reviewer',
+          body: 'src/b.ts:2 的说明在哪里？',
+          createdAt: '2026-01-04T00:00:00Z',
+        },
+      ],
+    });
+    const state = makeState({
+      maintainerThreadState: {
+        'd-1': {
+          decisions: {
+            'src/a.ts:1': {
+              action: 'ignore',
+              alreadyFixed: true,
+              reason: '已修复',
+              failedAttempts: 0,
+              decidedAt: 1,
+            },
+            'src/b.ts:2': { action: 'ignore', reason: '无需修改', failedAttempts: 0, decidedAt: 1 },
+          },
+          lastReviewerNoteAt: 0,
+          noFixExplanationBackfilledAt: backfilledAt,
+        },
+      },
+    });
+    expect(isDiscussionPending(d, state)).toBe(true);
+  });
+});
+
+describe('isJudgmentFlipped（M7 推翻判定）', () => {
+  const ignoreDecision: MaintainerFindingDecision = {
+    action: 'ignore',
+    reason: '此前判断无需修复',
+    failedAttempts: 0,
+    decidedAt: 1,
+  };
+
+  it('ignore + 新人工回复 + 新决策 fix → 判定为推翻', () => {
+    expect(isJudgmentFlipped(ignoreDecision, true, 'fix')).toBe(true);
+  });
+
+  it('alreadyFixed 的 ignore 被推翻同样成立', () => {
+    expect(isJudgmentFlipped({ ...ignoreDecision, alreadyFixed: true }, true, 'fix')).toBe(true);
+  });
+
+  it('无新人工回复不判定为推翻（Agent 自动重扫不带新信息）', () => {
+    expect(isJudgmentFlipped(ignoreDecision, false, 'fix')).toBe(false);
+  });
+
+  it('此前是 fix 决策不算推翻', () => {
+    const fixDecision: MaintainerFindingDecision = {
+      action: 'fix',
+      reason: '此前修复失败',
+      failedAttempts: 1,
+      decidedAt: 1,
+    };
+    expect(isJudgmentFlipped(fixDecision, true, 'fix')).toBe(false);
+  });
+
+  it('新决策仍是 ignore/ask 不算推翻', () => {
+    expect(isJudgmentFlipped(ignoreDecision, true, 'ignore')).toBe(false);
+    expect(isJudgmentFlipped(ignoreDecision, true, 'ask')).toBe(false);
+  });
+
+  it('无历史决策不算推翻', () => {
+    expect(isJudgmentFlipped(undefined, true, 'fix')).toBe(false);
   });
 });

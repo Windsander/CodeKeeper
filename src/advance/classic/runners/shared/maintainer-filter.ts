@@ -65,6 +65,26 @@ function getLatestNoteTime(
   return latest;
 }
 
+function normalizeQuestionForMatch(text: string): string {
+  return text.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/** 判断等待中的提问是否仍在远端 discussion 中可见。 */
+export function hasVisibleMaintainerQuestion(
+  discussion: Discussion,
+  askedAt: number,
+  question: string
+): boolean {
+  const normalizedQuestion = normalizeQuestionForMatch(question);
+  if (!normalizedQuestion) return false;
+  const marker = normalizedQuestion.slice(0, 120);
+  return discussion.notes.some(note => {
+    if (!isMaintainerAuthoredNote(note.body)) return false;
+    if (getCommentActivityAt(note) < askedAt - 1000) return false;
+    return normalizeQuestionForMatch(note.body).includes(marker);
+  });
+}
+
 /**
  * 判断一条 note 是否来自真正的人类（非任何 Agent、非自动化 bot）
  */
@@ -119,6 +139,40 @@ function hasCompleteNoFixExplanation(
 }
 
 /**
+ * 判断「无需修复说明补发」是否已熔断。
+ *
+ * 补发过一次后，若远端说明识别仍失败（常见于行号漂移导致逐条 file:line 匹配不上），
+ * 不再仅因此反复补发；出现新人工回复或决策更新时熔断自动解除。
+ */
+export function isNoFixBackfillCapped(
+  threadState: MaintainerThreadState,
+  lastHumanNoteAt: number
+): boolean {
+  const backfilledAt = threadState.noFixExplanationBackfilledAt;
+  if (!backfilledAt) return false;
+  if (lastHumanNoteAt > backfilledAt) return false;
+  const latestDecisionAt = Object.values(threadState.decisions).reduce(
+    (latest, decision) => Math.max(latest, decision.decidedAt),
+    0
+  );
+  return latestDecisionAt <= backfilledAt;
+}
+
+/**
+ * 判断「Reviewer 推翻了此前的无需修复/已修复判断」。
+ *
+ * 此前结论为 ignore（含 alreadyFixed），出现新人工回复后重新决策为 fix——
+ * 说明此前的无需修复判断被人类推翻，应写入反思记忆供 already-fixed 回查参考（M7）。
+ */
+export function isJudgmentFlipped(
+  existing: MaintainerFindingDecision | undefined,
+  hasNewHumanNote: boolean,
+  newAction: MaintainerFindingDecision['action']
+): boolean {
+  return existing?.action === 'ignore' && hasNewHumanNote && newAction === 'fix';
+}
+
+/**
  * 判断 discussion 是否应该被 Maintainer 处理
  *
  * 核心原则：只有在「有新的非 Maintainer 输入」或「有需要继续重试的失败 fix」时才进入流程。
@@ -145,15 +199,16 @@ export function isDiscussionPending(
   const hasUpdatedSourceNote = sourceNoteUpdatedAt > sourceNoteBaseline;
   const hasPendingDelivery = isDiscussionDeliveryPending(threadState?.delivery);
   const hasPendingRetry = threadState ? hasPendingRetryDecision(threadState) : false;
-  const needsNoFixExplanation = threadState
-    ? !hasCompleteNoFixExplanation(discussion, threadState) && !hasPendingRetry
-    : false;
-  if (hasPendingDelivery || needsNoFixExplanation) return true;
-  if ((discussion.resolved || !discussion.resolvable) && !hasPendingDelivery) {
-    return false;
-  }
-
   const lastHumanNoteAt = getLatestNoteTime(discussion.notes, isHumanNote);
+  const backfillCapped = threadState ? isNoFixBackfillCapped(threadState, lastHumanNoteAt) : false;
+  const needsNoFixExplanation = threadState
+    ? !hasCompleteNoFixExplanation(discussion, threadState) && !hasPendingRetry && !backfillCapped
+    : false;
+  if (hasPendingDelivery) return true;
+  // 已 resolved（或不可 resolve）的 thread 已被闭环：只有未完成的远端投递才允许继续，
+  // 「补发无需修复说明」不足以复活它——人类已接受结论，重复补发只会制造噪音评论。
+  if (discussion.resolved || !discussion.resolvable) return false;
+  if (needsNoFixExplanation) return true;
 
   // 交互式等待回复期间保持静默：只有出现提问之后的新人工回复，
   // 或等待超时需要收尾时，才进入流程，避免每轮轮询空转打日志。
@@ -162,16 +217,17 @@ export function isDiscussionPending(
     const askedAt = interactive.askedAt;
     // 提问 note 已被删除（如人工清理）时，交互状态已脏：
     // 放行进入流程，让 processDiscussion 清理状态并重新评估
-    const askNoteStillExists = discussion.notes.some(note => {
-      if (!isMaintainerAuthoredNote(note.body)) return false;
-      return getCommentActivityAt(note) >= askedAt - 1000;
-    });
+    const askNoteStillExists = hasVisibleMaintainerQuestion(
+      discussion,
+      askedAt,
+      interactive.question
+    );
     if (!askNoteStillExists) {
       return true;
     }
     const hasNewReply = lastHumanNoteAt > askedAt;
     const timedOut = Date.now() - askedAt > INTERACTIVE_REPLY_TIMEOUT_MS;
-    return hasNewReply || timedOut;
+    return hasPendingRetry || hasNewReply || timedOut;
   }
 
   const lastMaintainerNoteAt = getLatestNoteTime(discussion.notes, note =>
@@ -184,10 +240,6 @@ export function isDiscussionPending(
   if (lastMaintainerNoteAt === 0 && hasConcreteFindingReference(discussion)) {
     return true;
   }
-
-  // 所有 finding 都已判定无需修复，但远端没有对应说明（可能从未发布或被清理）：
-  // 必须重新进入流程补发逐项结论并 resolve，不能只依赖本地决策状态静默跳过。
-  if (needsNoFixExplanation) return true;
 
   // 如果 Maintainer 已经回复/提问过，且之后没有新的人工 note：
   // - 有处理证据（决策记忆/统计报告/非 finding 记录）→ 跳过，防重复回复与自我追问；

@@ -24,6 +24,8 @@
    - 修复方式可以不是 Reviewer 提出的方法；只要当前代码已经不存在 finding 描述的问题，就返回 `alreadyFixed=true`。
 2. 优先根据上面「代码（聚焦窗口）」中第 `{{findingLine}}` 行附近的代码判断。
 3. 如果聚焦窗口里的代码**清楚显示问题已修复**，返回 `alreadyFixed=true`，并在 `evidence` 中给出具体证据（行号、代码片段）。
+   - 同时在 `evidenceSnippet` 中原样摘录最小代码片段；该片段必须真实出现在当前目标文件或上方明确提供的额外文件上下文中。
+   - 证据只能说明当前 `{{findingFile}}:{{findingLine}}` 对应的 finding，禁止引用同一评论中的其他文件、函数或 finding。
 4. 如果聚焦窗口里的代码**清楚显示问题仍然存在**，返回 `alreadyFixed=false`，并在 `reason` 中说明问题在哪。
 5. **如果聚焦窗口太窄，缺少判断所必需的上下文**（例如相关类型定义、imports、跨函数引用在窗口外看不到），不要猜测，请返回：
    - `alreadyFixed=false`
@@ -41,12 +43,13 @@
 
 请输出 JSON：
 {
-  "alreadyFixed": true|false,
-  "reason": "简要说明",
-  "evidence": "具体证据（如第 X 行已包含 ...）",
-  "needsMoreContext": true|false
+"alreadyFixed": true|false,
+"reason": "简要说明",
+"evidence": "具体证据（如第 X 行已包含 ...）",
+"evidenceSnippet": "原样摘录的最小代码片段",
+"evidenceLine": 123,
+"needsMoreContext": true|false
 }
-
 
 ## Additional constraints
 

@@ -20,4 +20,5 @@
 16. 在调用 finish({ success: true, ... }) 之前，必须已经通过 write_file、apply_patch 或 delete_file 实际修改或删除了至少一个文件；如果你尚未做任何文件变更，不要调用 finish，否则我会要求你重新修改。
 17. Reviewer 的修改建议仅供参考。你应先理解问题根因，再决定最合适的修复方式；如果建议本身不合理、无法直接实施，或存在更简洁/更安全的替代方案，你可以选择自己的方案，并在 finish reason 中简要说明为什么这样做。
 18. 如果问题涉及 singleton、模块级状态、reset、dispose 或多实例行为，必须先搜索定义、注入、重置和生命周期调用点，确认状态的实际拥有者；重点验证销毁实例 A 不会清空实例 B 的状态。不能只修改注释或测试来规避架构问题。
+19. 如果读取当前目标文件后确认 finding 已被其他提交修复、当前代码已不存在该问题，调用 finish，并额外设置 alreadyFixed=true；reason 与 evidence 只能描述当前目标 finding，不能引用同一 discussion 的其他 finding。框架会再次独立回查，不会直接采信该结论。
     {{extraSystemPrompt}}

@@ -3,8 +3,13 @@ import {
   deliverDiscussionReply,
   isDiscussionDeliveryPending,
 } from '../../../../../src/advance/classic/runners/shared/discussion-delivery.js';
-import type { Discussion, IGitProvider, MergeRequest } from '../../../../../src/advance/classic/provider/types.js';
+import type {
+  Discussion,
+  IGitProvider,
+  MergeRequest,
+} from '../../../../../src/advance/classic/provider/types.js';
 import type { DiscussionDeliveryState } from '../../../../../src/advance/classic/runners/shared/state-utils.js';
+import { MAX_DISCUSSION_REPLY_CHARS } from '../../../../../src/advance/classic/runners/shared/reply-safety.js';
 
 const mr: MergeRequest = {
   iid: 17,
@@ -209,6 +214,75 @@ describe('deliverDiscussionReply', () => {
     expect(result).toMatchObject({ replyPosted: true, resolved: false, pending: false });
     expect(provider.addDiscussionNote).not.toHaveBeenCalled();
     expect(provider.resolveDiscussion).not.toHaveBeenCalled();
+  });
+
+  it('发布前移除 ANSI 并压缩超长回复正文', async () => {
+    const provider = {
+      addDiscussionNote: vi.fn().mockResolvedValue(21),
+      resolveDiscussion: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IGitProvider;
+    const discussion = makeDiscussion();
+    let delivery: DiscussionDeliveryState | undefined;
+    const oversizedBody = `\u001b[31m错误\u001b[0m\n${'x'.repeat(430_000)}\n\n---\n*生成于 2026/08/03 12:00:00 · CodeKeeper Maintainer*`;
+
+    await deliverDiscussionReply({
+      provider,
+      mr,
+      discussion,
+      body: oversizedBody,
+      resolve: false,
+      delivery,
+      setDelivery: next => {
+        delivery = next;
+      },
+      checkpoint: () => undefined,
+    });
+
+    const postedBody = vi.mocked(provider.addDiscussionNote).mock.calls[0][2];
+    expect(postedBody.length).toBeLessThanOrEqual(MAX_DISCUSSION_REPLY_CHARS);
+    expect(postedBody).not.toContain('\u001b[');
+    expect(postedBody).toContain('诊断内容过长');
+    expect(delivery?.replyBody).toBe(postedBody);
+  });
+
+  it('进度回复正文变化时保留首次提问时间', async () => {
+    const provider = {
+      addDiscussionNote: vi.fn().mockResolvedValueOnce(31).mockResolvedValueOnce(32),
+      resolveDiscussion: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IGitProvider;
+    const discussion = makeDiscussion();
+    let delivery: DiscussionDeliveryState | undefined;
+    const askedAt = Date.now() - 60_000;
+
+    await deliverDiscussionReply({
+      provider,
+      mr,
+      discussion,
+      body: '首次提问。',
+      resolve: false,
+      awaitingReply: { question: '请确认预期行为', filePath: 'src/example.ts', askedAt },
+      delivery,
+      setDelivery: next => {
+        delivery = next;
+      },
+      checkpoint: () => undefined,
+    });
+
+    await deliverDiscussionReply({
+      provider,
+      mr,
+      discussion,
+      body: '仍在等待确认，同时继续处理其他 finding。',
+      resolve: false,
+      awaitingReply: { question: '请确认预期行为', filePath: 'src/example.ts', askedAt },
+      delivery,
+      setDelivery: next => {
+        delivery = next;
+      },
+      checkpoint: () => undefined,
+    });
+
+    expect(delivery?.awaitingReplyAt).toBe(askedAt);
   });
 });
 

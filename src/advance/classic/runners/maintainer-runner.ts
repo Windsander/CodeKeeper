@@ -10,16 +10,45 @@ import { LlmClient } from '../../llm/client.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';
-import { MaintainerActor, type MaintainerActionResult } from '../fix/maintainer-actor.js';
+import {
+  MaintainerActor,
+  type BatchFixResult,
+  type MaintainerActionResult,
+} from '../fix/maintainer-actor.js';
 import { CognitiveEngine } from '../cognitive-engine.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import { RecallPlanner } from '../memory/recall-planner.js';
 import type { Project, RoleConfig, MaintainerConfig } from '../../types.js';
-import type { MergeRequest, ReviewFinding, Discussion } from '../provider/types.js';
+import { getArchiveRoot } from '../../types.js';
+import type {
+  MergeRequest,
+  ReviewFinding,
+  Discussion,
+  ReviewerComment,
+} from '../provider/types.js';
 import type { MrContext } from '../fix/cognitive-types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
 import { logger } from '../../../core/logger.js';
-import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
+import {
+  loadState,
+  saveState,
+  type MaintainerThreadState,
+  type MrAgentState,
+} from './shared/state-utils.js';
+import {
+  archiveLifecycleRecord,
+  buildMrLifecycleKey,
+  classifyCiFailure,
+  collectInterruptCandidates,
+  computeClosureStats,
+  createLifecycleState,
+  detectInterruptCommand,
+  hashFailedJobs,
+  isMrConverged,
+  MAX_CI_FIX_ATTEMPTS_PER_HEAD,
+  type MrLifecycleInterrupt,
+  type MrLifecycleState,
+} from './shared/mr-lifecycle.js';
 import {
   formatAgentFooter,
   isAgentAuthoredNote,
@@ -30,7 +59,15 @@ import {
 } from './shared/review-utils.js';
 import { readDiscussionFileContent } from './shared/discussion-file-reader.js';
 import { focusedContextToString } from '../fix/focused-context-streamer.js';
-import { isDiscussionPending, INTERACTIVE_REPLY_TIMEOUT_MS } from './shared/maintainer-filter.js';
+import {
+  hasVisibleMaintainerQuestion,
+  isDiscussionPending,
+  isNoFixBackfillCapped,
+  isJudgmentFlipped,
+  INTERACTIVE_REPLY_TIMEOUT_MS,
+} from './shared/maintainer-filter.js';
+import { isSelfAnswerableQuestion, isRepoContentReply } from '../fix/ask-gate.js';
+import { sanitizeEverOSId } from '../memory/types.js';
 import { isCiReviewBody, parseStructuredCiReview } from './shared/ci-review-parser.js';
 import {
   getFindingKey,
@@ -43,6 +80,13 @@ import {
   type DiscussionDeliveryResult,
 } from './shared/discussion-delivery.js';
 import { getCommentActivityAt, getCommentUpdatedAt } from '../provider/activity-window.js';
+import {
+  compactDiscussionReplyBody,
+  compactDiscussionReason,
+  hashDiscussionReplyBody,
+  MAX_DISCUSSION_REPLY_CHARS,
+} from './shared/reply-safety.js';
+import { defaultPromptLoader } from '../../llm/prompts/loader.js';
 
 function logMemoryUsage(label: string): void {
   const usage = process.memoryUsage();
@@ -68,6 +112,180 @@ export function buildMaintainerMrSessionId(projectId: string, mrIid: number): st
 
 /** 单条 finding 最大自动修复重试次数 */
 const MAX_FIX_RETRY_ATTEMPTS = 3;
+const MAINTAINER_STATE_REPAIR_VERSION = 2;
+export const STALE_DISCUSSION_DELIVERY_MS = 2 * 60 * 60 * 1000;
+
+function buildFixFailureQuestion(fileLine: string): string {
+  return defaultPromptLoader.load('maintainer-fix-failed-ask', { fileLine });
+}
+
+function isPrematureFixFailureQuestion(question: string): boolean {
+  return /尝试自动修复.+未成功.+补充期望的修改方式或范围|automatic fix.+failed.+clarif/i.test(
+    question
+  );
+}
+
+/** 对旧版本留下的 ask、批量同因失败和超长正文做一次性自愈迁移。 */
+export function repairLegacyMaintainerThreadState(
+  threadState: MaintainerThreadState,
+  now = Date.now()
+): {
+  changed: boolean;
+  repairedSelfAnswerableAsk: boolean;
+  repairedPrematureFixAsk: boolean;
+} {
+  let changed = false;
+  let repairedSelfAnswerableAsk = false;
+  let repairedPrematureFixAsk = false;
+
+  for (const decision of Object.values(threadState.decisions)) {
+    if (decision.lastFailureReason) {
+      const compacted = compactDiscussionReason(decision.lastFailureReason);
+      if (compacted !== decision.lastFailureReason) {
+        decision.lastFailureReason = compacted;
+        changed = true;
+      }
+    }
+    if (decision.replyBody) {
+      const compacted = compactDiscussionReason(decision.replyBody);
+      if (compacted !== decision.replyBody) {
+        decision.replyBody = compacted;
+        changed = true;
+      }
+    }
+  }
+
+  const delivery = threadState.delivery;
+  if (delivery) {
+    const compactedBody = compactDiscussionReplyBody(delivery.replyBody);
+    if (compactedBody !== delivery.replyBody) {
+      delivery.replyBody = compactedBody;
+      delivery.replyHash = hashDiscussionReplyBody(compactedBody);
+      changed = true;
+    }
+    delivery.createdAt ??=
+      threadState.lastSummaryAt ?? delivery.awaitingReplyAt ?? delivery.updatedAt;
+  }
+
+  const previousRepairVersion = threadState.repairVersion ?? 0;
+  if (previousRepairVersion < 1) {
+    const duplicateFailureGroups = new Map<string, string[]>();
+    for (const [key, decision] of Object.entries(threadState.decisions)) {
+      if (decision.action !== 'fix' || !decision.lastFailureReason) continue;
+      const reason = compactDiscussionReason(decision.lastFailureReason);
+      const keys = duplicateFailureGroups.get(reason) ?? [];
+      keys.push(key);
+      duplicateFailureGroups.set(reason, keys);
+    }
+
+    for (const keys of duplicateFailureGroups.values()) {
+      if (keys.length < 2) continue;
+      for (const key of keys) {
+        const decision = threadState.decisions[key];
+        decision.failedAttempts = 0;
+        decision.fixSucceeded = undefined;
+        decision.lastFailureReason = undefined;
+        decision.decidedAt = now;
+        changed = true;
+      }
+    }
+
+    for (const decision of Object.values(threadState.decisions)) {
+      const question = decision.question ?? decision.replyBody ?? decision.reason;
+      if (decision.action !== 'ask' || !isSelfAnswerableQuestion(question)) continue;
+      decision.action = 'fix';
+      decision.question = undefined;
+      decision.failedAttempts = 0;
+      decision.fixSucceeded = undefined;
+      decision.lastFailureReason = undefined;
+      decision.decidedAt = now;
+      repairedSelfAnswerableAsk = true;
+      changed = true;
+    }
+  }
+
+  if (previousRepairVersion < 2) {
+    const prematureDecisions = Object.values(threadState.decisions).filter(decision => {
+      const question = decision.question ?? threadState.delivery?.question ?? '';
+      return (
+        decision.action === 'fix' &&
+        !decision.fixSucceeded &&
+        decision.failedAttempts < MAX_FIX_RETRY_ATTEMPTS &&
+        isPrematureFixFailureQuestion(question)
+      );
+    });
+    if (prematureDecisions.length > 0) {
+      for (const decision of prematureDecisions) {
+        decision.question = undefined;
+        decision.decidedAt = now;
+      }
+      if (threadState.delivery?.awaitingReply) {
+        threadState.delivery.awaitingReply = false;
+        threadState.delivery.awaitingReplyAt = undefined;
+        threadState.delivery.question = undefined;
+        threadState.delivery.filePath = undefined;
+        threadState.delivery.updatedAt = now;
+      }
+      repairedPrematureFixAsk = true;
+      changed = true;
+    }
+  }
+
+  threadState.repairVersion = MAINTAINER_STATE_REPAIR_VERSION;
+  if (changed) {
+    threadState.lastSummaryHash = undefined;
+    threadState.noFixExplanationBackfilledAt = undefined;
+  }
+  return { changed, repairedSelfAnswerableAsk, repairedPrematureFixAsk };
+}
+
+/** 陈旧的未完成投递必须重新计算，不能跨多天照搬旧回复。 */
+export function getDiscussionDeliveryInvalidationReason(params: {
+  discussion: Discussion;
+  threadState: MaintainerThreadState;
+  currentHeadSha?: string;
+  now?: number;
+}): string | undefined {
+  const delivery = params.threadState.delivery;
+  if (!delivery) return undefined;
+  const replyExists = params.discussion.notes.some(
+    note =>
+      note.id === delivery.replyNoteId ||
+      note.body === delivery.replyBody ||
+      compactDiscussionReplyBody(note.body) === delivery.replyBody
+  );
+  const postedReplyExists = delivery.replyStatus === 'posted' && replyExists;
+  if (postedReplyExists && !isDiscussionDeliveryPending(delivery)) return undefined;
+
+  if (delivery.awaitingReply && isSelfAnswerableQuestion(delivery.question ?? '')) {
+    return '历史投递包含仓库内可自查的提问';
+  }
+  if (delivery.replyBody.length > MAX_DISCUSSION_REPLY_CHARS) {
+    return '历史投递正文超过远端安全上限';
+  }
+
+  const createdAt =
+    delivery.createdAt ??
+    params.threadState.lastSummaryAt ??
+    delivery.awaitingReplyAt ??
+    delivery.updatedAt;
+  const sourceUpdatedAt = params.discussion.notes[0]
+    ? getCommentUpdatedAt(params.discussion.notes[0])
+    : 0;
+  if (sourceUpdatedAt > createdAt) return 'Reviewer 源评论在投递生成后发生更新';
+  if (
+    params.currentHeadSha &&
+    params.threadState.lastProcessedHeadSha &&
+    isReviewCommitStale(params.threadState.lastProcessedHeadSha, params.currentHeadSha)
+  ) {
+    return 'MR HEAD 已变化';
+  }
+  if (postedReplyExists) return undefined;
+  if ((params.now ?? Date.now()) - createdAt > STALE_DISCUSSION_DELIVERY_MS) {
+    return '未完成投递已超过两小时，需要重新计算';
+  }
+  return undefined;
+}
 
 function normalizeMaintainerActionResult(
   result: MaintainerActionResult | boolean | undefined
@@ -121,7 +339,8 @@ export function buildSummaryStateHash(
   failedItems: string[],
   askedItems: Array<{ fileLine: string }>,
   ignoredItems: Array<{ fileLine: string }>,
-  alreadyFixedItems: Array<{ fileLine: string }>
+  alreadyFixedItems: Array<{ fileLine: string }>,
+  deferredItems: string[] = []
 ): string {
   const stateKeys = [
     ...new Set([
@@ -130,6 +349,7 @@ export function buildSummaryStateHash(
       ...askedItems.map(item => `ask:${item.fileLine}`),
       ...ignoredItems.map(item => `ignored:${item.fileLine}`),
       ...alreadyFixedItems.map(item => `already-fixed:${item.fileLine}`),
+      ...deferredItems.map(item => `deferred:${item.split(' — ')[0]}`),
     ]),
   ].sort();
   return simpleHash(JSON.stringify(stateKeys));
@@ -217,10 +437,32 @@ export async function runDiscussionTasks<T>(
  */
 export function classifyBatchFixItems(
   items: Array<{ file: string; line: number; deleteFile?: boolean }>,
-  batchResult: { success: boolean; reason: string; appliedFiles: string[]; deletedFiles: string[] }
-): { fixedItems: string[]; failedItems: string[] } {
+  batchResult: {
+    success: boolean;
+    reason: string;
+    appliedFiles: string[];
+    deletedFiles: string[];
+    itemResults?: BatchFixResult['itemResults'];
+  }
+): { fixedItems: string[]; failedItems: string[]; deferredItems: string[] } {
   const fixedItems: string[] = [];
   const failedItems: string[] = [];
+  const deferredItems: string[] = [];
+
+  if (batchResult.itemResults) {
+    for (const item of batchResult.itemResults) {
+      const key = `${item.file}:${item.line}`;
+      if (item.status === 'fixed') fixedItems.push(key);
+      if (item.status === 'failed') {
+        failedItems.push(`${key} — ${item.reason || batchResult.reason || '修复失败'}`);
+      }
+      if (item.status === 'deferred') {
+        deferredItems.push(`${key} — ${item.reason || '本轮尚未执行'}`);
+      }
+    }
+    return { fixedItems, failedItems, deferredItems };
+  }
+
   for (const item of items) {
     const key = `${item.file}:${item.line}`;
     const fixed = item.deleteFile
@@ -232,7 +474,7 @@ export function classifyBatchFixItems(
       failedItems.push(`${key} — ${batchResult.reason || '修复失败'}`);
     }
   }
-  return { fixedItems, failedItems };
+  return { fixedItems, failedItems, deferredItems };
 }
 
 /**
@@ -242,6 +484,21 @@ export interface MaintainerRunnerOptions {
   /** LLM 客户端实例 */
   llmClient: LlmClient;
 }
+
+export interface CiHandlingResult {
+  /** 本轮是否实际调用了 CI 修复循环。 */
+  fixAttempted: boolean;
+  /** 本轮是否已经推送 CI 修复。 */
+  fixPushed: boolean;
+  /** 是否应等待下一轮 CI/HEAD 刷新后再处理普通 discussion。 */
+  deferDiscussionProcessing: boolean;
+}
+
+const CONTINUE_AFTER_CI: CiHandlingResult = {
+  fixAttempted: false,
+  fixPushed: false,
+  deferDiscussionProcessing: false,
+};
 
 export class MaintainerRunner extends BaseRoleRunner {
   constructor(options: MaintainerRunnerOptions) {
@@ -304,6 +561,7 @@ export class MaintainerRunner extends BaseRoleRunner {
 
     const state = loadState(project);
     state.interactiveThreads ??= {};
+    state.mrLifecycle ??= {};
 
     console.log(`[MaintainerRunner] 扫描项目 ${project.name} 的 open MRs...`);
     console.log(
@@ -325,6 +583,10 @@ export class MaintainerRunner extends BaseRoleRunner {
     console.log(`[MaintainerRunner] 项目 ${project.name} 发现 ${mrs.length} 个 open MR`);
     logMemoryUsage('开始处理项目前');
 
+    // 生命周期终态清扫：已跟踪但不再 open 的 MR，识别 merged/closed 并归档
+    await this.finalizeTerminalLifecycles(provider, mrs, state, project);
+    saveState(project, state, 'maintainer');
+
     // 默认跳过 draft；如果 filter 里显式配置了 Draft=true，则保留 draft MR
     const draftCondition = maintainerConfig.filter?.conditions.find(c => c.field === 'draft');
     const includeDraft = draftCondition?.values.includes('true') ?? false;
@@ -336,6 +598,15 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
 
       console.log(`[MaintainerRunner] 维护 MR !${mr.iid}: ${mr.title}`);
+
+      // 单 MR 全生命周期状态：首次见到时建档，每轮更新轮询水位
+      const lifecycle = this.ensureMrLifecycle(state, mr);
+      if (lifecycle.status === 'archived') {
+        console.log(
+          `[MaintainerRunner] MR !${mr.iid} 已归档（${lifecycle.endReason ?? 'unknown'}），跳过自治维护`
+        );
+        continue;
+      }
 
       let allDiscussions: Discussion[];
       let discussions: Discussion[];
@@ -355,6 +626,16 @@ export class MaintainerRunner extends BaseRoleRunner {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[MaintainerRunner] 获取 MR !${mr.iid} discussions 失败: ${message}`);
+        continue;
+      }
+
+      // 用户中断指令检测：命中后优雅退出并归档，后续轮询不再自治处理本 MR
+      const interrupt = await this.detectMrInterrupt(provider, mr, allDiscussions, lifecycle);
+      if (interrupt) {
+        lifecycle.interrupted = interrupt;
+        await this.acknowledgeInterrupt(provider, mr, lifecycle, maintainerName);
+        this.finalizeLifecycle(project, lifecycle, 'interrupted', allDiscussions);
+        saveState(project, state, 'maintainer');
         continue;
       }
 
@@ -381,22 +662,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         memoryClient,
         recallPlanner,
         checkpoint: () => saveState(project, state, 'maintainer'),
-      });
-
-      const reconciliationResults = await this.reconcileTrackedDiscussionDeliveries(
-        actor,
-        provider,
-        mr,
-        allDiscussions,
-        state
-      );
-      saveState(project, state, 'maintainer');
-
-      console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
-      discussions.forEach((d, idx) => {
-        console.log(
-          `[MaintainerRunner] discussion[${idx}] id=${d.id}, resolvable=${d.resolvable}, resolved=${d.resolved}, notes=${d.notes.length}, firstAuthor=${d.notes[0]?.author ?? 'none'}`
-        );
+        metrics: lifecycle.metrics,
       });
 
       let currentHeadSha: string | undefined;
@@ -408,6 +674,50 @@ export class MaintainerRunner extends BaseRoleRunner {
           `[MaintainerRunner] MR !${mr.iid} current HEAD unavailable; stale recheck skipped: ${message}`
         );
       }
+
+      for (const discussion of allDiscussions) {
+        const threadState = state.maintainerThreadState?.[discussion.id];
+        if (!threadState) continue;
+        const repair = repairLegacyMaintainerThreadState(threadState);
+        if (repair.repairedSelfAnswerableAsk || repair.repairedPrematureFixAsk) {
+          delete state.interactiveThreads[discussion.id];
+          const delivery = threadState.delivery;
+          if (
+            delivery?.awaitingReply &&
+            (isSelfAnswerableQuestion(delivery.question ?? '') ||
+              isPrematureFixFailureQuestion(delivery.question ?? ''))
+          ) {
+            const replyExists = discussion.notes.some(note => note.id === delivery.replyNoteId);
+            delivery.awaitingReply = false;
+            delivery.awaitingReplyAt = undefined;
+            delivery.question = undefined;
+            delivery.filePath = undefined;
+            if (delivery.replyStatus !== 'posted' || !replyExists) {
+              threadState.delivery = undefined;
+            }
+          }
+        }
+        if (repair.changed) {
+          console.log(`[MaintainerRunner] discussion ${discussion.id} 已完成历史状态自愈`);
+        }
+      }
+
+      const reconciliationResults = await this.reconcileTrackedDiscussionDeliveries(
+        actor,
+        provider,
+        mr,
+        allDiscussions,
+        state,
+        currentHeadSha
+      );
+      saveState(project, state, 'maintainer');
+
+      console.log(`[MaintainerRunner] MR !${mr.iid} 原始 discussion 数量: ${discussions.length}`);
+      discussions.forEach((d, idx) => {
+        console.log(
+          `[MaintainerRunner] discussion[${idx}] id=${d.id}, resolvable=${d.resolvable}, resolved=${d.resolved}, notes=${d.notes.length}, firstAuthor=${d.notes[0]?.author ?? 'none'}`
+        );
+      });
 
       const pendingDiscussions = discussions.filter(d => {
         const reconciliation = reconciliationResults.get(d.id);
@@ -439,67 +749,520 @@ export class MaintainerRunner extends BaseRoleRunner {
         `[MaintainerRunner] MR !${mr.iid} pending discussions: ${pendingDiscussions.length}`
       );
 
-      if (pendingDiscussions.length === 0) {
-        console.log(`[MaintainerRunner] MR !${mr.iid} has no pending discussions`);
+      // 先处理 CI 阻塞，避免坏基线让每条普通 finding 都被同一个编译错误连坐。
+      const ciHandling = await this.handleCiStatus(
+        provider,
+        actor,
+        mr,
+        lifecycle,
+        maintainerConfig,
+        maintainerName,
+        currentHeadSha
+      );
+      if (ciHandling.deferDiscussionProcessing) {
+        console.log(
+          ciHandling.fixPushed
+            ? `[MaintainerRunner] MR !${mr.iid} 本轮已推送 CI 修复，等待新 pipeline 与新 HEAD 后再处理普通 discussion`
+            : `[MaintainerRunner] MR !${mr.iid} 本轮已优先尝试 CI 修复，避免在坏基线上处理旧 discussion，等待下一轮再评估`
+        );
+        this.refreshLifecycleMetrics(lifecycle, allDiscussions, state, pendingDiscussions.length);
+        saveState(project, state, 'maintainer');
         await memoryClient?.disconnect().catch(() => undefined);
         continue;
       }
 
-      console.log(
-        `[MaintainerRunner] MR !${mr.iid} processing ${pendingDiscussions.length} discussions`
-      );
-      await runDiscussionTasks(
-        pendingDiscussions,
-        async discussion => {
-          console.log(
-            `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
-          );
-          logMemoryUsage(`处理 discussion ${discussion.id} 前`);
-          await this.processDiscussion(
-            mr,
-            discussion,
-            provider,
-            brain,
-            actor,
-            worktreeManager,
-            maintainerName,
-            state,
-            project.rootPath,
-            memoryClient,
-            cognitiveDepth,
-            currentHeadSha
-          );
-          try {
-            const latestHeadSha = await refreshDiscussionProcessedHeadSha(
+      if (pendingDiscussions.length === 0) {
+        console.log(`[MaintainerRunner] MR !${mr.iid} has no pending discussions`);
+      } else {
+        console.log(
+          `[MaintainerRunner] MR !${mr.iid} processing ${pendingDiscussions.length} discussions`
+        );
+        await runDiscussionTasks(
+          pendingDiscussions,
+          async discussion => {
+            console.log(
+              `[MaintainerRunner] 开始处理 discussion ${discussion.id}, position=${JSON.stringify(discussion.position)}`
+            );
+            logMemoryUsage(`处理 discussion ${discussion.id} 前`);
+            await this.processDiscussion(
+              mr,
+              discussion,
               provider,
-              mr.iid,
-              discussion.id,
-              state
+              brain,
+              actor,
+              worktreeManager,
+              maintainerName,
+              state,
+              project.rootPath,
+              memoryClient,
+              cognitiveDepth,
+              currentHeadSha
             );
-            if (latestHeadSha) {
-              currentHeadSha = latestHeadSha;
+            try {
+              const latestHeadSha = await refreshDiscussionProcessedHeadSha(
+                provider,
+                mr.iid,
+                discussion.id,
+                state
+              );
+              if (latestHeadSha) {
+                currentHeadSha = latestHeadSha;
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              console.warn(
+                `[MaintainerRunner] discussion ${discussion.id} 完成后刷新 MR HEAD 失败: ${message}`
+              );
             }
-          } catch (error) {
+            saveState(project, state, 'maintainer');
+          },
+          (discussion, error) => {
+            // 记忆写入可能已经在异常前完成，因此不能据此推断回复也已成功发布。
             const message = error instanceof Error ? error.message : String(error);
-            console.warn(
-              `[MaintainerRunner] discussion ${discussion.id} 完成后刷新 MR HEAD 失败: ${message}`
+            console.error(
+              `[MaintainerRunner] discussion ${discussion.id} 处理异常，继续处理后续 discussion: ${message}`
             );
+            saveState(project, state, 'maintainer');
           }
-          saveState(project, state, 'maintainer');
-        },
-        (discussion, error) => {
-          // 记忆写入可能已经在异常前完成，因此不能据此推断回复也已成功发布。
-          const message = error instanceof Error ? error.message : String(error);
-          console.error(
-            `[MaintainerRunner] discussion ${discussion.id} 处理异常，继续处理后续 discussion: ${message}`
-          );
-          saveState(project, state, 'maintainer');
-        }
-      );
+        );
+      }
+
+      // 生命周期指标与收敛判定（讨论闭环率、修/辩/挂起统计、误修信号）
+      this.refreshLifecycleMetrics(lifecycle, allDiscussions, state, pendingDiscussions.length);
+      saveState(project, state, 'maintainer');
       await memoryClient?.disconnect().catch(() => undefined);
     }
 
     saveState(project, state, 'maintainer');
+  }
+
+  /**
+   * 获取/创建 MR 生命周期记录，并更新本轮轮询水位
+   */
+  private ensureMrLifecycle(state: MrAgentState, mr: MergeRequest): MrLifecycleState {
+    state.mrLifecycle ??= {};
+    const key = buildMrLifecycleKey(mr.iid);
+    state.mrLifecycle[key] ??= createLifecycleState(mr);
+    const lifecycle = state.mrLifecycle[key];
+    lifecycle.title = mr.title;
+    lifecycle.webUrl = mr.webUrl;
+    lifecycle.lastPolledAt = Date.now();
+    lifecycle.pollCount += 1;
+    return lifecycle;
+  }
+
+  /** 自增一个 M 系列过程指标（M4/M5 由 runner 侧写入） */
+  private incrLifecycleMetric(
+    state: MrAgentState,
+    mr: MergeRequest,
+    key: 'duplicateSummarySkips' | 'askGateInterceptions'
+  ): void {
+    const metrics = this.ensureMrLifecycle(state, mr).metrics;
+    metrics[key] = (metrics[key] ?? 0) + 1;
+  }
+
+  /**
+   * 生命周期终态清扫
+   *
+   * 已跟踪但本轮不再出现在 open 列表中的 MR：核实其真实状态，
+   * merged/closed 则优雅退出并归档；仍 open（例如被 filter 排除）则保留等待。
+   */
+  private async finalizeTerminalLifecycles(
+    provider: GitLabProvider,
+    openMrs: MergeRequest[],
+    state: MrAgentState,
+    project: Project
+  ): Promise<void> {
+    const openIids = new Set(openMrs.map(mr => mr.iid));
+    for (const lifecycle of Object.values(state.mrLifecycle ?? {})) {
+      if (lifecycle.status === 'archived') continue;
+      if (openIids.has(lifecycle.mrIid)) continue;
+
+      let remoteState: string;
+      try {
+        remoteState = (await provider.getMROverview(lifecycle.mrIid)).state;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[MaintainerRunner] 核实 MR !${lifecycle.mrIid} 终态失败: ${message}`);
+        continue;
+      }
+
+      if (remoteState !== 'merged' && remoteState !== 'closed') continue;
+
+      // merged/closed 的 MR 通常仍可读取 discussion，尽力补齐终态闭环快照
+      let discussions: Discussion[] = [];
+      try {
+        discussions = (await provider.getDiscussionSnapshot(lifecycle.mrIid)).all;
+      } catch {
+        // 读取失败时以空快照归档，不阻断退出
+      }
+      console.log(`[MaintainerRunner] MR !${lifecycle.mrIid} 已 ${remoteState}，执行归档退出`);
+      this.finalizeLifecycle(project, lifecycle, remoteState, discussions);
+    }
+  }
+
+  /**
+   * 检测 MR 上的用户中断指令（MR 级评论 + discussion note 中的人工停止指令）
+   */
+  private async detectMrInterrupt(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    allDiscussions: Discussion[],
+    lifecycle: MrLifecycleState
+  ): Promise<MrLifecycleInterrupt | undefined> {
+    let mrNotes: ReviewerComment[] = [];
+    try {
+      mrNotes = (await provider.getReviewerCommentSnapshot(mr.iid)).all;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} 评论失败，跳过中断指令检测: ${message}`);
+      return undefined;
+    }
+    const candidates = collectInterruptCandidates(mrNotes, allDiscussions);
+    const interrupt = detectInterruptCommand(
+      candidates,
+      (author, body) => !isAgentAuthoredNote(body) && !isBotAuthor(author)
+    );
+    if (!interrupt) return undefined;
+    // 已触发过的旧指令不重复处理
+    if (interrupt.at <= (lifecycle.interrupted?.at ?? 0)) return undefined;
+    return interrupt;
+  }
+
+  /**
+   * 发布中断确认评论，告知用户 Maintainer 已停止自治维护
+   */
+  private async acknowledgeInterrupt(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    lifecycle: MrLifecycleState,
+    maintainerName: string
+  ): Promise<void> {
+    const interrupt = lifecycle.interrupted;
+    if (!interrupt) return;
+    const body = [
+      `🛑 已收到 @${interrupt.by} 的停止指令，${maintainerName} 已停止对本 MR 的自动修复与讨论处理，并归档当前维护记录。`,
+      '',
+      `> ${interrupt.command.replace(/\n/g, ' ')}`,
+      '',
+      '如需恢复自治维护，请在本 MR 中重新 @ 我说明。',
+      '',
+      formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName),
+    ].join('\n');
+    try {
+      await provider.postReviewComment(mr.iid, body);
+      console.log(`[MaintainerRunner] MR !${mr.iid} 收到用户中断指令，已发布停止确认`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] MR !${mr.iid} 中断确认评论发布失败: ${message}`);
+    }
+  }
+
+  /**
+   * CI 状态感知与自治修复
+   *
+   * - failed：区分基础设施失败（挂起）与代码问题失败（最小修复并推送）；
+   * - 同一 head 上修复次数受 MAX_CI_FIX_ATTEMPTS_PER_HEAD 约束，超限挂起；
+   * - 修复进展都写入 Maintainer 创建的 CI 跟踪 discussion，保持过程透明。
+   */
+  private async handleCiStatus(
+    provider: GitLabProvider,
+    actor: MaintainerActor,
+    mr: MergeRequest,
+    lifecycle: MrLifecycleState,
+    config: MaintainerConfig,
+    maintainerName: string,
+    currentHeadSha?: string
+  ): Promise<CiHandlingResult> {
+    let status: string;
+    try {
+      status = await provider.getCIStatus(mr.iid);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} CI 状态失败: ${message}`);
+      return CONTINUE_AFTER_CI;
+    }
+
+    lifecycle.ci ??= { fixAttempts: 0, totalFixPushes: 0, updatedAt: Date.now() };
+    const ci = lifecycle.ci;
+    const prevStatus = ci.lastStatus;
+    ci.lastStatus = status;
+    ci.updatedAt = Date.now();
+
+    if (status === 'success') {
+      if (prevStatus === 'failed' && ci.discussionId && ci.totalFixPushes > 0) {
+        await this.postCiNote(
+          provider,
+          mr,
+          ci,
+          `✅ CI 已恢复通过（累计推送 ${ci.totalFixPushes} 次自动修复）。`,
+          maintainerName
+        );
+      }
+      ci.fixAttempts = 0;
+      ci.suspended = false;
+      ci.suspendReason = undefined;
+      return CONTINUE_AFTER_CI;
+    }
+
+    if (status !== 'failed') return CONTINUE_AFTER_CI;
+
+    // head 变化（自动推送或人工推送）意味着新一轮失败，重置修复计数
+    if (currentHeadSha && ci.lastHeadSha !== currentHeadSha) {
+      ci.lastHeadSha = currentHeadSha;
+      ci.lastFailedJobsHash = undefined;
+      ci.fixAttempts = 0;
+      ci.suspended = false;
+      ci.suspendReason = undefined;
+    }
+
+    let report;
+    try {
+      report = await provider.getCiFailureReport(mr.iid);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] 获取 MR !${mr.iid} CI 失败详情失败: ${message}`);
+      return CONTINUE_AFTER_CI;
+    }
+    if (report.failedJobs.length === 0) {
+      console.log(`[MaintainerRunner] MR !${mr.iid} CI 失败但未收集到失败 job，跳过`);
+      return CONTINUE_AFTER_CI;
+    }
+
+    const jobsHash = hashFailedJobs(report.failedJobs);
+    const jobNames = report.failedJobs.map(job => `${job.stage}/${job.name}`).join(', ');
+
+    // 基础设施/环境失败：修改代码无意义，直接挂起
+    const infraOnly = report.failedJobs.every(job => classifyCiFailure(job) === 'infra');
+    if (infraOnly) {
+      if (!ci.suspended || ci.lastFailedJobsHash !== jobsHash) {
+        await this.ensureCiDiscussion(provider, mr, ci, maintainerName, report.failedJobs);
+        await this.postCiNote(
+          provider,
+          mr,
+          ci,
+          `⏸️ CI 失败属于基础设施/环境问题（${jobNames}），非代码问题，已挂起自动修复，等待重跑或人工处理。`,
+          maintainerName
+        );
+      }
+      ci.suspended = true;
+      ci.suspendReason = 'infra-failure';
+      ci.lastFailedJobsHash = jobsHash;
+      return CONTINUE_AFTER_CI;
+    }
+
+    if (config.ciFixEnabled === false) {
+      console.log(`[MaintainerRunner] MR !${mr.iid} CI 失败，但项目未启用 CI 自动修复，跳过`);
+      return CONTINUE_AFTER_CI;
+    }
+
+    // 同一轮失败已挂起，等待人工
+    if (ci.suspended && ci.lastFailedJobsHash === jobsHash) {
+      console.log(`[MaintainerRunner] MR !${mr.iid} CI 修复已挂起，等待人工介入`);
+      return CONTINUE_AFTER_CI;
+    }
+
+    if (ci.fixAttempts >= MAX_CI_FIX_ATTEMPTS_PER_HEAD) {
+      await this.ensureCiDiscussion(provider, mr, ci, maintainerName, report.failedJobs);
+      if (!ci.suspended) {
+        await this.postCiNote(
+          provider,
+          mr,
+          ci,
+          `⏸️ 已尝试 ${ci.fixAttempts} 次自动修复仍未通过（${jobNames}），挂起等待人工介入。`,
+          maintainerName
+        );
+      }
+      ci.suspended = true;
+      ci.suspendReason = 'attempts-exhausted';
+      ci.lastFailedJobsHash = jobsHash;
+      return CONTINUE_AFTER_CI;
+    }
+
+    // 修：在 isolated worktree 中执行最小修复并推送
+    await this.ensureCiDiscussion(provider, mr, ci, maintainerName, report.failedJobs);
+    const result = await actor.executeCiFix(mr, report);
+    ci.fixAttempts += 1;
+    ci.lastFailedJobsHash = jobsHash;
+    if (result.codeApplied) {
+      ci.totalFixPushes += 1;
+      lifecycle.metrics.fixPushes += 1;
+      await this.postCiNote(
+        provider,
+        mr,
+        ci,
+        `🔧 已针对 CI 失败（${jobNames}）推送第 ${ci.totalFixPushes} 次自动修复：\n${result.appliedFiles.map(f => `- ${f}`).join('\n')}\n\n等待 pipeline 复跑。`,
+        maintainerName
+      );
+    } else {
+      await this.postCiNote(
+        provider,
+        mr,
+        ci,
+        `⚠️ CI 自动修复未成功（第 ${ci.fixAttempts}/${MAX_CI_FIX_ATTEMPTS_PER_HEAD} 次）：${result.reason}`,
+        maintainerName
+      );
+    }
+    return {
+      fixAttempted: true,
+      fixPushed: result.codeApplied,
+      deferDiscussionProcessing: true,
+    };
+  }
+
+  /**
+   * 确保 CI 修复跟踪 discussion 存在；不存在时创建并记录 ID
+   */
+  private async ensureCiDiscussion(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    ci: NonNullable<MrLifecycleState['ci']>,
+    maintainerName: string,
+    failedJobs: Array<{ name: string; stage: string; webUrl?: string }>
+  ): Promise<void> {
+    if (ci.discussionId) return;
+    const body = [
+      `🤖 ${maintainerName} CI 修复跟踪（本线程由 Maintainer 创建，记录 pipeline 失败的自治修复进展）`,
+      '',
+      '当前失败 job：',
+      ...failedJobs.map(
+        job => `- ${job.stage}/${job.name}${job.webUrl ? `（${job.webUrl}）` : ''}`
+      ),
+      '',
+      formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName),
+    ].join('\n');
+    try {
+      ci.discussionId = await provider.createDiscussion(mr.iid, body);
+      console.log(
+        `[MaintainerRunner] MR !${mr.iid} 已创建 CI 修复跟踪 discussion ${ci.discussionId}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] MR !${mr.iid} 创建 CI 跟踪 discussion 失败: ${message}`);
+    }
+  }
+
+  /**
+   * 向 CI 修复跟踪 discussion 追加进展说明
+   */
+  private async postCiNote(
+    provider: GitLabProvider,
+    mr: MergeRequest,
+    ci: NonNullable<MrLifecycleState['ci']>,
+    text: string,
+    maintainerName: string
+  ): Promise<void> {
+    if (!ci.discussionId) return;
+    try {
+      await provider.addDiscussionNote(
+        mr.iid,
+        ci.discussionId,
+        `${text}\n\n${formatAgentFooter(MAINTAINER_ROLE_LABEL, maintainerName)}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] MR !${mr.iid} CI 进展说明发布失败: ${message}`);
+    }
+  }
+
+  /**
+   * 刷新生命周期指标并做收敛判定
+   *
+   * 指标取当前快照而非增量：修/辩/挂起计数直接反映跨轮次记忆
+   * （maintainerThreadState.decisions）中的最新结论，天然幂等。
+   */
+  private refreshLifecycleMetrics(
+    lifecycle: MrLifecycleState,
+    allDiscussions: Discussion[],
+    state: MrAgentState,
+    pendingDiscussionCount: number
+  ): void {
+    // Maintainer 自己创建的 CI 跟踪线程不计入 reviewer 意见闭环
+    const scoped = allDiscussions.filter(d => d.id !== lifecycle.ci?.discussionId);
+    const closure = computeClosureStats(scoped);
+    const metrics = lifecycle.metrics;
+    metrics.discussionsTotal = closure.total;
+    metrics.discussionsResolved = closure.resolved;
+
+    let fixed = 0;
+    let rejected = 0;
+    let suspended = 0;
+    let humanFollowups = 0;
+    for (const discussion of scoped) {
+      const threadState = state.maintainerThreadState?.[discussion.id];
+      if (threadState) {
+        for (const decision of Object.values(threadState.decisions)) {
+          if (decision.action === 'fix' && decision.fixSucceeded) fixed += 1;
+          else if (decision.action === 'ignore' && !decision.alreadyFixed) rejected += 1;
+          else if (decision.action === 'ask') suspended += 1;
+        }
+      }
+      // 误修信号：Maintainer 宣称修复后仍有「人工」追评
+      const lastFixClaimAt = discussion.notes
+        .filter(note => isMaintainerAuthoredNote(note.body) && /✅[\s\S]*修复/.test(note.body))
+        .reduce((max, note) => Math.max(max, getCommentActivityAt(note)), 0);
+      if (lastFixClaimAt > 0 && getLastHumanNoteAt(discussion) > lastFixClaimAt) {
+        humanFollowups += 1;
+      }
+    }
+    metrics.findingsFixed = fixed;
+    metrics.findingsRejected = rejected;
+    metrics.findingsSuspended = suspended;
+    metrics.humanFollowupsAfterFix = humanFollowups;
+
+    const converged = isMrConverged({
+      pendingDiscussionCount,
+      closure,
+      ciStatus: lifecycle.ci?.lastStatus,
+      ciSuspended: lifecycle.ci?.suspended,
+    });
+    if (converged && lifecycle.status === 'active') {
+      lifecycle.status = 'converged';
+      console.log(
+        `[MaintainerRunner] MR !${lifecycle.mrIid} 意见已收敛（闭环 ${closure.resolved}/${closure.total}），进入待合并状态`
+      );
+    } else if (!converged && lifecycle.status === 'converged') {
+      lifecycle.status = 'active';
+      console.log(`[MaintainerRunner] MR !${lifecycle.mrIid} 出现新待处理事项，恢复自治维护`);
+    }
+  }
+
+  /**
+   * 生命周期归档：写入归档文件并记录终态指标，支撑收敛效率验收
+   */
+  private finalizeLifecycle(
+    project: Project,
+    lifecycle: MrLifecycleState,
+    endReason: 'merged' | 'closed' | 'interrupted',
+    discussions: Discussion[]
+  ): void {
+    lifecycle.status = 'archived';
+    lifecycle.endReason = endReason;
+    lifecycle.archivedAt = Date.now();
+
+    const scoped = discussions.filter(d => d.id !== lifecycle.ci?.discussionId);
+    const closure = computeClosureStats(scoped);
+
+    try {
+      lifecycle.archivePath = archiveLifecycleRecord(
+        getArchiveRoot(project),
+        project.id,
+        lifecycle,
+        closure
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerRunner] MR !${lifecycle.mrIid} 生命周期归档失败: ${message}`);
+    }
+
+    const metrics = lifecycle.metrics;
+    console.log(
+      `[MaintainerRunner] MR !${lifecycle.mrIid} 生命周期归档（${endReason}）：` +
+        `轮询 ${lifecycle.pollCount} 次，闭环 ${metrics.discussionsResolved}/${metrics.discussionsTotal}，` +
+        `修 ${metrics.findingsFixed} / 辩 ${metrics.findingsRejected} / 挂起 ${metrics.findingsSuspended}，` +
+        `推送 ${metrics.fixPushes} 次，误修信号 ${metrics.humanFollowupsAfterFix} 次` +
+        (lifecycle.archivePath ? `，归档：${lifecycle.archivePath}` : '')
+    );
   }
 
   /**
@@ -594,18 +1357,21 @@ export class MaintainerRunner extends BaseRoleRunner {
       this.restoreInteractiveThread(state, discussion.id);
     }
 
-    // 如果本 discussion 正在交互式等待 Reviewer 回复，先处理新回复
+    // 如果本 discussion 正在交互式等待 Reviewer 回复，先处理新回复。
+    // 等待态不能阻塞同一 discussion 内其他仍可自动重试的 finding。
+    let suppressRepeatedAsk = false;
     const existingThread = state.interactiveThreads?.[discussion.id];
     if (existingThread?.status === 'awaiting-reply') {
       const askedAt = existingThread.askedAt;
       // 只要 discussion 里在提问时间之后还有 Maintainer 发布的 note，就说明状态有效
-      const maintainerNotesAfterAsk = discussion.notes.filter(note => {
-        if (!isMaintainerAuthoredNote(note.body)) return false;
-        return getCommentActivityAt(note) >= askedAt - 1000;
-      });
+      const askNoteStillExists = hasVisibleMaintainerQuestion(
+        discussion,
+        askedAt,
+        existingThread.question
+      );
 
       // 如果 discussion 里已经找不到提问后的 Maintainer note，说明状态已脏，清除后继续处理
-      if (maintainerNotesAfterAsk.length === 0) {
+      if (!askNoteStillExists) {
         console.warn(
           `[MaintainerRunner] discussion ${discussion.id} 的交互状态已过期，清除后重新处理`
         );
@@ -617,6 +1383,16 @@ export class MaintainerRunner extends BaseRoleRunner {
         });
 
         if (newReviewerNotes.length === 0) {
+          const activeFindingKeys = new Set(
+            threadState.activeFindingKeys ?? Object.keys(threadState.decisions)
+          );
+          const hasRetryableFix = Object.entries(threadState.decisions).some(
+            ([key, decision]) =>
+              activeFindingKeys.has(key) &&
+              decision.action === 'fix' &&
+              !decision.fixSucceeded &&
+              decision.failedAttempts < MAX_FIX_RETRY_ATTEMPTS
+          );
           if (Date.now() - askedAt > INTERACTIVE_REPLY_TIMEOUT_MS) {
             // 超时未收到回复：清理交互状态，避免无限等待；
             // 讨论中有人工参与者时留一条收尾说明，纯 Agent 讨论静默清理
@@ -654,47 +1430,65 @@ export class MaintainerRunner extends BaseRoleRunner {
             console.log(
               `[MaintainerRunner] discussion ${discussion.id} 交互式提问超时未回复，已清理等待状态`
             );
+            if (hasRetryableFix) {
+              suppressRepeatedAsk = true;
+              console.log(
+                `[MaintainerRunner] discussion ${discussion.id} 仍有可重试 finding，继续本轮处理`
+              );
+            } else {
+              recordProcessed();
+              return;
+            }
+          } else if (hasRetryableFix) {
+            suppressRepeatedAsk = true;
+            console.log(
+              `[MaintainerRunner] discussion ${discussion.id} 等待 Reviewer 回复，同时继续处理其他可重试 finding`
+            );
           } else {
             console.log(`[MaintainerRunner] discussion ${discussion.id} 等待 Reviewer 回复中`);
+            recordProcessed();
+            return;
+          }
+        }
+
+        if (newReviewerNotes.length > 0) {
+          const interactiveFilePath = existingThread.filePath;
+          const interactiveQuestion = existingThread.question;
+          this.clearAwaitingReplyState(state, discussion.id);
+          try {
+            await this.handleInteractiveReply(
+              mr,
+              discussion,
+              brain,
+              actor,
+              worktreeManager,
+              maintainerName,
+              state,
+              projectRootPath,
+              interactiveFilePath,
+              interactiveQuestion,
+              memoryClient
+            );
+          } catch (error) {
+            state.interactiveThreads[discussion.id] = {
+              status: 'awaiting-reply',
+              askedAt,
+              question: interactiveQuestion,
+              filePath: interactiveFilePath,
+            };
+            const currentDelivery = state.maintainerThreadState?.[discussion.id]?.delivery;
+            if (currentDelivery) {
+              currentDelivery.awaitingReply = true;
+              currentDelivery.awaitingReplyAt = askedAt;
+              currentDelivery.question = interactiveQuestion;
+              currentDelivery.filePath = interactiveFilePath;
+              currentDelivery.updatedAt = Date.now();
+            }
+            throw error;
           }
           recordProcessed();
           return;
         }
-
-        const interactiveFilePath = existingThread.filePath;
-        const interactiveQuestion = existingThread.question;
-        this.clearAwaitingReplyState(state, discussion.id);
-        try {
-          await this.handleInteractiveReply(
-            mr,
-            discussion,
-            brain,
-            actor,
-            worktreeManager,
-            maintainerName,
-            state,
-            projectRootPath,
-            interactiveFilePath
-          );
-        } catch (error) {
-          state.interactiveThreads[discussion.id] = {
-            status: 'awaiting-reply',
-            askedAt,
-            question: interactiveQuestion,
-            filePath: interactiveFilePath,
-          };
-          const currentDelivery = state.maintainerThreadState?.[discussion.id]?.delivery;
-          if (currentDelivery) {
-            currentDelivery.awaitingReply = true;
-            currentDelivery.awaitingReplyAt = askedAt;
-            currentDelivery.question = interactiveQuestion;
-            currentDelivery.filePath = interactiveFilePath;
-            currentDelivery.updatedAt = Date.now();
-          }
-          throw error;
-        }
-        recordProcessed();
-        return;
       }
     }
 
@@ -1076,7 +1870,8 @@ export class MaintainerRunner extends BaseRoleRunner {
         existing.failedAttempts < MAX_FIX_RETRY_ATTEMPTS;
       const noFixExplanationMissing =
         existing?.action === 'ignore' &&
-        !this.hasNoFixExplanationForItems(discussion, [`${finding.file}:${finding.line}`]);
+        !this.hasNoFixExplanationForItems(discussion, [`${finding.file}:${finding.line}`]) &&
+        !isNoFixBackfillCapped(threadState, lastHumanNoteAt);
       if (
         existing &&
         !staleFinding &&
@@ -1112,6 +1907,7 @@ export class MaintainerRunner extends BaseRoleRunner {
           state
         );
         console.log(`[MaintainerRunner] finding ${key} 的远端无需修复说明缺失，已补发并 resolve`);
+        threadState.noFixExplanationBackfilledAt = Date.now();
         threadState.lastHumanNoteAt = lastHumanNoteAt;
         recordProcessed();
         return;
@@ -1146,11 +1942,30 @@ export class MaintainerRunner extends BaseRoleRunner {
         `[MaintainerRunner] finding ${finding.file}:${finding.line} 决策: action=${decision.action}, reason=${decision.reason}`
       );
 
+      // M7：Reviewer 推翻了此前的「无需修复/已修复」判断，写入反思供 already-fixed 回查参考
+      if (isJudgmentFlipped(existing, hasNewHumanNote, decision.action) && memoryClient) {
+        try {
+          await memoryClient.recordReflection({
+            caseKey: sanitizeEverOSId(`case-mr-${mr.iid}-${finding.file}-${finding.line}`),
+            reflection:
+              `此前判断为无需修复/已修复（${existing.reason}），` +
+              `Reviewer 新回复后重新判断为需要修复（${decision.reason}）。` +
+              `后续 already-fixed 回查应参考本次推翻，避免重复误判。`,
+            outcome: 'failure',
+          });
+          console.log(`[MaintainerRunner] finding ${key} 判断被推翻，已写入反思记忆`);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[MaintainerRunner] 判断推翻反思写入失败，继续处理: ${message}`);
+        }
+      }
+
       // 人工新回复触发的重评估：若结论与历史一致，不重复回复，仅刷新状态
       if (
         existing &&
         !staleFinding &&
         !needsRetry &&
+        decision.action !== 'fix' &&
         decision.action === existing.action &&
         (decision.alreadyFixed ?? false) === (existing.alreadyFixed ?? false)
       ) {
@@ -1163,9 +1978,16 @@ export class MaintainerRunner extends BaseRoleRunner {
         return;
       }
 
-      const actionResult = normalizeMaintainerActionResult(
-        await actor.applyDecision(mr, discussion, finding, decision, state)
-      );
+      const runnerOwnsFixRetry =
+        decision.action === 'fix' ||
+        (decision.action === 'ask' &&
+          Boolean(decision.question && isSelfAnswerableQuestion(decision.question)));
+      const rawActionResult = runnerOwnsFixRetry
+        ? await actor.applyDecision(mr, discussion, finding, decision, state, {
+            askOnFixFailure: false,
+          })
+        : await actor.applyDecision(mr, discussion, finding, decision, state);
+      const actionResult = normalizeMaintainerActionResult(rawActionResult);
       const codeApplied = actionResult.codeApplied;
 
       // 记录本次决策，用于下次轮询去重
@@ -1176,6 +1998,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         replyBody: decision.replyBody,
         question: decision.question,
         deleteFile: decision.deleteFile,
+        scope: decision.scope,
         failedAttempts:
           decision.action === 'fix' && !codeApplied
             ? (staleFinding ? 0 : (existing?.failedAttempts ?? 0)) + 1
@@ -1190,6 +2013,37 @@ export class MaintainerRunner extends BaseRoleRunner {
         decidedAt: Date.now(),
       };
       threadState.lastHumanNoteAt = lastHumanNoteAt;
+
+      if (decision.action === 'fix' && !codeApplied) {
+        const storedDecision = threadState.decisions[key];
+        const failureReason = storedDecision.lastFailureReason ?? '修复未成功';
+        const exhausted = storedDecision.failedAttempts >= MAX_FIX_RETRY_ATTEMPTS;
+        const question = exhausted ? buildFixFailureQuestion(key) : undefined;
+        storedDecision.question = question;
+        const postSummary = (
+          actor as MaintainerActor & {
+            postSummary?: MaintainerActor['postSummary'];
+          }
+        ).postSummary;
+        if (typeof postSummary === 'function') {
+          await postSummary.call(
+            actor,
+            mr,
+            discussion,
+            [],
+            [`${key} — ${failureReason}`],
+            question ? [{ fileLine: key, text: question }] : [],
+            [],
+            [],
+            state
+          );
+        }
+        console.log(
+          exhausted
+            ? `[MaintainerRunner] finding ${key} 已连续失败 ${storedDecision.failedAttempts} 次，转入 Reviewer 澄清`
+            : `[MaintainerRunner] finding ${key} 第 ${storedDecision.failedAttempts}/${MAX_FIX_RETRY_ATTEMPTS} 次修复未成功，保留自动重试`
+        );
+      }
 
       if (
         cognitiveDepth === 'deep' &&
@@ -1230,6 +2084,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     const askedItems: Array<{ fileLine: string; text: string }> = [];
     const ignoredItems: Array<{ fileLine: string; reason: string }> = [];
     const alreadyFixedItems: Array<{ fileLine: string; reason: string }> = [];
+    const deferredItems: string[] = [];
 
     const fixableItems: Array<{
       finding: ReviewFinding;
@@ -1286,14 +2141,19 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       if (shouldReuse) {
         console.log(`[MaintainerRunner] finding ${key} 复用历史决策: action=${existing.action}`);
-        this.applyStoredDecision(existing, finding, {
-          fixedItems,
-          failedItems,
-          askedItems,
-          ignoredItems,
-          alreadyFixedItems,
-          fixableItems,
-        });
+        this.applyStoredDecision(
+          existing,
+          finding,
+          {
+            fixedItems,
+            failedItems,
+            askedItems,
+            ignoredItems,
+            alreadyFixedItems,
+            fixableItems,
+          },
+          suppressRepeatedAsk
+        );
         continue;
       }
 
@@ -1332,6 +2192,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         replyBody: decision.replyBody,
         question: decision.question,
         deleteFile: decision.deleteFile,
+        scope: decision.scope,
         failedAttempts:
           staleFinding || existing?.action !== 'fix' ? 0 : (existing.failedAttempts ?? 0),
         fixSucceeded: staleFinding ? undefined : existing?.fixSucceeded,
@@ -1354,9 +2215,39 @@ export class MaintainerRunner extends BaseRoleRunner {
       }
 
       if (decision.action === 'ask') {
+        const question = decision.question ?? decision.reason;
+        // L2 ask 门禁：仓库内可自查的索问不进入提问汇总，转为修复自查项
+        if (decision.question && isSelfAnswerableQuestion(decision.question)) {
+          this.incrLifecycleMetric(state, mr, 'askGateInterceptions');
+          console.log(
+            `[MaintainerRunner] ask 门禁拦截 ${key} 的仓库内可自查索问，转为修复自查: ${decision.question}`
+          );
+          threadState.decisions[key].action = 'fix';
+          fixableItems.push({
+            finding: {
+              ...finding,
+              suggestion: [
+                finding.suggestion ?? '',
+                `（框架门禁：原提问被判定为仓库内可自行查阅，禁止向 Reviewer 索要文件内容/代码片段；请自行读取相关代码后完成修复：${decision.question}）`,
+              ]
+                .filter(Boolean)
+                .join('\n'),
+            },
+            fileContent: focusedContextToString(focusedContent),
+            scope: decision.scope,
+            deleteFile: decision.deleteFile,
+          });
+          continue;
+        }
+        if (suppressRepeatedAsk) {
+          console.log(
+            `[MaintainerRunner] discussion ${discussion.id} 已有待澄清问题，暂不重复发布 ${key} 的提问`
+          );
+          continue;
+        }
         askedItems.push({
           fileLine: `${finding.file}:${finding.line}`,
-          text: decision.question ?? decision.reason,
+          text: question,
         });
         continue;
       }
@@ -1379,6 +2270,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         fixableItems.map(item => ({
           finding: item.finding,
           fileContent: item.fileContent,
+          scope: item.scope,
           deleteFile: item.deleteFile,
         })),
         firstNote.body
@@ -1389,21 +2281,45 @@ export class MaintainerRunner extends BaseRoleRunner {
 
       // 按 batch 结果更新每条 finding 的决策状态
       const batchAlreadyFixed = batchResult.alreadyFixedItems ?? [];
+      const itemResultsByKey = new Map(
+        (batchResult.itemResults ?? []).map(result => [`${result.file}:${result.line}`, result])
+      );
       for (const item of fixableItems) {
         const key = getFindingKey(item.finding);
         const decision = threadState.decisions[key];
         if (!decision || decision.action !== 'fix') continue;
+        const itemResult = itemResultsByKey.get(key);
         const alreadyFixed = batchAlreadyFixed.find(
           entry => entry.file === item.finding.file && entry.line === item.finding.line
         );
-        if (alreadyFixed) {
+        if (itemResult?.status === 'already-fixed' || alreadyFixed) {
+          const reason = itemResult?.reason || alreadyFixed?.reason || '当前代码中已不存在该问题';
           decision.action = 'ignore';
           decision.alreadyFixed = true;
-          decision.reason = alreadyFixed.reason;
-          decision.replyBody = alreadyFixed.reason;
+          decision.reason = reason;
+          decision.replyBody = reason;
           decision.fixSucceeded = undefined;
           decision.lastFailureReason = undefined;
-          alreadyFixedItems.push({ fileLine: key, reason: alreadyFixed.reason });
+          alreadyFixedItems.push({ fileLine: key, reason });
+          decision.decidedAt = Date.now();
+          continue;
+        }
+        if (itemResult?.status === 'fixed') {
+          decision.fixSucceeded = true;
+          decision.lastFailureReason = undefined;
+          decision.decidedAt = Date.now();
+          continue;
+        }
+        if (itemResult?.status === 'failed') {
+          decision.failedAttempts = (decision.failedAttempts ?? 0) + 1;
+          decision.fixSucceeded = false;
+          decision.lastFailureReason = itemResult.reason || batchResult.reason || '修复失败';
+          decision.decidedAt = Date.now();
+          continue;
+        }
+        if (itemResult?.status === 'deferred') {
+          decision.fixSucceeded = false;
+          decision.decidedAt = Date.now();
           continue;
         }
         const isFixed = item.deleteFile
@@ -1417,6 +2333,26 @@ export class MaintainerRunner extends BaseRoleRunner {
           // 记录真实失败原因，供后续复用决策时生成准确的失败汇总
           decision.lastFailureReason = batchResult.reason || '修复失败';
           decision.decidedAt = Date.now();
+        }
+      }
+
+      if (!suppressRepeatedAsk) {
+        for (const item of fixableItems) {
+          const key = getFindingKey(item.finding);
+          const decision = threadState.decisions[key];
+          if (
+            !decision ||
+            decision.action !== 'fix' ||
+            decision.fixSucceeded ||
+            decision.failedAttempts < MAX_FIX_RETRY_ATTEMPTS
+          ) {
+            continue;
+          }
+          const question = decision.question ?? buildFixFailureQuestion(key);
+          decision.question = question;
+          if (!askedItems.some(asked => asked.fileLine === key)) {
+            askedItems.push({ fileLine: key, text: question });
+          }
         }
       }
 
@@ -1464,6 +2400,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       );
       fixedItems.push(...classified.fixedItems);
       failedItems.push(...classified.failedItems);
+      deferredItems.push(...classified.deferredItems);
     }
 
     const summaryHash = buildSummaryStateHash(
@@ -1471,14 +2408,16 @@ export class MaintainerRunner extends BaseRoleRunner {
       failedItems,
       askedItems,
       ignoredItems,
-      alreadyFixedItems
+      alreadyFixedItems,
+      deferredItems
     );
     const hasResults =
       fixedItems.length > 0 ||
       failedItems.length > 0 ||
       askedItems.length > 0 ||
       ignoredItems.length > 0 ||
-      alreadyFixedItems.length > 0;
+      alreadyFixedItems.length > 0 ||
+      deferredItems.length > 0;
     const summaryChanged = summaryHash !== threadState.lastSummaryHash;
     const noFixItems = [...ignoredItems, ...alreadyFixedItems];
     const noFixExplanationComplete = this.hasNoFixExplanationForItems(
@@ -1495,17 +2434,27 @@ export class MaintainerRunner extends BaseRoleRunner {
         askedItems,
         ignoredItems,
         alreadyFixedItems,
-        state
+        state,
+        deferredItems
       );
       if (!summaryResult || summaryResult.replyPosted) {
         threadState.lastSummaryHash = summaryHash;
         threadState.lastSummaryAt = Date.now();
+        // 含无需修复/已修复说明的 summary 发布成功即视为补发完成，
+        // 后续不再仅因远端说明识别失败（如行号漂移）而重复补发。
+        if (noFixItems.length > 0) {
+          threadState.noFixExplanationBackfilledAt = Date.now();
+        }
       } else {
         console.warn(
           `[MaintainerRunner] discussion ${discussion.id} summary 投递未完成，保留 hash 以便下轮重试: ${summaryResult.error ?? '未知错误'}`
         );
       }
     } else {
+      // M4：有汇总结果但内容无变化 → 去重生效，命中「已发过、跳过」
+      if (hasResults) {
+        this.incrLifecycleMetric(state, mr, 'duplicateSummarySkips');
+      }
       console.log(
         `[MaintainerRunner] discussion ${discussion.id} summary 无变化或无需发布，跳过（hasResults=${hasResults}, changed=${summaryChanged}）`
       );
@@ -1525,7 +2474,9 @@ export class MaintainerRunner extends BaseRoleRunner {
     maintainerName: string,
     state: MrAgentState,
     projectRootPath: string,
-    filePath: string | undefined
+    filePath: string | undefined,
+    interactiveQuestion?: string,
+    memoryClient?: MemoryClient
   ): Promise<void> {
     if (!filePath) {
       console.warn(
@@ -1567,6 +2518,37 @@ export class MaintainerRunner extends BaseRoleRunner {
       maintainerName,
     });
     console.log(`[MaintainerRunner] LLM 决策: action=${decision.action}`);
+
+    // G7：交互提问获人工回复后直接转修复，若回复内容本是仓库内可查信息，
+    // 说明这次提问疑似漏过了 ask 门禁——作为模式库漏判候选回流 EverOS。
+    if (
+      decision.action === 'fix' &&
+      interactiveQuestion &&
+      !isSelfAnswerableQuestion(interactiveQuestion) &&
+      memoryClient
+    ) {
+      const lastHumanReply = discussion.notes
+        .filter(note => !isAgentAuthoredNote(note.body) && !isBotAuthor(note.author))
+        .sort((a, b) => getCommentActivityAt(b) - getCommentActivityAt(a))[0];
+      if (lastHumanReply && isRepoContentReply(lastHumanReply.body)) {
+        try {
+          await memoryClient.recordReflection({
+            caseKey: sanitizeEverOSId(`ask-gate-miss-mr-${mr.iid}-${discussion.id}`),
+            reflection:
+              `此前向 Reviewer 提问「${interactiveQuestion.slice(0, 200)}」，` +
+              `Reviewer 回复中包含仓库内可查信息（代码/文件路径），随后直接修复（${decision.reason}）。` +
+              `该提问疑似可被 ask 门禁拦截，SELF_ANSWERABLE_PATTERNS 模式库可参考补充。`,
+            outcome: 'failure',
+          });
+          console.log(
+            `[MaintainerRunner] discussion ${discussion.id} 疑似 ask 门禁漏判，已写入反思记忆`
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[MaintainerRunner] ask 门禁漏判反思写入失败: ${message}`);
+        }
+      }
+    }
 
     const syntheticFindingForApply: ReviewFinding = {
       severity: 'MEDIUM',
@@ -1720,14 +2702,34 @@ export class MaintainerRunner extends BaseRoleRunner {
     provider: GitLabProvider,
     mr: MergeRequest,
     discussions: Discussion[],
-    state: MrAgentState
+    state: MrAgentState,
+    currentHeadSha?: string
   ): Promise<Map<string, DiscussionDeliveryResult>> {
     const results = new Map<string, DiscussionDeliveryResult>();
     for (const discussion of discussions) {
-      const delivery = state.maintainerThreadState?.[discussion.id]?.delivery;
+      const threadState = state.maintainerThreadState?.[discussion.id];
+      const delivery = threadState?.delivery;
       if (!delivery) continue;
+      const invalidationReason = getDiscussionDeliveryInvalidationReason({
+        discussion,
+        threadState,
+        currentHeadSha,
+      });
+      if (invalidationReason) {
+        console.warn(
+          `[MaintainerRunner] discussion ${discussion.id} 丢弃陈旧投递并重新计算: ${invalidationReason}`
+        );
+        threadState.delivery = undefined;
+        threadState.lastSummaryHash = undefined;
+        threadState.noFixExplanationBackfilledAt = undefined;
+        delete state.interactiveThreads[discussion.id];
+        continue;
+      }
       const replyExists = discussion.notes.some(
-        note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
+        note =>
+          note.id === delivery.replyNoteId ||
+          note.body === delivery.replyBody ||
+          compactDiscussionReplyBody(note.body) === delivery.replyBody
       );
       if (!isDiscussionDeliveryPending(delivery) && replyExists) {
         if (delivery.awaitingReply) this.restoreInteractiveThread(state, discussion.id);
@@ -1982,7 +2984,8 @@ export class MaintainerRunner extends BaseRoleRunner {
         scope?: import('../fix/maintainer-brain.js').MaintainerDecision['scope'];
         deleteFile?: boolean;
       }>;
-    }
+    },
+    suppressAsk = false
   ): void {
     const fileLine = `${finding.file}:${finding.line}`;
     switch (decision.action) {
@@ -1998,6 +3001,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         break;
       }
       case 'ask': {
+        if (suppressAsk) break;
         buckets.askedItems.push({
           fileLine,
           text: decision.question || decision.replyBody || decision.reason,
@@ -2013,11 +3017,17 @@ export class MaintainerRunner extends BaseRoleRunner {
           buckets.failedItems.push(
             `${fileLine} — ${decision.lastFailureReason ?? '多次尝试修复未成功'}`
           );
+          if (!suppressAsk) {
+            const question = decision.question ?? buildFixFailureQuestion(fileLine);
+            decision.question = question;
+            buckets.askedItems.push({ fileLine, text: question });
+          }
         } else {
           // 理论上 needsRetry 才会走到这里，保留为可修复项
           buckets.fixableItems.push({
             finding,
             fileContent: '',
+            scope: decision.scope,
             deleteFile: decision.deleteFile,
           });
         }

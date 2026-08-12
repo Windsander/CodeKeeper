@@ -48,6 +48,12 @@ export interface FixToolLoopOptions {
   maxReadOnlySteps?: number;
   /** 触发只读探索提醒的步数阈值，默认 maxReadOnlySteps - 2 */
   readOnlyReminderStep?: number;
+  /**
+   * 只读熔断前的「带诊断谢幕」行动机会步数，默认 3。
+   * 熔断时先把 already-fixed 回查结论注入上下文，再给 LLM 最后一轮
+   * 修改或明确 finish 的机会，避免无诊断机械暴毙。
+   */
+  finalActingSteps?: number;
   /** 验证策略，默认 WorkspaceValidationStrategy */
   validationStrategy?: ValidationStrategy;
   /** 可选的 prompt 加载器，默认使用全局 loader */
@@ -65,6 +71,13 @@ function isTruncatedStopReason(stopReason: string): boolean {
   return stopReason === 'length' || stopReason === 'max_tokens';
 }
 
+/** 兼容旧模型：识别“无需改动/已经修复”的自然语言 finish 原因。 */
+export function looksLikeAlreadyFixedClaim(reason: string): boolean {
+  return /already\s+(?:been\s+)?(?:fixed|resolved)|no\s+(?:additional\s+)?(?:code\s+)?change|无需(?:额外|再次|重复)?修改|无需再改|已(?:经)?修复|问题(?:已)?不存在|当前代码.{0,20}(?:满足|已包含|已覆盖)/i.test(
+    reason
+  );
+}
+
 export class FixToolLoop {
   private readonly llmClient: LlmClient;
   private readonly worktreeManager: WorktreeManager;
@@ -80,6 +93,7 @@ export class FixToolLoop {
   private readonly extraSystemPrompt: string;
   private readonly maxReadOnlySteps: number;
   private readonly readOnlyReminderStep: number;
+  private readonly finalActingSteps: number;
   private readonly registry: ToolRegistry;
   private readonly executor: ToolExecutor;
   private readonly validationStrategy: ValidationStrategy;
@@ -101,6 +115,10 @@ export class FixToolLoop {
   private noToolCallRetries = 0;
   private unchangedFinishRetries = 0;
   private alreadyFixedRecheckAttempted = false;
+  private finalActingRoundUsed = false;
+  /** 最近一次 already-fixed 回查的原始结论，用于谢幕消息与失败原因诊断 */
+  private lastRecheckVerdict: { alreadyFixed: boolean; reason: string; evidence?: string } | null =
+    null;
 
   constructor(options: FixToolLoopOptions) {
     this.llmClient = options.llmClient;
@@ -120,6 +138,7 @@ export class FixToolLoop {
       options.maxReadOnlySteps ?? Math.max(8, this.maxStepsWithoutProgress + 3);
     this.readOnlyReminderStep =
       options.readOnlyReminderStep ?? Math.max(1, this.maxReadOnlySteps - 2);
+    this.finalActingSteps = Math.max(1, options.finalActingSteps ?? 3);
     this.promptLoader = options.promptLoader ?? defaultPromptLoader;
     this.recheckAlreadyFixed = options.recheckAlreadyFixed;
     this.registry = new ToolRegistry(FIX_TOOLS);
@@ -306,10 +325,27 @@ export class FixToolLoop {
       if (this.stepsWithoutFileChange >= this.maxReadOnlySteps) {
         const rechecked = await this.tryRecheckAlreadyFixed();
         if (rechecked) return rechecked;
+        if (!this.finalActingRoundUsed) {
+          // 带诊断谢幕：把 already-fixed 回查结论回灌给 LLM，
+          // 给最后一轮「直接修改或明确 finish 并说明理由」的机会，避免无诊断机械暴毙。
+          this.finalActingRoundUsed = true;
+          this.messages.push({
+            role: 'user',
+            content: this.promptLoader.load('fix-tool-loop-final-acting-round', {
+              steps: String(this.finalActingSteps),
+              verdictReason: this.lastRecheckVerdict?.reason ?? '框架无法确认问题是否已消失',
+              verdictEvidence: this.lastRecheckVerdict?.evidence ?? '无',
+            }),
+          });
+          this.stepsWithoutFileChange = Math.max(0, this.maxReadOnlySteps - this.finalActingSteps);
+          continue;
+        }
         return {
           success: false,
           reason: this.promptLoader.load('fix-tool-loop-read-only-failure-reason', {
             steps: String(this.stepsWithoutFileChange),
+            verdictReason: this.lastRecheckVerdict?.reason ?? '未执行回查',
+            verdictEvidence: this.lastRecheckVerdict?.evidence ?? '无',
           }),
         };
       }
@@ -350,6 +386,7 @@ export class FixToolLoop {
     this.alreadyFixedRecheckAttempted = true;
     try {
       const result = await this.recheckAlreadyFixed();
+      this.lastRecheckVerdict = result;
       if (!result.alreadyFixed) return null;
       return {
         success: true,
@@ -366,6 +403,14 @@ export class FixToolLoop {
 
   getAppliedFiles(): string[] {
     return Array.from(this.appliedFiles);
+  }
+
+  /**
+   * 本轮 run() 是否动用了「最后一轮行动机会」（只读熔断前的 final acting round）。
+   * 供外部过程指标（readOnlyFinalActingRounds）使用。
+   */
+  wasFinalActingRoundUsed(): boolean {
+    return this.finalActingRoundUsed;
   }
 
   /**
@@ -590,8 +635,28 @@ export class FixToolLoop {
   private async handleFinish(finishCall: ToolCall): Promise<FixAttemptResult> {
     const success = finishCall.input.success === true;
     const reason = String(finishCall.input.reason ?? '');
+    const hasNoFileChanges = this.appliedFiles.size === 0 && this.deletedFiles.size === 0;
+    const claimsAlreadyFixed =
+      finishCall.input.alreadyFixed === true || (!success && looksLikeAlreadyFixedClaim(reason));
+
+    if (hasNoFileChanges && claimsAlreadyFixed) {
+      const rechecked = await this.tryRecheckAlreadyFixed();
+      if (rechecked) return rechecked;
+      return {
+        success: false,
+        reason: [
+          '模型判断问题已经修复，但框架回查未确认该结论。',
+          this.lastRecheckVerdict?.reason ?? (reason || '未提供可验证证据'),
+        ].join(' '),
+      };
+    }
 
     if (success) {
+      if (hasNoFileChanges) {
+        const rechecked = await this.tryRecheckAlreadyFixed();
+        if (rechecked) return rechecked;
+      }
+
       // LLM 可能直接调用 finish 却忘记调用 validate；自动补一次验证，避免"未调用 validate"的误判。
       if (!this.lastValidationResult?.passed) {
         const raw = await this.worktreeManager.validate();
@@ -613,7 +678,7 @@ export class FixToolLoop {
         };
       }
 
-      if (this.appliedFiles.size === 0 && this.deletedFiles.size === 0) {
+      if (hasNoFileChanges) {
         return {
           success: false,
           reason: this.promptLoader.load('fix-tool-loop-no-change-failure-reason'),

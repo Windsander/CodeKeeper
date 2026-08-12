@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   MaintainerActor,
   stripAnsiCodes,
@@ -17,6 +17,7 @@ import type {
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type { MrAgentState } from '../../../../src/advance/classic/runners/shared/state-utils.js';
 import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
+import type { MrLifecycleMetrics } from '../../../../src/advance/classic/runners/shared/mr-lifecycle.js';
 
 function createMockBrain(overrides: Partial<MaintainerBrain> = {}) {
   return {
@@ -39,12 +40,21 @@ const mockMR: MergeRequest = {
   webUrl: '',
 };
 
-const mockDiscussion: Discussion = {
-  id: 'd-1',
-  resolvable: true,
-  resolved: false,
-  notes: [],
-};
+/**
+ * 每个用例使用独立的 discussion 夹具。
+ * deliverDiscussionReply 会就地写入 resolved/notes，模块级共享对象会跨用例污染，
+ * 导致后续用例因 discussion.resolved 已为 true 而断言不到 resolveDiscussion 调用。
+ */
+let mockDiscussion: Discussion;
+
+beforeEach(() => {
+  mockDiscussion = {
+    id: 'd-1',
+    resolvable: true,
+    resolved: false,
+    notes: [],
+  };
+});
 
 const mockFinding: ReviewFinding = {
   severity: 'MEDIUM',
@@ -208,13 +218,333 @@ describe('MaintainerActor', () => {
       confidence: 'medium',
     };
 
-    const result = await actor.executeFix(mockMR, mockDiscussion, mockFinding, decision, createState());
+    const result = await actor.executeFix(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
 
     expect(result.codeApplied).toBe(false);
     expect(captured.task).toContain('变量未使用');
     expect(captured.task).toContain('删除');
     expect(captured.system).toContain('检查 singleton reset 与 dispose 的多实例影响');
   });
+
+  it('Runner 接管重试时单次失败不立即向 Reviewer 求助', async () => {
+    const provider = createMockProvider();
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '需要修复',
+      fixDescription: '调整当前实现',
+      analysis: '',
+      consideredOptions: [],
+      reasoning: '',
+      confidence: 'medium',
+    };
+    const actor = new MaintainerActor({
+      provider,
+      llmClient: createMockLlmClient([
+        {
+          toolCalls: [
+            { id: '1', name: 'finish', input: { success: false, reason: '本轮尚未完成' } },
+          ],
+        },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+
+    const result = await actor.applyDecision(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState(),
+      { askOnFixFailure: false }
+    );
+
+    expect(result.codeApplied).toBe(false);
+    expect(provider.addDiscussionNote).not.toHaveBeenCalled();
+    expect(decision.question).toBeUndefined();
+  });
+
+  it('局部 finding 越界修改其他文件时拒绝提交', async () => {
+    const worktreeManager = createMockWorktreeManager();
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient: createMockLlmClient([
+        {
+          toolCalls: [
+            { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '2',
+              name: 'write_file',
+              input: { relPath: 'virtual/module-b.ts', content: 'unexpected' },
+            },
+          ],
+        },
+        { toolCalls: [{ id: '3', name: 'finish', input: { success: true, reason: 'done' } }] },
+      ]),
+      worktreeManager,
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '局部修复',
+      fixDescription: '只调整目标文件',
+      scope: 'local',
+      analysis: '',
+      consideredOptions: [],
+      reasoning: '',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(false);
+    expect(result.error).toContain('越界修改');
+    expect(worktreeManager.commitAndPush).not.toHaveBeenCalled();
+  });
+
+  it('批量局部 finding 越界修改未批准文件时拒绝整批提交', async () => {
+    const changedFiles = new Set<string>();
+    const worktreeManager = createMockWorktreeManager({
+      writeFile: vi.fn().mockImplementation((filePath: string) => {
+        changedFiles.add(filePath);
+      }),
+      listChangedFiles: vi
+        .fn()
+        .mockImplementation(async () =>
+          Array.from(changedFiles, filePath => ({ path: filePath, deleted: false }))
+        ),
+    });
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient: createMockLlmClient([
+        {
+          toolCalls: [
+            { id: '1', name: 'write_file', input: { relPath: 'src/a.ts', content: 'fixed a' } },
+          ],
+        },
+        { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'a done' } }] },
+        {
+          toolCalls: [
+            { id: '3', name: 'write_file', input: { relPath: 'src/b.ts', content: 'fixed b' } },
+          ],
+        },
+        {
+          toolCalls: [
+            {
+              id: '4',
+              name: 'write_file',
+              input: { relPath: 'virtual/module-c.ts', content: 'unexpected' },
+            },
+          ],
+        },
+        { toolCalls: [{ id: '5', name: 'finish', input: { success: true, reason: 'b done' } }] },
+      ]),
+      worktreeManager,
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+    const findings: ReviewFinding[] = [
+      {
+        severity: 'LOW',
+        file: 'src/a.ts',
+        line: 10,
+        message: '修正 a 的局部逻辑',
+        suggestion: '只修改 a',
+      },
+      {
+        severity: 'MEDIUM',
+        file: 'src/b.ts',
+        line: 20,
+        message: '修正 b 的局部逻辑',
+        suggestion: '只修改 b',
+      },
+    ];
+
+    const result = await actor.executeBatchFix(
+      mockMR,
+      findings.map(finding => ({ finding, fileContent: 'current', scope: 'local' })),
+      '批量修复两个局部问题'
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('virtual/module-c.ts');
+    expect(result.itemResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: 'src/a.ts', status: 'deferred' }),
+        expect.objectContaining({ file: 'src/b.ts', status: 'failed' }),
+      ])
+    );
+    expect(worktreeManager.commitAndPush).not.toHaveBeenCalled();
+  });
+
+  it('坏基线编译不会阻止进入修复循环', async () => {
+    const captured: { system?: string } = {};
+    const llmClient = createMockLlmClient([]);
+    const responses = [
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ];
+    vi.spyOn(llmClient, 'completeWithTools').mockImplementation(
+      async (_messages, _tools, options) => {
+        captured.system = options?.system;
+        return { content: '', ...responses.shift()!, stopReason: 'tool_use' };
+      }
+    );
+    const prepareEnvironment = vi.fn().mockResolvedValue({
+      compilePackagesFailure: 'src/module.ts(8,2): error TS2305: missing export',
+    });
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager: createMockWorktreeManager({ prepareEnvironment }),
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '需要修复',
+      fixDescription: '调整目标文件',
+      scope: 'local',
+      analysis: '',
+      consideredOptions: [],
+      reasoning: '',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(true);
+    expect(prepareEnvironment).toHaveBeenCalledWith({ allowCompileFailure: true });
+    expect(captured.system).toContain('修复前基线');
+    expect(captured.system).toContain('error TS2305');
+  });
+
+  it('CI 修复使用解析后的仓库路径并可穿过坏基线', async () => {
+    const captured: { task?: string } = {};
+    const llmClient = createMockLlmClient([]);
+    const responses = [
+      {
+        toolCalls: [
+          {
+            id: '1',
+            name: 'write_file',
+            input: { relPath: 'packages/example/src/module.ts', content: 'fixed' },
+          },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ];
+    vi.spyOn(llmClient, 'completeWithTools').mockImplementation(async (messages, _tools) => {
+      captured.task = String(messages[0]?.content ?? '');
+      return { content: '', ...responses.shift()!, stopReason: 'tool_use' };
+    });
+    const prepareEnvironment = vi.fn().mockResolvedValue({
+      compilePackagesFailure: 'src/module.ts(12,15): error TS2305: Module has no exported member.',
+    });
+    const worktreeManager = createMockWorktreeManager({
+      prepareEnvironment,
+      resolveFilePath: vi.fn().mockResolvedValue('packages/example/src/module.ts'),
+    });
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+
+    const result = await actor.executeCiFix(mockMR, {
+      status: 'failed',
+      pipelineId: 10,
+      failedJobs: [
+        {
+          id: 20,
+          name: 'build',
+          stage: 'verify',
+          failureReason: 'script_failure',
+          traceTail: 'src/module.ts(12,15): error TS2305: Module has no exported member.',
+        },
+      ],
+    });
+
+    expect(result.codeApplied).toBe(true);
+    expect(result.appliedFiles).toContain('packages/example/src/module.ts');
+    expect(captured.task).toContain('packages/example/src/module.ts');
+    expect(prepareEnvironment).toHaveBeenCalledWith({ allowCompileFailure: true });
+  });
+
+  it('批量修复只把当前 finding 注入工具循环，不混入同 discussion 的其他证据', async () => {
+    const llmClient = createMockLlmClient([]);
+    const captured: { task?: string; system?: string } = {};
+    vi.spyOn(llmClient, 'completeWithTools').mockImplementation(
+      async (messages, _tools, options) => {
+        captured.task = String(messages[0]?.content ?? '');
+        captured.system = options?.system;
+        return {
+          content: '',
+          toolCalls: [
+            { id: '1', name: 'finish', input: { success: false, reason: '当前项无法自动修复' } },
+          ],
+          stopReason: 'tool_use',
+        };
+      }
+    );
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager: createMockWorktreeManager(),
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+    const finding: ReviewFinding = {
+      severity: 'MEDIUM',
+      file: 'src/a.ts',
+      line: 10,
+      message: '当前函数缺少边界保护',
+      suggestion: '补充空值判断',
+    };
+
+    await actor.executeBatchFix(
+      mockMR,
+      [{ finding, fileContent: 'export function current() {}' }],
+      'src/b.ts:20 的 `otherFunction` 已经修复，src/c.ts:30 仍需检查'
+    );
+
+    expect(captured.task).toContain('src/a.ts');
+    expect(captured.task).not.toContain('src/b.ts');
+    expect(captured.task).not.toContain('otherFunction');
+    expect(captured.system).not.toContain('src/b.ts');
+    expect(captured.system).not.toContain('otherFunction');
+  });
+
   it('commit 被 hook 拒绝时学习提交规范、写入项目记忆并重试', async () => {
     const provider = createMockProvider();
     const commitAndPush = vi
@@ -460,9 +790,10 @@ describe('MaintainerActor', () => {
       expect.stringContaining('移除不应上传的文件'),
       { setUpstream: false }
     );
+    // F2：无项目记忆/静态探测命中时，默认提交信息也必须具备合规形态
     expect(worktreeManager.commitAndPush).toHaveBeenCalledWith(
       'feature/test',
-      expect.not.stringMatching(/^[a-z]+(?:\([^)]*\))?:\s/i),
+      expect.stringMatching(/^chore\(review\): 移除不应上传的文件/),
       { setUpstream: false }
     );
     expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
@@ -607,8 +938,107 @@ describe('MaintainerActor', () => {
           reason: '默认 sink 路径已有测试覆盖',
         },
       ],
+      itemResults: [
+        {
+          file: 'src/index.ts',
+          line: 2,
+          status: 'already-fixed',
+          reason: '默认 sink 路径已有测试覆盖',
+        },
+      ],
     });
     expect(worktreeManager.commitAndPush).not.toHaveBeenCalled();
+  });
+
+  it('后续 finding 失败时保留 already-fixed，并把未执行项标记为 deferred', async () => {
+    const firstFinding: ReviewFinding = {
+      severity: 'LOW',
+      file: 'src/a.ts',
+      line: 10,
+      message: '确认现有保护是否完整',
+      suggestion: '检查当前实现',
+    };
+    const secondFinding: ReviewFinding = {
+      severity: 'MEDIUM',
+      file: 'src/b.ts',
+      line: 20,
+      message: '补充边界判断',
+      suggestion: '修正逻辑',
+    };
+    const thirdFinding: ReviewFinding = {
+      severity: 'LOW',
+      file: 'src/c.ts',
+      line: 30,
+      message: '清理冗余分支',
+      suggestion: '删除多余代码',
+    };
+    const recheckAlreadyFixed = vi.fn().mockResolvedValue({
+      alreadyFixed: true,
+      reason: '当前代码已经满足要求',
+      evidence: '目标函数已经包含所需保护',
+    });
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient: createMockLlmClient([
+        {
+          toolCalls: [
+            {
+              id: '1',
+              name: 'finish',
+              input: {
+                success: false,
+                alreadyFixed: true,
+                reason: '当前代码已经修复',
+                evidence: '目标函数已经包含所需保护',
+              },
+            },
+          ],
+        },
+        {
+          toolCalls: [
+            { id: '2', name: 'finish', input: { success: false, reason: '无法安全修改当前项' } },
+          ],
+        },
+      ]),
+      worktreeManager: createMockWorktreeManager(),
+      brain: createMockBrain({ recheckAlreadyFixed }),
+      maintainerName: 'Maintainer',
+    });
+
+    const result = await actor.executeBatchFix(
+      mockMR,
+      [
+        { finding: firstFinding, fileContent: 'export function first() {}' },
+        { finding: secondFinding, fileContent: 'export function second() {}' },
+        { finding: thirdFinding, fileContent: 'export function third() {}' },
+      ],
+      '三个独立 finding'
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.alreadyFixedItems).toEqual([
+      { file: 'src/a.ts', line: 10, reason: '目标函数已经包含所需保护' },
+    ]);
+    expect(result.itemResults).toEqual([
+      {
+        file: 'src/a.ts',
+        line: 10,
+        status: 'already-fixed',
+        reason: '目标函数已经包含所需保护',
+      },
+      {
+        file: 'src/b.ts',
+        line: 20,
+        status: 'failed',
+        reason: '无法安全修改当前项',
+      },
+      {
+        file: 'src/c.ts',
+        line: 30,
+        status: 'deferred',
+        reason: '前序 finding 未完成，本轮尚未执行',
+      },
+    ]);
   });
 
   it('汇总全部为无需修复项时逐项回复并 resolve discussion', async () => {
@@ -644,6 +1074,46 @@ describe('MaintainerActor', () => {
     );
     expect(provider.resolveDiscussion).toHaveBeenCalledWith(mockMR.iid, mockDiscussion.id);
   });
+
+  it('等待 Reviewer 时发布新进度不会刷新首次提问时间', async () => {
+    const provider = createMockProvider();
+    const actor = new MaintainerActor({
+      provider,
+      llmClient: createMockLlmClient([]),
+      worktreeManager: createMockWorktreeManager(),
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+    const state = createState();
+    const askedAt = Date.now() - 60_000;
+    state.interactiveThreads[mockDiscussion.id] = {
+      status: 'awaiting-reply',
+      askedAt,
+      question: '请确认预期行为',
+      filePath: 'src/a.ts',
+    };
+
+    await actor.postSummary(
+      mockMR,
+      mockDiscussion,
+      [],
+      ['src/b.ts:20 — 本轮修复失败'],
+      [],
+      [],
+      [],
+      state
+    );
+
+    expect(state.interactiveThreads[mockDiscussion.id]?.askedAt).toBe(askedAt);
+    expect(state.maintainerThreadState?.[mockDiscussion.id]?.delivery?.awaitingReplyAt).toBe(
+      askedAt
+    );
+    expect(provider.addDiscussionNote).toHaveBeenCalledWith(
+      mockMR.iid,
+      mockDiscussion.id,
+      expect.stringContaining('请确认预期行为')
+    );
+  });
 });
 
 describe('提交信息输出预处理', () => {
@@ -664,9 +1134,520 @@ describe('提交信息输出预处理', () => {
   });
 
   it('extractCommitRejectionSection 无相关标记时仍返回尾部诊断', () => {
-    const text = Array.from({ length: 150 }, (_, index) => `完全无关的日志内容 ${index}`).join('\n');
+    const text = Array.from({ length: 150 }, (_, index) => `完全无关的日志内容 ${index}`).join(
+      '\n'
+    );
     const extracted = extractCommitRejectionSection(text);
     expect(extracted).not.toContain('完全无关的日志内容 0\n');
     expect(extracted).toContain('完全无关的日志内容 149');
+  });
+});
+
+describe('提交管道（F3/L3）', () => {
+  it('lint 类 hook 失败回流修复循环，消除错误后重试提交成功', async () => {
+    const lintFailure =
+      'Worktree commit 失败:\nsrc/index.ts\n  2:7  error  no-unused-vars\n✖ 3 problems (3 errors, 0 warnings)';
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValueOnce(new Error(lintFailure))
+      .mockResolvedValue(undefined);
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi
+        .fn()
+        .mockResolvedValue({ alreadyFixed: false, reason: '校验错误仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      // 第一轮修复：改文件 + finish
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+      // 回流轮：根据蒸馏诊断再改 + finish
+      {
+        toolCalls: [
+          {
+            id: '3',
+            name: 'write_file',
+            input: { relPath: 'src/index.ts', content: 'lint-fixed' },
+          },
+        ],
+      },
+      { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'lint done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+
+    const result = await actor.executeBatchFix(
+      mockMR,
+      [{ finding: mockFinding, fileContent: 'const unused = 1;' }],
+      'Reviewer 要求删除未使用变量'
+    );
+
+    expect(result.success).toBe(true);
+    expect(commitAndPush).toHaveBeenCalledTimes(2);
+  });
+
+  it('permission 类失败不回流不重试，错误为 ≤10 行蒸馏诊断而非原文', async () => {
+    const noise = Array.from({ length: 200 }, (_, i) => `第 ${i} 行 hook 日志输出`).join('\n');
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValue(new Error(`${noise}\nremote: Permission to repo denied (403).`));
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '删除未使用变量',
+      fixDescription: '删除未使用变量',
+      analysis: '存在未使用变量',
+      consideredOptions: ['删除'],
+      reasoning: '删除更干净',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(false);
+    expect(commitAndPush).toHaveBeenCalledTimes(1);
+    expect(result.error).toContain('【提交失败分类: permission】');
+    expect(result.error).not.toContain('第 0 行 hook 日志输出');
+    expect(result.error?.split('\n').length).toBeLessThanOrEqual(10);
+  });
+
+  it('提交信息重写后的第二次失败仍只返回蒸馏诊断', async () => {
+    const firstNoise = Array.from({ length: 120 }, (_, index) => `lint warning ${index}`).join(
+      '\n'
+    );
+    const secondNoise = Array.from({ length: 200 }, (_, index) => `push detail ${index}`).join(
+      '\n'
+    );
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          `${firstNoise}\n\u001b[31mCommit message 不符合项目格式\u001b[0m\n要求: [任务编号] 简短说明`
+        )
+      )
+      .mockRejectedValueOnce(
+        new Error(
+          `${secondNoise}\n\u001b[33mremote: Permission to repository denied (403).\u001b[0m`
+        )
+      );
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    vi.spyOn(llmClient, 'completeJson').mockResolvedValue(
+      JSON.stringify({
+        retry: true,
+        convention: '提交标题使用 [任务编号] 简短说明',
+        message: '[TASK-1] 修正边界处理',
+      })
+    );
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager: createMockWorktreeManager({ commitAndPush }),
+      brain: createMockBrain(),
+      maintainerName: 'Maintainer',
+    });
+
+    const result = await actor.executeBatchFix(
+      mockMR,
+      [{ finding: mockFinding, fileContent: 'const unused = 1;' }],
+      '修正边界处理'
+    );
+
+    expect(commitAndPush).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('【提交失败分类: permission】');
+    expect(result.reason).not.toContain('\u001b[');
+    expect(result.reason).not.toContain('push detail 0');
+    expect(result.reason.length).toBeLessThanOrEqual(6_000);
+    expect(result.reason.split('\n').length).toBeLessThanOrEqual(10);
+    expect(result.itemResults[0]).toMatchObject({ status: 'failed' });
+  });
+});
+
+describe('ask 门禁（L2）与修复终局插桩（M7）', () => {
+  it('仓库内可自查的索问被门禁拦截，转为修复自查且不发布原索问', async () => {
+    const provider = createMockProvider();
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider,
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'ask',
+      reason: '需要文件内容才能分析',
+      question: '请提供 src/index.ts 文件的内容，以便分析当前实现。',
+      analysis: '缺少文件内容',
+      consideredOptions: ['索要文件'],
+      reasoning: '没有文件无法分析',
+      confidence: 'low',
+    };
+
+    const result = await actor.applyDecision(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    // 门禁后转为修复：走了 commit，且从未把原索问发布到 MR
+    expect(result.codeApplied).toBe(true);
+    expect(worktreeManager.commitAndPush).toHaveBeenCalled();
+    const postedBodies = provider.addDiscussionNote.mock.calls.map(call => String(call[2]));
+    expect(postedBodies.some(body => body.includes('请提供 src/index.ts 文件的内容'))).toBe(false);
+  });
+
+  it('修复循环失败时写入 EverOS 终局记录（outcome:failure）', async () => {
+    const memoryClient = {
+      context: { projectId: 'p1' },
+      recordFixAttempt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IMemoryClient;
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [{ id: '1', name: 'finish', input: { success: false, reason: '无法定位根因' } }],
+      },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+      memoryClient,
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '修复未使用变量',
+      fixDescription: '删除未使用变量',
+      analysis: '存在未使用变量',
+      consideredOptions: ['删除'],
+      reasoning: '删除更干净',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(false);
+    expect(memoryClient.recordFixAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mrIid: mockMR.iid,
+        file: mockFinding.file,
+        success: false,
+        reason: expect.stringContaining('outcome:failure'),
+      })
+    );
+  });
+
+  it('修复成功时写入 EverOS 终局记录（outcome:success）', async () => {
+    const memoryClient = {
+      context: { projectId: 'p1' },
+      recordFixAttempt: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IMemoryClient;
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+      memoryClient,
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '修复未使用变量',
+      fixDescription: '删除未使用变量',
+      analysis: '存在未使用变量',
+      consideredOptions: ['删除'],
+      reasoning: '删除更干净',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(true);
+    expect(memoryClient.recordFixAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        reason: expect.stringContaining('outcome:success'),
+      })
+    );
+  });
+});
+
+describe('M 系列过程指标（G8）', () => {
+  function createMetrics(): MrLifecycleMetrics {
+    return {
+      discussionsTotal: 0,
+      discussionsResolved: 0,
+      findingsFixed: 0,
+      findingsRejected: 0,
+      findingsSuspended: 0,
+      fixPushes: 0,
+      humanFollowupsAfterFix: 0,
+    };
+  }
+
+  it('commit 首次尝试成功计入 commitFirstTryPasses', async () => {
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const metrics = createMetrics();
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+      metrics,
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '删除未使用变量',
+      fixDescription: '删除未使用变量',
+      analysis: '存在未使用变量',
+      consideredOptions: ['删除'],
+      reasoning: '删除更干净',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(true);
+    expect(metrics.commitFirstTryPasses).toBe(1);
+    expect(metrics.commitFirstTryRejections ?? 0).toBe(0);
+    expect(metrics.hookFailureReflows ?? 0).toBe(0);
+  });
+
+  it('lint 回流计入 commitFirstTryRejections 与 hookFailureReflows，重试成功不再计首试通过', async () => {
+    const lintFailure =
+      'Worktree commit 失败:\nsrc/index.ts\n  2:7  error  no-unused-vars\n✖ 3 problems (3 errors, 0 warnings)';
+    const commitAndPush = vi
+      .fn()
+      .mockRejectedValueOnce(new Error(lintFailure))
+      .mockResolvedValue(undefined);
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi
+        .fn()
+        .mockResolvedValue({ alreadyFixed: false, reason: '校验错误仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+      {
+        toolCalls: [
+          {
+            id: '3',
+            name: 'write_file',
+            input: { relPath: 'src/index.ts', content: 'lint-fixed' },
+          },
+        ],
+      },
+      { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'lint done' } }] },
+    ]);
+    const metrics = createMetrics();
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+      metrics,
+    });
+
+    const result = await actor.executeBatchFix(
+      mockMR,
+      [{ finding: mockFinding, fileContent: 'const unused = 1;' }],
+      'Reviewer 要求删除未使用变量'
+    );
+
+    expect(result.success).toBe(true);
+    expect(metrics.commitFirstTryRejections).toBe(1);
+    expect(metrics.hookFailureReflows).toBe(1);
+    expect(metrics.commitFirstTryPasses ?? 0).toBe(0);
+  });
+
+  it('ask 门禁拦截计入 askGateInterceptions', async () => {
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const metrics = createMetrics();
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+      metrics,
+    });
+    const decision: CognitiveDecision = {
+      action: 'ask',
+      reason: '需要文件内容才能分析',
+      question: '请提供 src/index.ts 文件的内容，以便分析当前实现。',
+      analysis: '缺少文件内容',
+      consideredOptions: ['索要文件'],
+      reasoning: '没有文件无法分析',
+      confidence: 'low',
+    };
+
+    const result = await actor.applyDecision(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(true);
+    expect(metrics.askGateInterceptions).toBe(1);
+  });
+
+  it('未注入 metrics 时指标路径静默跳过（兼容旧调用方）', async () => {
+    const worktreeManager = createMockWorktreeManager();
+    const brain = createMockBrain({
+      recheckAlreadyFixed: vi.fn().mockResolvedValue({ alreadyFixed: false, reason: '问题仍存在' }),
+    });
+    const llmClient = createMockLlmClient([
+      {
+        toolCalls: [
+          { id: '1', name: 'write_file', input: { relPath: 'src/index.ts', content: 'fixed' } },
+        ],
+      },
+      { toolCalls: [{ id: '2', name: 'finish', input: { success: true, reason: 'done' } }] },
+    ]);
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient,
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      reason: '删除未使用变量',
+      fixDescription: '删除未使用变量',
+      analysis: '存在未使用变量',
+      consideredOptions: ['删除'],
+      reasoning: '删除更干净',
+      confidence: 'high',
+    };
+
+    const result = await actor.executeFix(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(true);
   });
 });

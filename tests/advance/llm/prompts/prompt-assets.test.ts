@@ -122,8 +122,19 @@ describe('prompt assets', () => {
     expect(defaultPromptLoader.load('fix-tool-loop-stale-reminder')).toContain('陷入循环');
     expect(defaultPromptLoader.load('fix-tool-loop-read-only-reminder')).toContain('只读探索');
     expect(
-      defaultPromptLoader.load('fix-tool-loop-read-only-failure-reason', { steps: '3' })
+      defaultPromptLoader.load('fix-tool-loop-read-only-failure-reason', {
+        steps: '3',
+        verdictReason: '问题仍存在',
+        verdictEvidence: '第 25 行未见修改',
+      })
     ).toContain('3');
+    expect(
+      defaultPromptLoader.load('fix-tool-loop-final-acting-round', {
+        steps: '3',
+        verdictReason: '问题仍存在',
+        verdictEvidence: '第 25 行未见修改',
+      })
+    ).toContain('最后 3 步');
     expect(defaultPromptLoader.load('fix-tool-loop-unchanged-finish-reminder')).toContain(
       '没有检测到'
     );

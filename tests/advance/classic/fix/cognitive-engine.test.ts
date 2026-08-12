@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CognitiveEngine } from '../../../../src/advance/classic/cognitive-engine.js';
+import {
+  CognitiveEngine,
+  isAlreadyFixedEvidenceGrounded,
+} from '../../../../src/advance/classic/cognitive-engine.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type { CognitiveContext } from '../../../../src/advance/classic/fix/cognitive-types.js';
 import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
@@ -73,6 +76,39 @@ function makeAlreadyFixedLlmClient(alreadyFixed: boolean): LlmClient {
     },
   });
 }
+
+describe('isAlreadyFixedEvidenceGrounded', () => {
+  it('拒绝引用其他 finding 函数的错位代码证据', () => {
+    expect(
+      isAlreadyFixedEvidenceGrounded({
+        findingFile: 'src/a.ts',
+        fileContent: 'export function targetFunction() { return true; }',
+        evidence: '`otherFunction` 已经包含所需保护',
+      })
+    ).toBe(false);
+    expect(
+      isAlreadyFixedEvidenceGrounded({
+        findingFile: 'src/a.ts',
+        fileContent: 'export function targetFunction() { return true; }',
+        evidence: '`targetFunction` 已经包含所需保护',
+      })
+    ).toBe(true);
+    expect(
+      isAlreadyFixedEvidenceGrounded({
+        findingFile: 'src/a.ts',
+        fileContent: 'export function targetFunction() { return true; }',
+        evidence: 'otherFunction 已经包含所需保护',
+      })
+    ).toBe(false);
+    expect(
+      isAlreadyFixedEvidenceGrounded({
+        findingFile: 'src/feature/index.ts',
+        fileContent: 'export function targetFunction() { return true; }',
+        evidence: 'src/other/index.ts 中已包含所需保护',
+      })
+    ).toBe(false);
+  });
+});
 
 describe('CognitiveEngine', () => {
   it('fast 模式解析 CognitiveDecision', async () => {
@@ -447,9 +483,9 @@ describe('CognitiveEngine', () => {
         ],
       },
     });
-    const searchWorkspace = vi.fn().mockResolvedValue([
-      { file: 'src/facade.ts', line: 30, content: 'facade.dispose();' },
-    ]);
+    const searchWorkspace = vi
+      .fn()
+      .mockResolvedValue([{ file: 'src/facade.ts', line: 30, content: 'facade.dispose();' }]);
     const worktreeManager = mockOf<WorktreeManager>({ searchWorkspace });
 
     const engine = new CognitiveEngine({ llmClient, worktreeManager });

@@ -3,9 +3,12 @@ import {
   MaintainerRunner,
   buildSummaryStateHash,
   classifyBatchFixItems,
+  getDiscussionDeliveryInvalidationReason,
   hasHeadChangedSinceProcessing,
+  repairLegacyMaintainerThreadState,
   refreshDiscussionProcessedHeadSha,
   runDiscussionTasks,
+  type CiHandlingResult,
 } from '../../../../src/advance/classic/runners/maintainer-runner.js';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import type {
@@ -18,7 +21,15 @@ import type { MaintainerBrain } from '../../../../src/advance/classic/fix/mainta
 import type { MaintainerActor } from '../../../../src/advance/classic/fix/maintainer-actor.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
 import type { MemoryClient } from '../../../../src/advance/classic/memory/memory-client.js';
-import type { MrAgentState } from '../../../../src/advance/classic/runners/shared/state-utils.js';
+import type { MaintainerConfig } from '../../../../src/advance/types.js';
+import {
+  createLifecycleState,
+  type MrLifecycleState,
+} from '../../../../src/advance/classic/runners/shared/mr-lifecycle.js';
+import type {
+  MaintainerThreadState,
+  MrAgentState,
+} from '../../../../src/advance/classic/runners/shared/state-utils.js';
 import { mockOf } from '../../../helpers/mock-of.js';
 
 function makeLlmClient(): LlmClient {
@@ -114,6 +125,13 @@ describe('buildSummaryStateHash', () => {
 
     expect(duplicateHash).toBe(singleHash);
   });
+
+  it('暂缓与失败属于不同处理状态', () => {
+    const deferredHash = buildSummaryStateHash([], [], [], [], [], ['src/a.ts:10 — 本轮尚未执行']);
+    const failedHash = buildSummaryStateHash([], ['src/a.ts:10 — 修复失败'], [], [], []);
+
+    expect(deferredHash).not.toBe(failedHash);
+  });
 });
 
 describe('refreshDiscussionProcessedHeadSha', () => {
@@ -149,6 +167,74 @@ const mockFinding: ReviewFinding = {
 };
 
 describe('MaintainerRunner', () => {
+  it('代码型 CI 修复未成功时仍阻断本轮普通 discussion', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const provider = mockOf<GitLabProvider>({
+      getCIStatus: vi.fn().mockResolvedValue('failed'),
+      getCiFailureReport: vi.fn().mockResolvedValue({
+        status: 'failed',
+        pipelineId: 42,
+        failedJobs: [
+          {
+            id: 7,
+            name: 'typecheck',
+            stage: 'build',
+            failureReason: 'script_failure',
+            traceTail: 'src/module.ts(12,15): error TS2305: Module has no exported member.',
+          },
+        ],
+      }),
+      createDiscussion: vi.fn().mockResolvedValue('ci-discussion'),
+      addDiscussionNote: vi.fn().mockResolvedValue(undefined),
+    });
+    const actor = mockOf<MaintainerActor>({
+      executeCiFix: vi.fn().mockResolvedValue({
+        codeApplied: false,
+        reason: '本轮未能消除类型错误',
+        appliedFiles: [],
+      }),
+    });
+    const lifecycle = createLifecycleState(mockMR);
+    const config: MaintainerConfig = {
+      role: 'maintainer',
+      enabled: true,
+      reviewSchedule: '*/10 * * * *',
+      learningEnabled: true,
+      maintainerName: 'Maintainer',
+      autoFixEnabled: true,
+      resolveOthersDiscussions: true,
+    };
+    const ciRunner = runner as unknown as {
+      handleCiStatus(
+        provider: GitLabProvider,
+        actor: MaintainerActor,
+        mr: MergeRequest,
+        lifecycle: MrLifecycleState,
+        config: MaintainerConfig,
+        maintainerName: string,
+        currentHeadSha?: string
+      ): Promise<CiHandlingResult>;
+    };
+
+    const result = await ciRunner.handleCiStatus(
+      provider,
+      actor,
+      mockMR,
+      lifecycle,
+      config,
+      'Maintainer',
+      'head-1'
+    );
+
+    expect(actor.executeCiFix).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      fixAttempted: true,
+      fixPushed: false,
+      deferDiscussionProcessing: true,
+    });
+    expect(lifecycle.ci?.fixAttempts).toBe(1);
+  });
+
   it('合并路径别名后复用成功终态，不再重复处理同一 finding', async () => {
     const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
     const canonicalFile = 'modules/example-a/src/tracker.test.ts';
@@ -276,11 +362,11 @@ describe('MaintainerRunner', () => {
     });
 
     const worktreeManager = mockOf<WorktreeManager>({
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
       ensureWorktree: vi.fn().mockResolvedValue(undefined),
       checkoutBranch: vi.fn().mockResolvedValue(undefined),
       prepareEnvironment: vi.fn().mockResolvedValue(undefined),
       resolveFilePath: vi.fn().mockResolvedValue('src/index.ts'),
-      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
       readFileWindow: vi.fn().mockResolvedValue({
         imports: '',
         snippet: 'const a = 1;\nconst b = 2;',
@@ -317,6 +403,122 @@ describe('MaintainerRunner', () => {
       })
     );
     expect(provider.getMRDiff).toHaveBeenCalledWith(mockMR.iid);
+  });
+
+  it('单条 finding 首次修复失败时保留自动重试而不立即提问', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const finding: ReviewFinding = {
+      severity: 'MEDIUM',
+      file: 'src/a.ts',
+      line: 8,
+      message: '需要调整边界条件',
+      suggestion: '修正判断逻辑',
+    };
+    const discussion: Discussion = {
+      id: 'd-single-retry',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 1,
+          author: 'reviewer-bot',
+          body: 'src/a.ts:8 | 需要调整边界条件',
+          createdAt: '2026-08-04T00:00:00Z',
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue([finding]),
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      decide: vi.fn().mockResolvedValue({
+        action: 'fix',
+        reason: '需要修复',
+        fixDescription: '修正判断逻辑',
+        scope: 'local',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn().mockResolvedValue({
+        codeApplied: false,
+        replyPosted: false,
+        resolved: false,
+        awaitingReply: false,
+        pending: false,
+        error: '本地验证暂未通过',
+      }),
+      postSummary: vi.fn().mockResolvedValue({
+        replyPosted: true,
+        resolved: false,
+        pending: false,
+      }),
+    });
+    const worktreeManager = mockOf<WorktreeManager>({
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockResolvedValue(finding.file),
+      getWorktreePath: vi.fn().mockReturnValue('/virtual-worktree'),
+      readFileWindow: vi.fn().mockResolvedValue({
+        imports: '',
+        snippet: 'export const value = true;',
+        snippetStartLine: 1,
+        snippetEndLine: 12,
+        totalLines: 12,
+        truncated: false,
+        targetLine: finding.line,
+      }),
+    });
+    const state = mockOf<MrAgentState>({ interactiveThreads: {}, processedDiscussions: {} });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      mockOf<GitLabProvider>({
+        getMRDiff: vi.fn().mockResolvedValue([
+          {
+            filePath: finding.file,
+            additions: 1,
+            deletions: 0,
+            oldPath: finding.file,
+            newPath: finding.file,
+            newFile: false,
+            deletedFile: false,
+            diff: '',
+          },
+        ]),
+      }),
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/virtual-project'
+    );
+
+    expect(actor.applyDecision).toHaveBeenCalledWith(
+      mockMR,
+      discussion,
+      finding,
+      expect.objectContaining({ action: 'fix' }),
+      state,
+      { askOnFixFailure: false }
+    );
+    expect(actor.postSummary).toHaveBeenCalledWith(
+      mockMR,
+      discussion,
+      [],
+      ['src/a.ts:8 — 本地验证暂未通过'],
+      [],
+      [],
+      [],
+      state
+    );
+    expect(state.maintainerThreadState?.[discussion.id]?.decisions['src/a.ts:8']).toMatchObject({
+      action: 'fix',
+      failedAttempts: 1,
+      fixSucceeded: false,
+    });
+    expect(state.interactiveThreads[discussion.id]).toBeUndefined();
   });
 
   it('无法解析 finding 时由 LLM 决策 record，只录入记忆不回复', async () => {
@@ -680,11 +882,11 @@ describe('MaintainerRunner', () => {
     });
 
     const worktreeManager = mockOf<WorktreeManager>({
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
       ensureWorktree: vi.fn().mockResolvedValue(undefined),
       checkoutBranch: vi.fn().mockResolvedValue(undefined),
       prepareEnvironment: vi.fn().mockResolvedValue(undefined),
       resolveFilePath: vi.fn().mockResolvedValue('src/index.ts'),
-      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
       readFileWindow: vi.fn().mockResolvedValue({
         imports: '',
         snippet: 'const a = 1;\nconst b = 2;',
@@ -1677,6 +1879,268 @@ describe('MaintainerRunner', () => {
     expect(state.processedDiscussions?.['d-agent-interactive']).toBeDefined();
   });
 
+  it('等待 Reviewer 回复时继续处理同 discussion 的可重试 finding', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const askedAt = Date.now() - 60_000;
+    const findings: ReviewFinding[] = [
+      {
+        severity: 'MEDIUM',
+        file: 'src/a.ts',
+        line: 10,
+        message: '需要确认业务意图',
+        suggestion: '请确认预期行为',
+      },
+      {
+        severity: 'MEDIUM',
+        file: 'src/b.ts',
+        line: 20,
+        message: '缺少边界保护',
+        suggestion: '补充边界判断',
+      },
+    ];
+    const discussion: Discussion = {
+      id: 'd-awaiting-with-retry',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 1,
+          author: 'reviewer-agent',
+          body: '包含两个待处理 finding',
+          createdAt: new Date(askedAt - 60_000).toISOString(),
+          resolved: false,
+        },
+        {
+          id: 2,
+          author: 'maintainer',
+          body: '请确认业务意图\n\n---\n*生成于 2026/08/03 10:00:00 · CodeKeeper Advance MR 维护 Agent · bot*',
+          createdAt: new Date(askedAt).toISOString(),
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue(findings),
+      enrichFindingsWithCases: vi.fn().mockImplementation(async items => items),
+      decide: vi.fn().mockResolvedValue({
+        action: 'fix',
+        reason: '可以自动补充保护',
+        fixDescription: '补充边界判断',
+        scope: 'local',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      executeBatchFix: vi.fn().mockResolvedValue({
+        success: true,
+        reason: '已推送',
+        appliedFiles: ['src/b.ts'],
+        deletedFiles: [],
+        alreadyFixedItems: [],
+        itemResults: [{ file: 'src/b.ts', line: 20, status: 'fixed' }],
+      }),
+      postSummary: vi.fn().mockResolvedValue({
+        replyPosted: true,
+        resolved: false,
+        pending: false,
+      }),
+    });
+    const provider = mockOf<GitLabProvider>({ getMRDiff: vi.fn().mockResolvedValue([]) });
+    const worktreeManager = mockOf<WorktreeManager>({
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockImplementation(async (path: string) => path),
+      readFileWindow: vi.fn().mockImplementation(async (_path: string, finding: ReviewFinding) => ({
+        imports: '',
+        snippet: `line ${finding.line}`,
+        snippetStartLine: finding.line,
+        snippetEndLine: finding.line,
+        totalLines: 30,
+        truncated: false,
+        targetLine: finding.line,
+      })),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {
+        [discussion.id]: {
+          status: 'awaiting-reply',
+          askedAt,
+          question: '请确认业务意图',
+          filePath: 'src/a.ts',
+        },
+      },
+      processedDiscussions: {},
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {
+            'src/a.ts:10': {
+              action: 'ask',
+              reason: '需要人工确认',
+              question: '请确认业务意图',
+              failedAttempts: 0,
+              decidedAt: askedAt,
+            },
+            'src/b.ts:20': {
+              action: 'fix',
+              reason: '需要补充保护',
+              failedAttempts: 1,
+              fixSucceeded: false,
+              decidedAt: askedAt,
+            },
+          },
+          activeFindingKeys: ['src/a.ts:10', 'src/b.ts:20'],
+          lastReviewerNoteAt: askedAt - 60_000,
+          lastHumanNoteAt: 0,
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/project'
+    );
+
+    expect(actor.executeBatchFix).toHaveBeenCalledOnce();
+    expect(actor.postSummary).toHaveBeenCalledOnce();
+    expect(vi.mocked(actor.postSummary).mock.calls[0][2]).toEqual(['src/b.ts:20']);
+    expect(vi.mocked(actor.postSummary).mock.calls[0][4]).toEqual([]);
+    expect(state.interactiveThreads[discussion.id]).toMatchObject({
+      status: 'awaiting-reply',
+      question: '请确认业务意图',
+    });
+  });
+
+  it('按逐 finding 批量结果更新状态，暂缓项不累计失败次数', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const findings: ReviewFinding[] = [
+      {
+        severity: 'LOW',
+        file: 'src/a.ts',
+        line: 10,
+        message: '检查已存在的保护',
+        suggestion: '确认当前实现',
+      },
+      {
+        severity: 'MEDIUM',
+        file: 'src/b.ts',
+        line: 20,
+        message: '补充边界判断',
+        suggestion: '修正函数逻辑',
+      },
+      {
+        severity: 'LOW',
+        file: 'src/c.ts',
+        line: 30,
+        message: '清理多余分支',
+        suggestion: '删除冗余代码',
+      },
+    ];
+    const discussion: Discussion = {
+      id: 'd-item-results',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 1,
+          author: 'reviewer-agent',
+          body: '三个独立的检查项',
+          createdAt: '2026-08-03T00:00:00.000Z',
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue(findings),
+      enrichFindingsWithCases: vi.fn().mockImplementation(async items => items),
+      decide: vi.fn().mockResolvedValue({
+        action: 'fix',
+        reason: '可以自动处理',
+        fixDescription: '按 finding 修改目标文件',
+        scope: 'local',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      executeBatchFix: vi.fn().mockResolvedValue({
+        success: false,
+        reason: '第二项修复失败',
+        appliedFiles: [],
+        deletedFiles: [],
+        alreadyFixedItems: [{ file: 'src/a.ts', line: 10, reason: '当前代码已有所需保护' }],
+        itemResults: [
+          {
+            file: 'src/a.ts',
+            line: 10,
+            status: 'already-fixed',
+            reason: '当前代码已有所需保护',
+          },
+          { file: 'src/b.ts', line: 20, status: 'failed', reason: '目标函数仍缺少保护' },
+          { file: 'src/c.ts', line: 30, status: 'deferred', reason: '本轮尚未执行' },
+        ],
+      }),
+      postSummary: vi.fn().mockResolvedValue({
+        replyPosted: true,
+        resolved: false,
+        pending: false,
+      }),
+    });
+    const provider = mockOf<GitLabProvider>({ getMRDiff: vi.fn().mockResolvedValue([]) });
+    const worktreeManager = mockOf<WorktreeManager>({
+      getWorktreePath: vi.fn().mockReturnValue('/worktree'),
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockImplementation(async (path: string) => path),
+      readFileWindow: vi.fn().mockImplementation(async (_path: string, finding: ReviewFinding) => ({
+        imports: '',
+        snippet: `line ${finding.line}`,
+        snippetStartLine: finding.line,
+        snippetEndLine: finding.line,
+        totalLines: 40,
+        truncated: false,
+        targetLine: finding.line,
+      })),
+    });
+    const state = mockOf<MrAgentState>({ interactiveThreads: {}, processedDiscussions: {} });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      provider,
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/project'
+    );
+
+    const decisions = state.maintainerThreadState?.[discussion.id]?.decisions;
+    expect(decisions?.['src/a.ts:10']).toMatchObject({
+      action: 'ignore',
+      alreadyFixed: true,
+      failedAttempts: 0,
+    });
+    expect(decisions?.['src/b.ts:20']).toMatchObject({
+      action: 'fix',
+      failedAttempts: 1,
+      lastFailureReason: '目标函数仍缺少保护',
+    });
+    expect(decisions?.['src/c.ts:30']).toMatchObject({
+      action: 'fix',
+      failedAttempts: 0,
+    });
+    expect(vi.mocked(actor.postSummary).mock.calls[0][3]).toEqual([
+      'src/b.ts:20 — 目标函数仍缺少保护',
+    ]);
+    expect(vi.mocked(actor.postSummary).mock.calls[0][8]).toEqual(['src/c.ts:30 — 本轮尚未执行']);
+  });
+
   it('非 finding 讨论已有 Maintainer 回复但无处理记录时静默补记跳过', async () => {
     const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
 
@@ -1854,6 +2318,101 @@ describe('MaintainerRunner', () => {
     expect(state.maintainerThreadState?.[discussion.id]?.lastReviewerNoteAt).toBe(
       updatedActivityAt
     );
+  });
+
+  it('首条 Reviewer note 编辑后即使仍为 fix 也会重新执行修复', async () => {
+    const runner = new MaintainerRunner({ llmClient: makeLlmClient() });
+    const previousActivityAt = Date.parse('2026-07-20T00:00:00.000Z');
+    const finding: ReviewFinding = {
+      severity: 'MEDIUM',
+      file: 'virtual/module-b.ts',
+      line: 24,
+      message: '编辑后的修复要求',
+      suggestion: '按新要求调整实现',
+    };
+    const discussion: Discussion = {
+      id: 'd-edited-fix',
+      resolvable: true,
+      resolved: false,
+      notes: [
+        {
+          id: 31,
+          author: 'reviewer-bot',
+          body: `${finding.file}:${finding.line} | ${finding.message}`,
+          createdAt: '2026-07-20T00:00:00.000Z',
+          updatedAt: '2026-07-21T00:00:00.000Z',
+          resolved: false,
+        },
+      ],
+    };
+    const brain = mockOf<MaintainerBrain>({
+      parseFindings: vi.fn().mockResolvedValue([finding]),
+      enrichFindingsWithCases: vi.fn().mockImplementation(async findings => findings),
+      decide: vi.fn().mockResolvedValue({
+        action: 'fix',
+        reason: '需要按编辑后的要求继续修改',
+        fixDescription: '调整当前实现',
+      }),
+    });
+    const actor = mockOf<MaintainerActor>({
+      applyDecision: vi.fn().mockResolvedValue({
+        codeApplied: true,
+        replyPosted: true,
+        resolved: true,
+        awaitingReply: false,
+        pending: false,
+      }),
+    });
+    const worktreeManager = mockOf<WorktreeManager>({
+      ensureWorktree: vi.fn().mockResolvedValue(undefined),
+      checkoutBranch: vi.fn().mockResolvedValue(undefined),
+      resolveFilePath: vi.fn().mockResolvedValue(finding.file),
+      getWorktreePath: vi.fn().mockReturnValue('/virtual-worktree'),
+      readFileWindow: vi.fn().mockResolvedValue({
+        imports: '',
+        snippet: 'export const currentValue = true;',
+        snippetStartLine: 1,
+        snippetEndLine: 30,
+        totalLines: 30,
+        truncated: false,
+        targetLine: finding.line,
+      }),
+    });
+    const state = mockOf<MrAgentState>({
+      interactiveThreads: {},
+      processedDiscussions: {
+        [discussion.id]: { noteCount: 1, processedAt: previousActivityAt },
+      },
+      maintainerThreadState: {
+        [discussion.id]: {
+          decisions: {
+            [`${finding.file}:${finding.line}`]: {
+              action: 'fix',
+              reason: '旧修复要求',
+              failedAttempts: 0,
+              fixSucceeded: true,
+              decidedAt: previousActivityAt,
+            },
+          },
+          lastReviewerNoteAt: previousActivityAt,
+          lastHumanNoteAt: 0,
+        },
+      },
+    });
+
+    await runner.processDiscussion(
+      mockMR,
+      discussion,
+      mockOf<GitLabProvider>({ getMRDiff: vi.fn().mockResolvedValue([]) }),
+      brain,
+      actor,
+      worktreeManager,
+      'CodeKeeper Maintainer',
+      state,
+      '/virtual-project'
+    );
+
+    expect(actor.applyDecision).toHaveBeenCalledOnce();
   });
 
   it('非 finding 首条 note 被编辑后不被已有 Maintainer 回复静默吞掉', async () => {
@@ -2327,7 +2886,8 @@ describe('MaintainerRunner', () => {
         { fileLine: 'src/index.ts:2', reason: '后续提交已满足原 finding' },
         { fileLine: 'src/other.ts:4', reason: '后续提交已满足原 finding' },
       ],
-      state
+      state,
+      []
     );
     expect(state.maintainerThreadState?.['d-stale-recheck']?.decisions).toMatchObject({
       'src/index.ts:2': { action: 'ignore', alreadyFixed: true },
@@ -2782,5 +3342,194 @@ describe('classifyBatchFixItems', () => {
 
     expect(fixedItems).toEqual([]);
     expect(failedItems[0]).toContain('src/dead.ts:1');
+  });
+
+  it('优先使用逐 finding 结果，不把一个失败原因复制给暂缓项', () => {
+    const { fixedItems, failedItems, deferredItems } = classifyBatchFixItems(
+      [
+        { file: 'src/a.ts', line: 1 },
+        { file: 'src/b.ts', line: 2 },
+        { file: 'src/c.ts', line: 3 },
+      ],
+      {
+        success: false,
+        reason: '批量修复未完成',
+        appliedFiles: ['src/a.ts'],
+        deletedFiles: [],
+        itemResults: [
+          { file: 'src/a.ts', line: 1, status: 'deferred', reason: '事务尚未提交' },
+          { file: 'src/b.ts', line: 2, status: 'failed', reason: '目标函数仍缺少保护' },
+          { file: 'src/c.ts', line: 3, status: 'deferred', reason: '本轮尚未执行' },
+        ],
+      }
+    );
+
+    expect(fixedItems).toEqual([]);
+    expect(failedItems).toEqual(['src/b.ts:2 — 目标函数仍缺少保护']);
+    expect(deferredItems).toEqual(['src/a.ts:1 — 事务尚未提交', 'src/c.ts:3 — 本轮尚未执行']);
+  });
+});
+
+describe('legacy maintainer state repair', () => {
+  it('回复已发布但 resolve 未完成时，源评论更新会淘汰旧投递', () => {
+    const generatedAt = Date.parse('2026-08-03T06:00:00.000Z');
+    const threadState: MaintainerThreadState = {
+      decisions: {},
+      lastReviewerNoteAt: generatedAt - 60_000,
+      delivery: {
+        replyBody: '旧结论',
+        replyHash: 'old',
+        replyStatus: 'posted',
+        replyNoteId: 2,
+        resolveRequired: true,
+        resolveStatus: 'failed',
+        attempts: 1,
+        createdAt: generatedAt,
+        updatedAt: generatedAt,
+      },
+    };
+
+    const reason = getDiscussionDeliveryInvalidationReason({
+      discussion: {
+        id: 'd-updated-before-resolve',
+        resolvable: true,
+        resolved: false,
+        notes: [
+          {
+            id: 1,
+            author: 'reviewer-agent',
+            body: 'src/a.ts:1 更新后的问题',
+            createdAt: new Date(generatedAt - 60_000).toISOString(),
+            updatedAt: new Date(generatedAt + 60_000).toISOString(),
+            resolved: false,
+          },
+          {
+            id: 2,
+            author: 'maintainer',
+            body: '旧结论',
+            createdAt: new Date(generatedAt).toISOString(),
+            resolved: false,
+          },
+        ],
+      },
+      threadState,
+      now: generatedAt + 120_000,
+    });
+
+    expect(reason).toContain('源评论');
+  });
+
+  it('按首次生成时间淘汰跨日重试的陈旧超长投递', () => {
+    const generatedAt = Date.parse('2026-07-28T06:00:00.000Z');
+    const retriedAt = Date.parse('2026-08-03T06:00:00.000Z');
+    const threadState: MaintainerThreadState = {
+      decisions: {},
+      lastReviewerNoteAt: 0,
+      lastSummaryAt: generatedAt,
+      delivery: {
+        replyBody: `\u001b[31m失败\u001b[0m\n${'x'.repeat(430_000)}`,
+        replyHash: 'legacy',
+        replyStatus: 'failed',
+        resolveRequired: false,
+        resolveStatus: 'not-required',
+        attempts: 3,
+        updatedAt: retriedAt,
+      },
+    };
+
+    const repaired = repairLegacyMaintainerThreadState(threadState, retriedAt);
+    const reason = getDiscussionDeliveryInvalidationReason({
+      discussion: {
+        id: 'd-stale-delivery',
+        resolvable: true,
+        resolved: false,
+        notes: [
+          {
+            id: 1,
+            author: 'reviewer-agent',
+            body: 'src/a.ts:1 需要检查边界条件',
+            createdAt: '2026-07-28T05:00:00.000Z',
+            resolved: false,
+          },
+        ],
+      },
+      threadState,
+      now: retriedAt,
+    });
+
+    expect(repaired.changed).toBe(true);
+    expect(threadState.delivery?.createdAt).toBe(generatedAt);
+    expect(threadState.delivery?.replyBody.length).toBeLessThanOrEqual(16_000);
+    expect(threadState.delivery?.replyBody).not.toContain('\u001b[');
+    expect(reason).toContain('超过两小时');
+  });
+
+  it('把历史仓库自查型 ask 回流为 fix', () => {
+    const threadState: MaintainerThreadState = {
+      decisions: {
+        'src/a.ts:8': {
+          action: 'ask',
+          reason: '需要读取实现',
+          question: '请提供 src/a.ts 文件的完整内容，以便判断当前实现。',
+          failedAttempts: 2,
+          decidedAt: 1,
+        },
+      },
+      lastReviewerNoteAt: 0,
+    };
+
+    const repaired = repairLegacyMaintainerThreadState(threadState, 100);
+
+    expect(repaired.repairedSelfAnswerableAsk).toBe(true);
+    expect(threadState.decisions['src/a.ts:8']).toMatchObject({
+      action: 'fix',
+      failedAttempts: 0,
+    });
+    expect(threadState.decisions['src/a.ts:8'].question).toBeUndefined();
+  });
+
+  it('把未耗尽重试次数的历史修复失败求助回流为自动重试', () => {
+    const question =
+      '我尝试自动修复 src/a.ts:8，但未成功。请 Reviewer 补充期望的修改方式或范围，我会再试一次。';
+    const threadState: MaintainerThreadState = {
+      decisions: {
+        'src/a.ts:8': {
+          action: 'fix',
+          reason: '需要修复',
+          question,
+          failedAttempts: 1,
+          fixSucceeded: false,
+          lastFailureReason: '首次修复未完成',
+          decidedAt: 1,
+        },
+      },
+      lastReviewerNoteAt: 0,
+      repairVersion: 1,
+      delivery: {
+        replyBody: question,
+        replyHash: 'legacy',
+        replyStatus: 'posted',
+        resolveRequired: false,
+        resolveStatus: 'not-required',
+        attempts: 1,
+        awaitingReply: true,
+        awaitingReplyAt: 1,
+        question,
+        filePath: 'src/a.ts',
+        updatedAt: 1,
+      },
+    };
+
+    const repaired = repairLegacyMaintainerThreadState(threadState, 100);
+
+    expect(repaired.repairedPrematureFixAsk).toBe(true);
+    expect(threadState.decisions['src/a.ts:8']).toMatchObject({
+      action: 'fix',
+      failedAttempts: 1,
+      fixSucceeded: false,
+    });
+    expect(threadState.decisions['src/a.ts:8'].question).toBeUndefined();
+    expect(threadState.delivery?.awaitingReply).toBe(false);
+    expect(threadState.repairVersion).toBe(2);
   });
 });
