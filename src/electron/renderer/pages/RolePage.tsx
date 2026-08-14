@@ -38,21 +38,26 @@ function getRoleConfig(project: Project, role: Role): RoleConfig | undefined {
   return project.roles?.[role];
 }
 
+function isRoleEnabled(config: RoleConfig | undefined): boolean {
+  return config?.role === 'archiver' ? config.automation.enabled : config?.enabled === true;
+}
+
 function getStatusBadges(
   role: Role,
   project: Project,
   runningProjects: string[],
   agentStatus?: RoleProjectStatus | null,
-  serviceRunning?: boolean
+  serviceRunning?: boolean,
+  requiresGitlab = true
 ) {
   const badges: Array<{ label: string; className: string; title?: string }> = [];
   const hasGitlab = Boolean(project.gitlab?.baseUrl && project.gitlab?.projectPath);
   const roleConfig = getRoleConfig(project, role);
-  const enabled = roleConfig?.enabled ?? false;
+  const enabled = isRoleEnabled(roleConfig);
 
-  if (!hasGitlab) {
+  if (requiresGitlab && !hasGitlab) {
     badges.push({ label: 'GitLab 未配置', className: 'badge badge-warning' });
-  } else if (!project.gitlab?.token) {
+  } else if (requiresGitlab && !project.gitlab?.token) {
     badges.push({ label: 'Token 缺失', className: 'badge badge-danger' });
   }
 
@@ -84,13 +89,24 @@ function getStatusBadges(
         badges.push({ label: 'Token 过期', className: 'badge badge-danger', title: error.message });
         break;
       case 'gitlab-api':
-        badges.push({ label: 'GitLab API 错误', className: 'badge badge-warning', title: error.message });
+        badges.push({
+          label: 'GitLab API 错误',
+          className: 'badge badge-warning',
+          title: error.message,
+        });
         break;
       default:
-        badges.push({ label: 'Agent 异常', className: 'badge badge-warning', title: error.message });
+        badges.push({
+          label: 'Agent 异常',
+          className: 'badge badge-warning',
+          title: error.message,
+        });
     }
   } else if (agentStatus?.lastSuccessAt) {
-    badges.push({ label: `上次运行于 ${formatRelativeTime(agentStatus.lastSuccessAt)}`, className: 'badge badge-info' });
+    badges.push({
+      label: `上次运行于 ${formatRelativeTime(agentStatus.lastSuccessAt)}`,
+      className: 'badge badge-info',
+    });
   }
 
   return badges;
@@ -117,14 +133,23 @@ function ProjectCard({
   onToggleEnabled,
   onSaved,
 }: ProjectCardProps) {
+  const ui = getRoleUI(role);
   const { data: agentStatus } = useIpc<RoleProjectStatus>(
     'project.role.status.get',
     { projectId: project.id, role },
     { pollInterval: 5000 }
   );
 
-  const badges = getStatusBadges(role, project, runningProjects, agentStatus, serviceRunning);
+  const badges = getStatusBadges(
+    role,
+    project,
+    runningProjects,
+    agentStatus,
+    serviceRunning,
+    ui.requiresGitlab !== false
+  );
   const roleConfig = getRoleConfig(project, role);
+  const CustomProjectConfig = ui.projectConfigComponent;
 
   return (
     <div className="card" style={{ marginBottom: 12 }}>
@@ -134,24 +159,32 @@ function ProjectCard({
           <div className="project-meta">{project.rootPath}</div>
           <div style={{ marginTop: 6, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {badges.map((badge, idx) => (
-              <span key={idx} className={badge.className} title={badge.title} style={{ cursor: badge.title ? 'help' : undefined }}>
+              <span
+                key={idx}
+                className={badge.className}
+                title={badge.title}
+                style={{ cursor: badge.title ? 'help' : undefined }}
+              >
                 {badge.label}
               </span>
             ))}
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Toggle checked={roleConfig?.enabled ?? false} onChange={onToggleEnabled}>
-            {(roleConfig?.enabled ?? false) ? '已启用' : '未启用'}
+          <Toggle checked={isRoleEnabled(roleConfig)} onChange={onToggleEnabled}>
+            {isRoleEnabled(roleConfig) ? '已启用' : '未启用'}
           </Toggle>
           <button className="btn btn-primary btn-sm" onClick={onToggleExpand}>
             {expanded ? '收起' : '配置'}
           </button>
         </div>
       </div>
-      {expanded && (
-        <RoleProjectConfig role={role} project={project} onSaved={onSaved} />
-      )}
+      {expanded &&
+        (CustomProjectConfig ? (
+          <CustomProjectConfig project={project} onSaved={onSaved} />
+        ) : role !== 'archiver' ? (
+          <RoleProjectConfig role={role} project={project} onSaved={onSaved} />
+        ) : null)}
     </div>
   );
 }
@@ -193,20 +226,34 @@ export function RolePage({ role }: RolePageProps) {
   };
 
   const toggleConfig = (projectId: string) => {
-    setExpandedId((prev) => (prev === projectId ? null : projectId));
+    setExpandedId(prev => (prev === projectId ? null : projectId));
   };
 
   const toggleRoleEnabled = async (project: Project) => {
     const roleConfig = getRoleConfig(project, role);
-    const nextEnabled = !roleConfig?.enabled;
+    const nextEnabled = !isRoleEnabled(roleConfig);
     try {
       await invoke('project.role.config.update', {
         projectId: project.id,
         role,
-        config: {
-          ...(roleConfig ?? ui.defaultConfig),
-          enabled: nextEnabled,
-        },
+        config:
+          role === 'archiver'
+            ? {
+                ...(roleConfig?.role === 'archiver'
+                  ? roleConfig
+                  : (ui.defaultConfig as Extract<RoleConfig, { role: 'archiver' }>)),
+                automation: {
+                  ...(roleConfig?.role === 'archiver'
+                    ? roleConfig.automation
+                    : (ui.defaultConfig as Extract<RoleConfig, { role: 'archiver' }>)
+                        .automation),
+                  enabled: nextEnabled,
+                },
+              }
+            : {
+                ...(roleConfig ?? ui.defaultConfig),
+                enabled: nextEnabled,
+              },
       });
       await refreshProjects();
       await refreshStatus();
@@ -219,11 +266,24 @@ export function RolePage({ role }: RolePageProps) {
 
   return (
     <PageLayout icon={<ui.icon />} title={ui.displayName}>
-      {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
+      {error && (
+        <div className="error-message" style={{ marginBottom: 16 }}>
+          {error}
+        </div>
+      )}
 
       <div className="card">
-        <h3 className="card-title" style={{ marginBottom: 12 }}>服务状态</h3>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+        <h3 className="card-title" style={{ marginBottom: 12 }}>
+          服务状态
+        </h3>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 16,
+          }}
+        >
           <div>
             <div className="project-meta">
               服务状态:
@@ -239,7 +299,9 @@ export function RolePage({ role }: RolePageProps) {
                   : '已停止'}
               </span>
             </div>
-            <div className="project-meta">已启用 {ui.displayName} 的项目数: {status?.enabledProjects ?? 0}</div>
+            <div className="project-meta">
+              已启用 {ui.displayName} 的项目数: {status?.enabledProjects ?? 0}
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
             <button
@@ -250,7 +312,11 @@ export function RolePage({ role }: RolePageProps) {
               {busy ? '处理中...' : status?.running ? '停止服务' : '启动服务'}
             </button>
             {status?.running && (
-              <button className="btn btn-primary" onClick={() => runAction('restart')} disabled={busy}>
+              <button
+                className="btn btn-primary"
+                onClick={() => runAction('restart')}
+                disabled={busy}
+              >
                 重启服务
               </button>
             )}
@@ -268,15 +334,17 @@ export function RolePage({ role }: RolePageProps) {
             marginBottom: 16,
           }}
         >
-          为项目配置 GitLab 仓库信息并启用 {ui.displayName} 后，该项目将加入全局服务的轮询范围。
-          点击服务状态卡片右上角"启动服务"才会为所有已启用的项目启动 Agent；服务运行中单独勾选/取消项目可实时启动或停止该项目的 Agent。
+          {ui.projectDescription ??
+            `为项目配置 GitLab 仓库信息并启用 ${ui.displayName} 后，该项目将加入全局服务的轮询范围。`}{' '}
+          点击服务状态卡片右上角"启动服务"才会为所有已启用的项目启动
+          Agent；服务运行中单独勾选/取消项目可实时启动或停止该项目的 Agent。
         </p>
 
         {!projects || projects.length === 0 ? (
           <div className="empty-state">暂无注册项目，请先前往仪表盘注册项目。</div>
         ) : (
           <div>
-            {projects.map((project) => (
+            {projects.map(project => (
               <ProjectCard
                 key={project.id}
                 role={role}
@@ -299,8 +367,8 @@ export function RolePage({ role }: RolePageProps) {
       <div className="card">
         <h3 className="card-title">说明</h3>
         <p style={{ color: 'var(--text-secondary)', fontSize: 14, lineHeight: 1.6 }}>
-          {ui.displayName} 服务为每个启用项目启动独立的 Agent 子进程，各项目按自身的 cron 调度轮询 GitLab open MRs。
-          某个项目的 Token 问题只会影响该项目的 Agent，其他项目继续正常运行。
+          {ui.serviceDescription ??
+            `${ui.displayName} 服务为每个启用项目启动独立的 Agent 子进程，各项目按自身的 cron 调度轮询 GitLab open MRs。某个项目的 Token 问题只会影响该项目的 Agent，其他项目继续正常运行。`}
         </p>
       </div>
     </PageLayout>

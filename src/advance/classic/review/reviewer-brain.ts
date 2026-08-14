@@ -71,11 +71,10 @@ export class ReviewerBrain {
    * 对 LGTM、emoji、纯感谢等无需回复的内容返回 shouldReply=false。
    */
   async replyToComment(input: ReviewerReplyInput): Promise<ReviewerReplyResult> {
-    const threadContext = await summarizeThreadNotes(
-      this.options.llmClient,
-      input.threadNotes,
-      { maxRawTokens: 8000, maxRecentItems: 5 }
-    );
+    const threadContext = await summarizeThreadNotes(this.options.llmClient, input.threadNotes, {
+      maxRawTokens: 8000,
+      maxRecentItems: 5,
+    });
     const recalledContext = await this.recallContextForReply(input, threadContext);
     const prompt = this.buildReplyPrompt(input, threadContext, recalledContext);
     const response = await this.options.llmClient.completeJson(
@@ -91,26 +90,27 @@ export class ReviewerBrain {
   ): Promise<string> {
     if (!this.options.recallPlanner) return '';
     const findingsText = input.originalFindings
-      .map(
-        (f) =>
-          `- [${f.severity}] \`${f.file}:${f.line}\` ${f.message}\n  建议：${f.suggestion}`
-      )
+      .map(f => `- [${f.severity}] \`${f.file}:${f.line}\` ${f.message}\n  建议：${f.suggestion}`)
       .join('\n');
     const plan = await this.options.recallPlanner.plan({
       role: 'reviewer',
       taskType: 'reply',
-      taskSummary: `${formatThreadContext(threadContext)}\n\n待回复评论：${input.targetNote.body}`.slice(0, 3000),
+      taskSummary:
+        `${formatThreadContext(threadContext)}\n\n待回复评论：${input.targetNote.body}`.slice(
+          0,
+          3000
+        ),
       availableFindings: findingsText,
     });
     if (!plan.needsRecall || plan.queries.length === 0) return '';
     const memories = await this.options.recallPlanner.execute(plan);
     if (memories.length === 0) return '';
-    return `\n\n相关历史记忆：\n${memories.map((m) => `- ${m}`).join('\n')}`;
+    return `\n\n相关项目知识与历史记忆：\n${memories.map(m => `- ${m}`).join('\n')}`;
   }
 
   private async recallContext(mr: MergeRequest, diffs: MrDiff[]): Promise<string> {
     if (!this.options.recallPlanner) return '';
-    const diffSummary = diffs.map((d) => `${d.newPath}\n${d.diff}`).join('\n');
+    const diffSummary = diffs.map(d => `${d.newPath}\n${d.diff}`).join('\n');
     const plan = await this.options.recallPlanner.plan({
       role: 'reviewer',
       taskType: 'review',
@@ -119,13 +119,13 @@ export class ReviewerBrain {
     if (!plan.needsRecall || plan.queries.length === 0) return '';
     const memories = await this.options.recallPlanner.execute(plan);
     if (memories.length === 0) return '';
-    return `\n\n相关历史记忆：\n${memories.map((m) => `- ${m}`).join('\n')}`;
+    return `\n\n相关项目知识与历史记忆：\n${memories.map(m => `- ${m}`).join('\n')}`;
   }
 
   private buildReviewPrompt(mr: MergeRequest, diffs: MrDiff[], recalledContext: string): string {
     const diffText = diffs
       .map(
-        (d) =>
+        d =>
           `--- ${d.oldPath}\n+++ ${d.newPath}\n${d.newFile ? '(new file)' : ''}${d.deletedFile ? '(deleted)' : ''}\n${d.diff}`
       )
       .join('\n\n');
@@ -171,19 +171,23 @@ export class ReviewerBrain {
       };
     } catch (err) {
       logger.warn(
-        { rawResponse: rawResponse.slice(0, 2000), err: err instanceof Error ? err.message : String(err) },
+        {
+          rawResponse: rawResponse.slice(0, 2000),
+          err: err instanceof Error ? err.message : String(err),
+        },
         'ReviewerBrain 评审响应解析失败'
       );
       throw new Error('评审响应解析失败，请检查 LLM 输出格式');
     }
   }
 
-  private buildReplyPrompt(input: ReviewerReplyInput, threadContext: ThreadContext, recalledContext: string): string {
+  private buildReplyPrompt(
+    input: ReviewerReplyInput,
+    threadContext: ThreadContext,
+    recalledContext: string
+  ): string {
     const findingsText = input.originalFindings
-      .map(
-        (f) =>
-          `- [${f.severity}] \`${f.file}:${f.line}\` ${f.message}\n  建议：${f.suggestion}`
-      )
+      .map(f => `- [${f.severity}] \`${f.file}:${f.line}\` ${f.message}\n  建议：${f.suggestion}`)
       .join('\n');
 
     const notesText = formatThreadContext(threadContext);
@@ -228,7 +232,10 @@ export class ReviewerBrain {
       };
     } catch (err) {
       logger.warn(
-        { rawResponse: rawResponse.slice(0, 500), err: err instanceof Error ? err.message : String(err) },
+        {
+          rawResponse: rawResponse.slice(0, 500),
+          err: err instanceof Error ? err.message : String(err),
+        },
         'ReviewerBrain 回复决策解析失败，保守不回复'
       );
       return { shouldReply: false, replyBody: '', reason: 'LLM 回复解析失败，保守不回复' };
@@ -242,7 +249,7 @@ export class ReviewerBrain {
   private normalizeFindings(rawFindings: unknown[]): ReviewFinding[] {
     return rawFindings
       .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
-      .map((f) => ({
+      .map(f => ({
         severity: this.normalizeSeverity(String(f.severity ?? 'LOW')),
         file: String(f.file ?? 'unknown'),
         line: Number(f.line ?? 0),
@@ -256,7 +263,9 @@ export class ReviewerBrain {
   private normalizeSeverity(severity: string): ReviewFinding['severity'] {
     const valid: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
     const upper = severity.toUpperCase();
-    return valid.includes(upper as ReviewFinding['severity']) ? (upper as ReviewFinding['severity']) : 'LOW';
+    return valid.includes(upper as ReviewFinding['severity'])
+      ? (upper as ReviewFinding['severity'])
+      : 'LOW';
   }
 
   private extractAutoFixableIndices(
@@ -264,11 +273,9 @@ export class ReviewerBrain {
     explicitIndices?: number[]
   ): number[] {
     if (explicitIndices && Array.isArray(explicitIndices)) {
-      return explicitIndices.filter((i) => i >= 0 && i < findings.length);
+      return explicitIndices.filter(i => i >= 0 && i < findings.length);
     }
-    return findings
-      .map((f, i) => (f.autoFixable ? i : -1))
-      .filter((i) => i !== -1);
+    return findings.map((f, i) => (f.autoFixable ? i : -1)).filter(i => i !== -1);
   }
 }
 

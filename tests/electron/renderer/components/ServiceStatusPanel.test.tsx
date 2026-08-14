@@ -9,10 +9,37 @@ describe('ServiceStatusPanel', () => {
     multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
   };
 
-  it('渲染 Daemon → 记忆服务（EverOS）/本地模型服务 → Embedding/Rerank 树形结构', () => {
+  const defaultCodeGraph: DaemonStatus['codeGraph'] = {
+    state: 'running',
+    url: 'http://127.0.0.1:7010',
+    error: null,
+    activeJobs: 0,
+    queuedJobs: 0,
+    providers: [
+      {
+        providerId: 'graphify',
+        displayName: 'Graphify',
+        state: 'ready',
+        prepared: true,
+        version: '0.9.42',
+        message: '托管运行时已就绪',
+      },
+      {
+        providerId: 'understand-anything',
+        displayName: 'Understand Anything',
+        state: 'manual',
+        prepared: true,
+        version: '2.9.0',
+        message: 'Skill 已准备，等待 Agent 工作流调度',
+      },
+    ],
+  };
+
+  it('渲染记忆、代码图谱与模型服务树形结构', () => {
     const daemon: DaemonStatus = {
       daemonRunning: true,
       everos: { state: 'running', url: 'http://127.0.0.1:8000', error: null },
+      codeGraph: defaultCodeGraph,
     };
     const localModel: LocalModelStatus = {
       embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null, progress: null },
@@ -30,6 +57,9 @@ describe('ServiceStatusPanel', () => {
     expect(screen.getByText('服务状态')).toBeTruthy();
     expect(screen.getByText('Daemon')).toBeTruthy();
     expect(screen.getByText('记忆服务（EverOS）')).toBeTruthy();
+    expect(screen.getByText('代码图谱服务')).toBeTruthy();
+    expect(screen.getByText('Graphify')).toBeTruthy();
+    expect(screen.getByText('Understand Anything')).toBeTruthy();
     expect(screen.getByText('本地模型服务')).toBeTruthy();
     expect(screen.getByText('Embedding')).toBeTruthy();
     expect(screen.getByText('Rerank')).toBeTruthy();
@@ -39,6 +69,7 @@ describe('ServiceStatusPanel', () => {
     const daemon: DaemonStatus = {
       daemonRunning: true,
       everos: { state: 'starting', url: null, error: null },
+      codeGraph: defaultCodeGraph,
     };
     const localModel: LocalModelStatus = {
       embedding: { state: 'downloading', url: null, error: null, progress: 30 },
@@ -55,7 +86,7 @@ describe('ServiceStatusPanel', () => {
 
     expect(container.querySelector('.badge-success')?.textContent).toBe('运行中');
     expect(container.querySelector('.badge-info')?.textContent).toBe('启动中');
-    expect(container.querySelector('.badge-warning')?.textContent).toBe('下载中');
+    expect(within(screen.getByTestId('status-node-embedding')).getByText('下载中')).toBeTruthy();
     expect(container.textContent).toContain('加载中');
   });
 
@@ -63,6 +94,7 @@ describe('ServiceStatusPanel', () => {
     const daemon: DaemonStatus = {
       daemonRunning: true,
       everos: { state: 'running', url: null, error: null },
+      codeGraph: defaultCodeGraph,
     };
     const localModel: LocalModelStatus = {
       embedding: { state: 'downloading', url: null, error: null, progress: 30 },
@@ -84,6 +116,7 @@ describe('ServiceStatusPanel', () => {
     const daemon: DaemonStatus = {
       daemonRunning: true,
       everos: { state: 'running', url: null, error: null },
+      codeGraph: defaultCodeGraph,
     };
     const localModel: LocalModelStatus = {
       embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null, progress: null },
@@ -106,6 +139,7 @@ describe('ServiceStatusPanel', () => {
     const daemon: DaemonStatus = {
       daemonRunning: true,
       everos: { state: 'error', url: null, error: longError },
+      codeGraph: defaultCodeGraph,
     };
     const localModel: LocalModelStatus = {
       embedding: { state: 'error', url: null, error: 'embedding 启动失败', progress: null },
@@ -138,6 +172,7 @@ describe('ServiceStatusPanel', () => {
     const daemon: DaemonStatus = {
       daemonRunning: true,
       everos: { state: 'running', url: 'http://127.0.0.1:8000', error: null },
+      codeGraph: defaultCodeGraph,
     };
     const localModel: LocalModelStatus = {
       embedding: { state: 'running', url: 'http://127.0.0.1:12345', error: null, progress: null },
@@ -157,6 +192,7 @@ describe('ServiceStatusPanel', () => {
     );
 
     expect(screen.getByText('http://127.0.0.1:8000')).toBeTruthy();
+    expect(screen.getByText('http://127.0.0.1:7010')).toBeTruthy();
     expect(screen.getByText('http://127.0.0.1:12345')).toBeTruthy();
     expect(screen.getByText('https://api.anthropic.com/v1')).toBeTruthy();
     expect(screen.getByText('https://api.openai.com/v1')).toBeTruthy();

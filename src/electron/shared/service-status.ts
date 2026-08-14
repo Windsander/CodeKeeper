@@ -1,5 +1,5 @@
 /**
- * Daemon、EverOS 与本地模型服务的状态类型。
+ * Daemon、EverOS、CodeGraph 与模型服务的状态类型。
  * 主进程与渲染进程共享此文件，避免 IPC 两端类型漂移。
  */
 
@@ -13,7 +13,9 @@ export interface ModelServiceStatus {
   progress: number | null;
 }
 
-export type EverosServiceState = 'idle' | 'starting' | 'running' | 'error';
+export type DaemonManagedServiceState = 'idle' | 'starting' | 'running' | 'error';
+
+export type EverosServiceState = DaemonManagedServiceState;
 
 export interface EverosStatus {
   state: EverosServiceState;
@@ -21,9 +23,35 @@ export interface EverosStatus {
   error: string | null;
 }
 
+export type CodeGraphProviderState =
+  | 'ready'
+  | 'preparable'
+  | 'preparing'
+  | 'manual'
+  | 'unavailable';
+
+export interface CodeGraphProviderStatus {
+  providerId: string;
+  displayName: string;
+  state: CodeGraphProviderState;
+  prepared: boolean;
+  version: string | null;
+  message: string | null;
+}
+
+export interface CodeGraphServiceStatus {
+  state: DaemonManagedServiceState;
+  url: string | null;
+  error: string | null;
+  activeJobs: number;
+  queuedJobs: number;
+  providers: CodeGraphProviderStatus[];
+}
+
 export interface DaemonStatus {
   daemonRunning: boolean;
   everos: EverosStatus;
+  codeGraph: CodeGraphServiceStatus;
 }
 
 export interface LocalModelStatus {

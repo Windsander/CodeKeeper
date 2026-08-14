@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DocumentClassifier } from '../../../src/advance/archive/classifier';
-import { LlmClient } from '../../../src/advance/llm/client';
+import { LlmClient, LlmStructuredOutputError } from '../../../src/advance/llm/client';
 
 describe('DocumentClassifier', () => {
   let tmp: string;
@@ -189,5 +189,55 @@ describe('DocumentClassifier', () => {
     const result = await classifier.classify(filePath, '# 周报');
     expect(result.category).toBe('weekly');
     expect(result.docType).toBe('weekly');
+  });
+
+  it('应通过 completeJson 请求结构化分类', async () => {
+    const complete = vi.fn();
+    const completeJson = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        category: 'memory',
+        docType: 'spec',
+        tags: ['schema'],
+        summary: '结构化分类',
+        sections: [],
+        confidence: 0.9,
+      })
+    );
+    const client = { complete, completeJson } as unknown as LlmClient;
+    const classifier = new DocumentClassifier(client, {
+      categories: ['memory'],
+      docTypes: ['spec'],
+      heuristicThreshold: 1.1,
+    });
+    const filePath = makeFile('structured.md', '# structured');
+
+    const result = await classifier.classify(filePath, '# structured');
+
+    expect(result.category).toBe('memory');
+    expect(completeJson).toHaveBeenCalledOnce();
+    expect(completeJson.mock.calls[0][2]).toMatchObject({
+      required: ['category', 'docType', 'tags', 'summary', 'sections', 'confidence'],
+      additionalProperties: false,
+    });
+    expect(completeJson.mock.calls[0][0]).not.toContain(tmp);
+    expect(completeJson.mock.calls[0][0]).toContain('structured.md');
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('结构化分类结果缺失时应安全回退', async () => {
+    const completeJson = vi
+      .fn()
+      .mockRejectedValue(new LlmStructuredOutputError('LLM 未返回 JSON 工具调用'));
+    const client = { completeJson } as unknown as LlmClient;
+    const classifier = new DocumentClassifier(client, { heuristicThreshold: 1.1 });
+    const filePath = makeFile('fallback.md', '# fallback');
+
+    const result = await classifier.classify(filePath, '# fallback');
+
+    expect(result).toMatchObject({
+      category: 'other',
+      docType: 'other',
+      confidence: 0,
+    });
   });
 });

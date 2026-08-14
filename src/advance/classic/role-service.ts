@@ -13,6 +13,8 @@ export interface RoleServiceOptions {
   submodulePath?: string;
   /** EverOS 数据目录 */
   everosDataDir?: string;
+  /** Daemon 托管的 CodeGraph Server URL */
+  codeGraphUrl?: string;
 }
 
 /**
@@ -66,6 +68,7 @@ export class RoleService {
         ROLE: this.role,
         CK_DB_PATH: this.context.dbPath,
         CK_EVEROS_MCP_URL: this.mcpUrl ?? '',
+        CK_CODEGRAPH_SERVER_URL: this.options.codeGraphUrl ?? '',
         CK_LLM_API_KEY: this.context.getDaemonConfig?.().apiKey ?? '',
         CK_LLM_PROVIDER: this.context.getDaemonConfig?.().provider ?? 'anthropic',
         CK_LLM_MODEL: this.context.getDaemonConfig?.().model ?? '',
@@ -98,6 +101,11 @@ export class RoleService {
    */
   setMcpUrl(url: string): void {
     this.options.mcpUrl = url;
+  }
+
+  /** 更新 CodeGraph Server URL，供重启后的角色子进程继续复用统一服务。 */
+  setCodeGraphUrl(url: string): void {
+    this.options.codeGraphUrl = url;
   }
 
   /**

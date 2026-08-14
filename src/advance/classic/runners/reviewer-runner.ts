@@ -13,7 +13,12 @@ import { MemoryClient } from '../memory/memory-client.js';
 import { RecallPlanner } from '../memory/recall-planner.js';
 import { buildEverOSAgentId } from '../memory/types.js';
 import { buildFindingCaseKey } from '../memory/finding-case-key.js';
-import { loadState, saveState, getDiscussionStateKey, type MrAgentState } from './shared/state-utils.js';
+import {
+  loadState,
+  saveState,
+  getDiscussionStateKey,
+  type MrAgentState,
+} from './shared/state-utils.js';
 import {
   deliverReviewComment,
   isReviewCommentDeliveryPending,
@@ -29,10 +34,20 @@ import {
   REVIEWER_ROLE_LABEL,
 } from './shared/review-utils.js';
 import type { Project, RoleConfig, ReviewerConfig } from '../../types.js';
-import type { MergeRequest, MrDiff, ReviewFinding, Discussion, ReviewerComment } from '../provider/types.js';
+import type {
+  MergeRequest,
+  MrDiff,
+  ReviewFinding,
+  Discussion,
+  ReviewerComment,
+} from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
 import { logger } from '../../../core/logger.js';
 import { getCommentActivityAt } from '../provider/activity-window.js';
+import {
+  ArchiverProjectKnowledgeSource,
+  mergeProjectKnowledgeContext,
+} from '../../archiver/project-knowledge-source.js';
 
 /**
  * 构建 Reviewer 会话 ID（按 MR 粒度）
@@ -73,7 +88,13 @@ export class ReviewerRunner extends BaseRoleRunner {
     const provider = new GitLabProvider(project.gitlab);
     const state = loadState(project);
 
-    const { soul, projectContext } = this.loadRoleContext(project);
+    const { soul, projectContext: legacyProjectContext } = this.loadRoleContext(project);
+    const projectKnowledgeSource = new ArchiverProjectKnowledgeSource({ project });
+    const [providerContext, providerKnowledgeAvailable] = await Promise.all([
+      projectKnowledgeSource.loadContext(6000).catch(() => ''),
+      projectKnowledgeSource.isAvailable().catch(() => false),
+    ]);
+    const projectContext = mergeProjectKnowledgeContext(legacyProjectContext, providerContext);
 
     const reviewerConfig = config as ReviewerConfig;
     const reviewerName = reviewerConfig.reviewerName ?? 'CodeKeeper Reviewer';
@@ -103,11 +124,13 @@ export class ReviewerRunner extends BaseRoleRunner {
     });
 
     console.log(`[ReviewerRunner] 扫描项目 ${project.name} 的 open MRs...`);
-    console.log(`[ReviewerRunner] 项目 ${project.name} 使用 filter: ${JSON.stringify(config.filter ?? {})}`);
+    console.log(
+      `[ReviewerRunner] 项目 ${project.name} 使用 filter: ${JSON.stringify(reviewerConfig.filter ?? {})}`
+    );
 
     let mrs: MergeRequest[];
     try {
-      mrs = await provider.listOpenMRs(config.filter);
+      mrs = await provider.listOpenMRs(reviewerConfig.filter);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[ReviewerRunner] 列出项目 ${project.name} 的 MR 失败: ${message}`);
@@ -117,7 +140,7 @@ export class ReviewerRunner extends BaseRoleRunner {
     console.log(`[ReviewerRunner] 项目 ${project.name} 发现 ${mrs.length} 个 open MR`);
 
     // 默认跳过 draft；如果 filter 里显式配置了 Draft=true，则保留 draft MR
-    const draftCondition = config.filter?.conditions.find((c) => c.field === 'draft');
+    const draftCondition = reviewerConfig.filter?.conditions.find(c => c.field === 'draft');
     const includeDraft = draftCondition?.values.includes('true') ?? false;
 
     for (const mr of mrs) {
@@ -173,9 +196,16 @@ export class ReviewerRunner extends BaseRoleRunner {
       if (memoryClient) {
         await this.retryPendingReviewMemory(memoryClient, project, state, stateKey);
       }
-      const recallPlanner = memoryClient
-        ? new RecallPlanner({ llmClient: this.llmClient, memoryClient })
-        : undefined;
+      const recallPlanner =
+        memoryClient || providerKnowledgeAvailable
+          ? new RecallPlanner({
+              llmClient: this.llmClient,
+              memoryClient,
+              projectKnowledgeSource: providerKnowledgeAvailable
+                ? projectKnowledgeSource
+                : undefined,
+            })
+          : undefined;
       const brain = new ReviewerBrain({ ...brainOptions, memoryClient, recallPlanner });
 
       let result;
@@ -189,7 +219,7 @@ export class ReviewerRunner extends BaseRoleRunner {
       }
 
       const findingsHash = computeFindingsHash(result.findings);
-      const findingsKeys = result.findings.map((f) => getFindingKey(f));
+      const findingsKeys = result.findings.map(f => getFindingKey(f));
       const headSha = shaInfo?.headSha ?? '';
       const mrUpdatedAt = new Date(mr.updatedAt).getTime();
 
@@ -236,13 +266,10 @@ export class ReviewerRunner extends BaseRoleRunner {
       const threadRiskLevels = new Set<ReviewFinding['severity']>(
         reviewerConfig.threadRiskLevels ?? ['CRITICAL', 'HIGH']
       );
-      const postedFindingKeys = new Set(
-        (state.discussions[stateKey] ?? []).map(d => d.findingKey)
-      );
+      const postedFindingKeys = new Set((state.discussions[stateKey] ?? []).map(d => d.findingKey));
       const missingThreadFindings = result.findings.filter(
         finding =>
-          threadRiskLevels.has(finding.severity) &&
-          !postedFindingKeys.has(getFindingKey(finding))
+          threadRiskLevels.has(finding.severity) && !postedFindingKeys.has(getFindingKey(finding))
       );
       const reviewDelivery = state.reviewCommentDelivery?.[stateKey];
       const hasPendingReviewDelivery =
@@ -272,7 +299,7 @@ export class ReviewerRunner extends BaseRoleRunner {
 
       const newFindings = previousReview
         ? result.findings.filter(
-            (f) =>
+            f =>
               !previousReview.findingsKeys.includes(getFindingKey(f)) &&
               !postedFindingKeys.has(getFindingKey(f))
           )
@@ -282,10 +309,17 @@ export class ReviewerRunner extends BaseRoleRunner {
       let newFindingsToPost = newFindings;
       if (memoryClient) {
         try {
-          newFindingsToPost = await this.filterDuplicateCases(memoryClient, project.id, mr.iid, newFindings);
+          newFindingsToPost = await this.filterDuplicateCases(
+            memoryClient,
+            project.id,
+            mr.iid,
+            newFindings
+          );
           const skipped = newFindings.length - newFindingsToPost.length;
           if (skipped > 0) {
-            console.log(`[ReviewerRunner] MR !${mr.iid} 从新增发现项中过滤 ${skipped} 个 EverOS 已存在的 case`);
+            console.log(
+              `[ReviewerRunner] MR !${mr.iid} 从新增发现项中过滤 ${skipped} 个 EverOS 已存在的 case`
+            );
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
@@ -301,7 +335,7 @@ export class ReviewerRunner extends BaseRoleRunner {
       const lastAppendStillExists =
         recoveredDeliveries.appendNoteId !== undefined ||
         (previousReview?.lastAppendNoteId !== undefined &&
-          allComments.some((comment) => comment.id === previousReview.lastAppendNoteId));
+          allComments.some(comment => comment.id === previousReview.lastAppendNoteId));
       const shouldAppend =
         !shouldPostSummary &&
         newFindingsToPost.length > 0 &&
@@ -349,7 +383,6 @@ export class ReviewerRunner extends BaseRoleRunner {
             state,
           });
         }
-
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[ReviewerRunner] MR !${mr.iid} 发布评论失败: ${message}`);
@@ -437,7 +470,10 @@ export class ReviewerRunner extends BaseRoleRunner {
             discussionId: posted?.discussionId,
           };
         });
-        const casesKey = currentCases.map(item => item.key).sort().join('|');
+        const casesKey = currentCases
+          .map(item => item.key)
+          .sort()
+          .join('|');
         if (
           !memoryState.findingCases ||
           memoryState.findingCases.key !== casesKey ||
@@ -477,7 +513,9 @@ export class ReviewerRunner extends BaseRoleRunner {
             pendingCases.status = 'recorded';
             pendingCases.lastError = undefined;
             pendingCases.updatedAt = Date.now();
-            console.log(`[ReviewerRunner] MR !${mr.iid} 已记录 ${pendingCases.cases.length} 个 finding case 到 EverOS`);
+            console.log(
+              `[ReviewerRunner] MR !${mr.iid} 已记录 ${pendingCases.cases.length} 个 finding case 到 EverOS`
+            );
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             pendingCases.status = 'failed';
@@ -589,7 +627,7 @@ export class ReviewerRunner extends BaseRoleRunner {
     project?: Project
   ): Promise<void> {
     const reviewerThreads = discussions.filter(
-      (d) =>
+      d =>
         d.notes.length > 0 &&
         isAgentAuthoredNote(d.notes[0].body) &&
         d.notes[0].body.includes(REVIEWER_ROLE_LABEL)
@@ -614,15 +652,15 @@ export class ReviewerRunner extends BaseRoleRunner {
       const delivery = threadState.delivery;
       const deliveryNoteExists = Boolean(
         delivery &&
-          discussion.notes.some(
-            note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
-          )
+        discussion.notes.some(
+          note => note.id === delivery.replyNoteId || note.body === delivery.replyBody
+        )
       );
       const shouldReconcileDelivery = Boolean(
         delivery &&
-          (threadState.pendingTargetNoteId !== undefined ||
-            isDiscussionDeliveryPending(delivery) ||
-            (delivery.replyStatus === 'posted' && !deliveryNoteExists))
+        (threadState.pendingTargetNoteId !== undefined ||
+          isDiscussionDeliveryPending(delivery) ||
+          (delivery.replyStatus === 'posted' && !deliveryNoteExists))
       );
       if (shouldReconcileDelivery && delivery) {
         const pendingResult = await deliverDiscussionReply({
@@ -664,7 +702,7 @@ export class ReviewerRunner extends BaseRoleRunner {
       const lastRepliedAt = threadState.lastRepliedAt;
 
       const targetNotes = discussion.notes
-        .filter((note) => {
+        .filter(note => {
           const ts = getCommentActivityAt(note);
           return (
             !Number.isNaN(ts) &&
@@ -684,7 +722,7 @@ export class ReviewerRunner extends BaseRoleRunner {
         `[ReviewerRunner] discussion ${discussion.id} 有 ${targetNotes.length} 条新的人类回复待处理`
       );
 
-      const threadNotes = discussion.notes.map((n) => ({
+      const threadNotes = discussion.notes.map(n => ({
         author: n.author,
         body: n.body,
         createdAt: n.createdAt,
@@ -705,7 +743,9 @@ export class ReviewerRunner extends BaseRoleRunner {
         });
 
         if (!decision.shouldReply || !decision.replyBody?.trim()) {
-          console.log(`[ReviewerRunner] discussion ${discussion.id} 的回复判断: ${decision.reason}`);
+          console.log(
+            `[ReviewerRunner] discussion ${discussion.id} 的回复判断: ${decision.reason}`
+          );
           threadState.lastRepliedAt = Math.max(threadState.lastRepliedAt, noteTs);
           if (project) saveState(project, state, 'reviewer');
           continue;
@@ -726,7 +766,7 @@ export class ReviewerRunner extends BaseRoleRunner {
             threadState.delivery = delivery;
           },
           checkpoint: () => {
-          if (project) saveState(project, state, 'reviewer');
+            if (project) saveState(project, state, 'reviewer');
           },
         });
         if (replyResult.pending) {
@@ -805,7 +845,7 @@ export class ReviewerRunner extends BaseRoleRunner {
     if (findings.length === 0) return findings;
 
     const checks = await Promise.all(
-      findings.map(async (f) => {
+      findings.map(async f => {
         const key = buildFindingCaseKey({
           projectId,
           mrIid,
@@ -815,7 +855,7 @@ export class ReviewerRunner extends BaseRoleRunner {
         });
         try {
           const items = await memoryClient.recallFindingCase(key);
-          const exists = items.some((item) => item.includes(`[CASE:${key}]`));
+          const exists = items.some(item => item.includes(`[CASE:${key}]`));
           return { finding: f, exists };
         } catch {
           return { finding: f, exists: false };
@@ -823,7 +863,7 @@ export class ReviewerRunner extends BaseRoleRunner {
       })
     );
 
-    return checks.filter((c) => !c.exists).map((c) => c.finding);
+    return checks.filter(c => !c.exists).map(c => c.finding);
   }
 
   private async retryPendingReviewMemory(
@@ -886,7 +926,7 @@ function computeFindingsHash(findings: ReviewFinding[]): string {
       if (a.file !== b.file) return a.file.localeCompare(b.file);
       return a.line - b.line;
     })
-    .map((f) => ({
+    .map(f => ({
       severity: f.severity,
       file: f.file,
       line: f.line,

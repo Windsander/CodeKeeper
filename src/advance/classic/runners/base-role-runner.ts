@@ -2,7 +2,11 @@ import { schedule, validate as validateCron } from 'node-cron';
 import { existsSync } from 'node:fs';
 import { LlmClient } from '../../llm/client.js';
 import type { Project, GitlabConfig, RoleConfig, Role } from '../../types.js';
-import { getArchiveRoot } from '../../types.js';
+import {
+  getArchiveRoot,
+  getRoleConfigSchedule,
+  isRoleConfigEnabled,
+} from '../../types.js';
 import { loadSoulContent, type SoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
 import {
@@ -56,12 +60,12 @@ export abstract class BaseRoleRunner implements IRoleRunner {
     const fullProject = project as unknown as Project;
     const config = this.getRoleConfig(fullProject);
 
-    if (!config?.enabled) {
+    if (!isRoleConfigEnabled(config)) {
       console.log(`[${this.getRoleName()}] 项目 ${fullProject.name} 未启用，跳过`);
       return;
     }
 
-    const scheduleExpr = config.reviewSchedule?.trim() || this.getDefaultSchedule();
+    const scheduleExpr = getRoleConfigSchedule(config)?.trim() || this.getDefaultSchedule();
     if (!validateCron(scheduleExpr)) {
       const message = `[${this.getRoleName()}] 项目 ${fullProject.name} 的 reviewSchedule "${scheduleExpr}" 不是合法的 cron 表达式`;
       console.error(message);
@@ -121,7 +125,7 @@ export abstract class BaseRoleRunner implements IRoleRunner {
       }
 
       const config = this.getRoleConfig(project);
-      if (!config?.enabled) {
+      if (!config || !isRoleConfigEnabled(config)) {
         console.log(`[${this.getRoleName()}] 项目 ${project.name} 未启用，跳过`);
         return;
       }
@@ -166,7 +170,7 @@ export abstract class BaseRoleRunner implements IRoleRunner {
     }
 
     const config = this.getRoleConfig(project);
-    if (!config?.enabled) {
+    if (!isRoleConfigEnabled(config)) {
       console.log(`[${this.getRoleName()}] 项目 ${project.name} 未启用，跳过`);
       return false;
     }

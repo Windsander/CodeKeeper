@@ -21,9 +21,9 @@ describe('memory.graph handler', () => {
     const ctx = {
       everosUrl: null,
       registry: {
-        list: vi.fn().mockReturnValue([
-          { id: 'p1', name: 'Project One', rootPath: '/tmp/p1' },
-        ]),
+        list: vi
+          .fn()
+          .mockReturnValue([{ id: 'p1', name: 'Project One', rootPath: 'virtual-project/p1' }]),
       },
     } as any;
 
@@ -33,4 +33,3 @@ describe('memory.graph handler', () => {
     expect(result.nodes.some((n: any) => n.id === 'project:p1')).toBe(true);
   });
 });
-

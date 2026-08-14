@@ -22,6 +22,14 @@ export class LlmDecisionError extends Error {
   }
 }
 
+/** 模型完成多轮结构化输出兜底后仍未返回 JSON。 */
+export class LlmStructuredOutputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LlmStructuredOutputError';
+  }
+}
+
 /** 单轮 complete 响应允许的最大字符数，防止异常大响应撑爆堆内存 */
 const MAX_COMPLETE_RESPONSE_CHARS = 200_000;
 
@@ -567,7 +575,7 @@ export class LlmClient {
       if (converted) return converted;
     }
 
-    throw new Error('LLM 未返回 JSON 工具调用');
+    throw new LlmStructuredOutputError('LLM 未返回 JSON 工具调用');
   }
 
   private async completeOpenAIJson(prompt: string, system?: string): Promise<string | null> {

@@ -3,18 +3,19 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SimpleGit } from 'simple-git';
-import { WorktreeManager, WorktreeError } from '../../../../src/advance/classic/worktree/worktree-manager.js';
+import {
+  WorktreeManager,
+  WorktreeError,
+} from '../../../../src/advance/classic/worktree/worktree-manager.js';
 
 describe('WorktreeManager.validate', () => {
   it('返回 lint/typecheck 失败原因', async () => {
     const manager = new WorktreeManager({
       projectId: 'p1',
-      rootPath: '/tmp/p1',
+      rootPath: 'virtual-project/p1',
       remoteUrl: 'https://example.com/p1.git',
-      runScript: async (script) =>
-        script === 'lint'
-          ? { success: false, reason: 'eslint error' }
-          : { success: true },
+      runScript: async script =>
+        script === 'lint' ? { success: false, reason: 'eslint error' } : { success: true },
     });
 
     const result = await manager.validate();
@@ -27,7 +28,7 @@ describe('WorktreeManager.validate', () => {
     const runScript = vi.fn().mockResolvedValue({ success: true });
     const manager = new WorktreeManager({
       projectId: 'p1',
-      rootPath: '/tmp/p1',
+      rootPath: 'virtual-project/p1',
       remoteUrl: 'https://example.com/p1.git',
       runScript,
     });
@@ -54,7 +55,7 @@ describe('WorktreeManager workspace search', () => {
       .mockResolvedValue('src/app.ts:12:facade.dispose();\nsrc/facade.ts:30:dispose() {}\n');
     const manager = new WorktreeManager({
       projectId: 'p1',
-      rootPath: '/tmp/project',
+      rootPath: 'virtual-project',
       remoteUrl: 'https://example.com/project.git',
       git: { raw } as unknown as SimpleGit,
     });
@@ -116,9 +117,9 @@ describe('WorktreeManager 流式读取', () => {
   it('getFileOverview 返回概览', async () => {
     const overview = await manager.getFileOverview('src/index.ts');
     expect(overview.lineCount).toBe(5);
-    expect(overview.symbols.map((s) => s.name)).toContain('a');
-    expect(overview.symbols.map((s) => s.name)).toContain('b');
-    expect(overview.symbols.map((s) => s.name)).toContain('c');
+    expect(overview.symbols.map(s => s.name)).toContain('a');
+    expect(overview.symbols.map(s => s.name)).toContain('b');
+    expect(overview.symbols.map(s => s.name)).toContain('c');
   });
 
   it('searchInFile 返回匹配范围', async () => {

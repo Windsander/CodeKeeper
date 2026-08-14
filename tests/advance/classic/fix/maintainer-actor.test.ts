@@ -74,7 +74,7 @@ function createMockProvider() {
 
 function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): WorktreeManager {
   return {
-    getWorktreePath: vi.fn().mockReturnValue('/tmp/maintainer-test-worktree'),
+    getWorktreePath: vi.fn().mockReturnValue('virtual-worktree/maintainer'),
     ensureWorktree: vi.fn().mockResolvedValue(undefined),
     checkoutBranch: vi.fn().mockResolvedValue(undefined),
     prepareEnvironment: vi.fn().mockResolvedValue(undefined),

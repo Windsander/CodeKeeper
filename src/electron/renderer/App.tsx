@@ -21,12 +21,14 @@ import { Logs } from './pages/Logs.js';
 import { Settings } from './pages/Settings.js';
 import { MrReview } from './pages/MrReview.js';
 import { Maintainer } from './pages/Maintainer.js';
+import { Archiver } from './pages/Archiver.js';
 import { MemoryStatsPage } from './pages/MemoryStatsPage.js';
 import { MemoryGraphPage } from './pages/MemoryGraphPage.js';
 import { getAllRoleUIs } from './roles/role-registry.js';
 // 触发角色 UI 注册（side-effect）
 import './roles/reviewer-role.js';
 import './roles/maintainer-role.js';
+import './roles/archiver-role.js';
 
 interface NavItem {
   to: string;
@@ -83,12 +85,17 @@ function SidebarToggle() {
       aria-label={sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}
     >
       <span className="sidebar-toggle-icon">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          {sidebarCollapsed ? (
-            <path d="M9 18l6-6-6-6" />
-          ) : (
-            <path d="M15 18l-6-6 6-6" />
-          )}
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          {sidebarCollapsed ? <path d="M9 18l6-6-6-6" /> : <path d="M15 18l-6-6 6-6" />}
         </svg>
       </span>
       <span className="sidebar-toggle-text">{sidebarCollapsed ? '展开' : '收起'}</span>
@@ -114,6 +121,7 @@ function AppContent() {
     !loading &&
     daemon?.daemonRunning === true &&
     daemon?.everos?.state === 'running' &&
+    daemon?.codeGraph?.state === 'running' &&
     localModel?.embedding?.state === 'running' &&
     localModel?.rerank?.state === 'running';
 
@@ -138,11 +146,11 @@ function AppContent() {
         <nav className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
           <SidebarBrand />
 
-          {TOP_NAV_ITEMS.map((item) => (
+          {TOP_NAV_ITEMS.map(item => (
             <NavItemWithReady key={item.to} item={item} isReady={isReady} />
           ))}
 
-          {getAllRoleUIs().map((ui) => {
+          {getAllRoleUIs().map(ui => {
             const Icon = ui.icon;
             return (
               <NavItemWithReady
@@ -153,7 +161,7 @@ function AppContent() {
             );
           })}
 
-          {BOTTOM_NAV_ITEMS.map((item) => (
+          {BOTTOM_NAV_ITEMS.map(item => (
             <NavItemWithReady key={item.to} item={item} isReady={isReady} />
           ))}
 
@@ -163,14 +171,71 @@ function AppContent() {
         <main className={`main-content${isMemoryRoute ? ' memory-page-active' : ''}`}>
           <Routes>
             <Route path="/" element={<DefaultRoute isReady={isReady} />} />
-            <Route path="/project/:id" element={<ReadyGuard isReady={isReady}><ProjectDetail /></ReadyGuard>} />
-            <Route path="/history" element={<ReadyGuard isReady={isReady}><ActionHistory /></ReadyGuard>} />
-            <Route path="/logs" element={<ReadyGuard isReady={isReady}><Logs /></ReadyGuard>} />
+            <Route
+              path="/project/:id"
+              element={
+                <ReadyGuard isReady={isReady}>
+                  <ProjectDetail />
+                </ReadyGuard>
+              }
+            />
+            <Route
+              path="/history"
+              element={
+                <ReadyGuard isReady={isReady}>
+                  <ActionHistory />
+                </ReadyGuard>
+              }
+            />
+            <Route
+              path="/logs"
+              element={
+                <ReadyGuard isReady={isReady}>
+                  <Logs />
+                </ReadyGuard>
+              }
+            />
             <Route path="/settings" element={<Settings />} />
-            <Route path="/reviewer" element={<ReadyGuard isReady={isReady}><MrReview /></ReadyGuard>} />
-            <Route path="/maintainer" element={<ReadyGuard isReady={isReady}><Maintainer /></ReadyGuard>} />
-            <Route path="/memory" element={<ReadyGuard isReady={isReady}><MemoryGraphPage /></ReadyGuard>} />
-            <Route path="/memory-stats" element={<ReadyGuard isReady={isReady}><MemoryStatsPage /></ReadyGuard>} />
+            <Route
+              path="/reviewer"
+              element={
+                <ReadyGuard isReady={isReady}>
+                  <MrReview />
+                </ReadyGuard>
+              }
+            />
+            <Route
+              path="/maintainer"
+              element={
+                <ReadyGuard isReady={isReady}>
+                  <Maintainer />
+                </ReadyGuard>
+              }
+            />
+            <Route
+              path="/archiver"
+              element={
+                <ReadyGuard isReady={isReady}>
+                  <Archiver />
+                </ReadyGuard>
+              }
+            />
+            <Route
+              path="/memory"
+              element={
+                <ReadyGuard isReady={isReady}>
+                  <MemoryGraphPage />
+                </ReadyGuard>
+              }
+            />
+            <Route
+              path="/memory-stats"
+              element={
+                <ReadyGuard isReady={isReady}>
+                  <MemoryStatsPage />
+                </ReadyGuard>
+              }
+            />
           </Routes>
         </main>
       </div>
@@ -189,7 +254,9 @@ function NavItemWithReady({ item, isReady }: { item: NavItem; isReady: boolean }
         title="本地服务启动中，就绪后可用"
         aria-disabled="true"
       >
-        <span className="sidebar-icon"><item.icon /></span>
+        <span className="sidebar-icon">
+          <item.icon />
+        </span>
         <span className="sidebar-label">{item.label}</span>
       </span>
     );
@@ -201,7 +268,9 @@ function NavItemWithReady({ item, isReady }: { item: NavItem; isReady: boolean }
       className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}
       title={item.label}
     >
-      <span className="sidebar-icon"><item.icon /></span>
+      <span className="sidebar-icon">
+        <item.icon />
+      </span>
       <span className="sidebar-label">{item.label}</span>
     </NavLink>
   );

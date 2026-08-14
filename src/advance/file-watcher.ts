@@ -1,8 +1,7 @@
 import { watch, type FSWatcher } from 'chokidar';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { minimatch } from 'minimatch';
-import type { ProjectConfig } from './config/project-config';
+import { matchesProjectPathPatterns, type ProjectConfig } from './config/project-config';
 import type { WatchedEvent, WatchEventType } from './types';
 import { logger } from '../core/logger';
 import { logMemorySnapshot } from './classic/utils/memory-snapshot.js';
@@ -43,7 +42,7 @@ export class FileWatcher {
       const rel = normalized.startsWith(normalizedProjectRoot)
         ? normalized.slice(normalizedProjectRoot.length).replace(/^\//, '')
         : normalized;
-      return config.exclude.some((pattern) => minimatch(rel, pattern, { dot: true }));
+      return matchesProjectPathPatterns(rel, config.exclude);
     };
 
     const usePolling = isWsl();

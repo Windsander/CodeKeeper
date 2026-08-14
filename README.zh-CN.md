@@ -165,9 +165,10 @@ include:
   - '**/*.md'
   - '**/*.yaml'
 exclude:
-  - 'node_modules/**'
-  - '.git/**'
-  - 'dist/**'
+  - '**/node_modules/**'
+  - '**/.git/**'
+  - '**/dist/**'
+  - '**/release/*-unpacked/**'
 categories:
   - architecture
   - operations

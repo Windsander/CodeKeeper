@@ -1,21 +1,60 @@
+import { existsSync, statSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { join, relative } from 'node:path';
+import { isAbsolute, join, relative, sep, type PlatformPath } from 'node:path';
 import { BaseRoleRunner } from './base-role-runner.js';
 import { ArchiverBrain, selectArchiverInputFiles } from '../archive/archiver-brain.js';
 import { ArchiverActor } from '../archive/archiver-actor.js';
 import { MemoryClient } from '../memory/memory-client.js';
 import type { Project, RoleConfig } from '../../types.js';
 import type { LlmClient } from '../../llm/client.js';
-import { getArchiveRoot } from '../../types.js';
+import { getArchiveRoot, isRoleConfigEnabled } from '../../types.js';
+import {
+  normalizeArchiverConfig,
+} from '../../archiver/provider-config.js';
+import {
+  type ArchiverProviderCoordinator,
+  type ArchiverProviderExecution,
+} from '../../archiver/provider-orchestrator.js';
+import { createArchiverProviderCoordinator } from '../../archiver/codegraph-client.js';
 import { loadState, saveState, type MrAgentState } from './shared/state-utils.js';
-import type { ProjectKnowledgeItem } from '../memory/types.js';
+import { buildEverOSAgentId, type ProjectKnowledgeItem } from '../memory/types.js';
+
+const ARCHIVER_SCAN_EXCLUDED_DIRECTORIES = new Set([
+  'node_modules',
+  '.git',
+  '.codekeeper',
+  'dist',
+  '.repowise',
+  '.codebase-memory',
+  'graphify-out',
+]);
+const ARCHIVER_SCAN_EXCLUDED_FILES = new Set(['.graphify_detect.json']);
 
 export interface ArchiverRunnerOptions {
   /** LLM 客户端实例 */
   llmClient: LlmClient;
   /** MCP Server URL */
   mcpUrl: string;
+  /** Provider 编排器，默认使用系统注册表 */
+  providerOrchestrator?: ArchiverProviderCoordinator;
+  /** Daemon 托管的 CodeGraph Server URL */
+  codeGraphUrl?: string;
+}
+
+export function buildArchiverMemoryContext(
+  projectId: string,
+  archiverName: string,
+  sessionId: string
+) {
+  return {
+    appId: 'codekeeper-advance',
+    projectId,
+    agentId: buildEverOSAgentId('archiver', archiverName),
+    agentDisplayName: archiverName,
+    userId: 'codekeeper-system',
+    sessionId,
+  };
 }
 
 /**
@@ -39,15 +78,20 @@ export function buildArchiverSourceFingerprint(
   sourceFiles: string[],
   fileContents: Record<string, string | undefined>
 ): string {
-  const canonical = [...new Set(sourceFiles)]
-    .sort()
-    .map(file => ({
-      file,
-      contentHash: createHash('sha256')
-        .update(fileContents[file] ?? '<unreadable>')
-        .digest('hex'),
-    }));
+  const canonical = [...new Set(sourceFiles)].sort().map(file => ({
+    file,
+    contentHash: createHash('sha256')
+      .update(fileContents[file] ?? '<unreadable>')
+      .digest('hex'),
+  }));
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+/** 判断目录项是否属于依赖、归档或 Provider 生成物。 */
+export function isArchiverScanEntryExcluded(entryName: string, isDirectory: boolean): boolean {
+  return (isDirectory ? ARCHIVER_SCAN_EXCLUDED_DIRECTORIES : ARCHIVER_SCAN_EXCLUDED_FILES).has(
+    entryName
+  );
 }
 
 /**
@@ -56,10 +100,13 @@ export function buildArchiverSourceFingerprint(
  */
 export class ArchiverRunner extends BaseRoleRunner {
   private readonly mcpUrl: string;
+  private readonly providerOrchestrator: ArchiverProviderCoordinator;
 
   constructor(options: ArchiverRunnerOptions) {
     super({ llmClient: options.llmClient });
     this.mcpUrl = options.mcpUrl;
+    this.providerOrchestrator =
+      options.providerOrchestrator ?? createArchiverProviderCoordinator(options.codeGraphUrl);
   }
 
   protected getRole(): 'archiver' {
@@ -75,48 +122,96 @@ export class ArchiverRunner extends BaseRoleRunner {
    */
   protected validatePrerequisites(project: Project): boolean {
     const config = this.getRoleConfig(project);
-    if (!config?.enabled) {
+    if (!isRoleConfigEnabled(config)) {
       console.log(`[ArchiverRunner] 项目 ${project.name} 未启用，跳过`);
       return false;
     }
 
-    // 父类要求 gitlab，但 archiver 仅依赖本地目录
+    try {
+      if (!existsSync(project.rootPath) || !statSync(project.rootPath).isDirectory()) {
+        console.warn(`[ArchiverRunner] 项目 ${project.name} 的本地目录不存在，跳过`);
+        return false;
+      }
+    } catch {
+      console.warn(`[ArchiverRunner] 项目 ${project.name} 的本地目录不可访问，跳过`);
+      return false;
+    }
+
     return true;
   }
 
-  protected async runProject(project: Project, _config: RoleConfig): Promise<void> {
+  protected async runProject(project: Project, config: RoleConfig): Promise<void> {
     console.log(`[ArchiverRunner] 扫描项目 ${project.name}`);
 
     const archiveRoot = getArchiveRoot(project);
+    const archiverConfig = normalizeArchiverConfig(config);
+    const providerExecution = await this.syncProviders(project, archiveRoot);
+    if (!providerExecution.shouldRunBuiltin) {
+      if (!providerExecution.report.selectedPrimary) {
+        const details = providerExecution.report.statuses
+          .filter(status => status.placement !== 'enricher')
+          .map(status => `${status.providerId}: ${status.message ?? status.state}`)
+          .join('；');
+        throw new Error(
+          `Archiver 未找到可用的主 Provider，且内置安全回退已关闭${details ? `：${details}` : ''}`
+        );
+      }
+      console.log(
+        `[ArchiverRunner] Provider ${providerExecution.report.selectedPrimary} 已完成，本轮无需内置提炼`
+      );
+      return;
+    }
+
+    let builtinFinalized = false;
+    const finalizeBuiltin = async (success: boolean, message: string) => {
+      if (builtinFinalized) return;
+      builtinFinalized = true;
+      await this.providerOrchestrator
+        .finalizeBuiltin(project, archiveRoot, providerExecution.report, success, message)
+        .catch(error => {
+          const detail = error instanceof Error ? error.message : String(error);
+          console.warn(`[ArchiverRunner] Provider 状态写入失败: ${detail}`);
+        });
+    };
+    const failBuiltin = async (message: string, error?: unknown) => {
+      await finalizeBuiltin(false, message);
+      if (providerExecution.builtinRequired) {
+        throw error instanceof Error ? error : new Error(message);
+      }
+      console.warn(`[ArchiverRunner] 内置增强阶段失败，不影响已完成的主 Provider: ${message}`);
+    };
+
     const files = await this.listProjectFiles(project.rootPath, archiveRoot);
     if (files.length === 0) {
       console.log(`[ArchiverRunner] 项目 ${project.name} 无文件，跳过`);
+      await finalizeBuiltin(true, '项目无可分析文件，内置阶段已跳过');
       return;
     }
 
     const state = loadState(project);
+    const archiverName = archiverConfig.archiverName.trim() || 'CodeKeeper Archiver';
     const memoryClient = new MemoryClient({
       mcpUrl: this.mcpUrl,
-      context: {
-        appId: 'codekeeper-advance',
-        projectId: project.id,
-        agentId: 'archiver',
-        userId: 'codekeeper-system',
-        sessionId: buildArchiverSessionId(project.id, new Date()),
-      },
+      context: buildArchiverMemoryContext(
+        project.id,
+        archiverName,
+        buildArchiverSessionId(project.id, new Date())
+      ),
     });
     try {
       await memoryClient.connect();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[ArchiverRunner] MemoryClient 连接失败，本轮不标记完成: ${message}`);
-      throw error;
+      await failBuiltin(`内置知识提炼失败：${message}`, error);
+      return;
     }
 
     const brain = new ArchiverBrain({ llmClient: this.llmClient });
     const actor = new ArchiverActor({ memoryClient });
     const sourceFiles = selectArchiverInputFiles(files);
-    const sourceFingerprint = await this.buildSourceFingerprint(project.rootPath, sourceFiles);
+    const fileContents = await this.readSourceFiles(project.rootPath, sourceFiles);
+    const sourceFingerprint = buildArchiverSourceFingerprint(sourceFiles, fileContents);
     state.archiverState ??= {
       sourceFingerprint: '',
       items: {},
@@ -127,15 +222,17 @@ export class ArchiverRunner extends BaseRoleRunner {
       const pendingRecovered = await this.retryPendingKnowledge(actor, state, project);
       if (!pendingRecovered) {
         console.warn('[ArchiverRunner] 仍有项目知识等待补偿，本轮不重复调用 LLM');
+        await failBuiltin('仍有项目知识等待补偿写入');
         return;
       }
 
       if (state.archiverState.sourceFingerprint === sourceFingerprint) {
         console.log('[ArchiverRunner] 项目知识输入未变化，跳过 LLM 分析');
+        await finalizeBuiltin(true, '项目知识输入未变化，无需重复提炼');
         return;
       }
 
-      const items = await brain.analyzeProject(project, sourceFiles);
+      const items = await brain.analyzeProject(project, sourceFiles, fileContents);
       const stableItems = items.map(item => this.stabilizeKnowledgeItem(project.id, item));
       console.log(`[ArchiverRunner] 提炼出 ${stableItems.length} 条项目知识`);
 
@@ -190,12 +287,53 @@ export class ArchiverRunner extends BaseRoleRunner {
       state.archiverState.sourceFingerprint = sourceFingerprint;
       state.archiverState.updatedAt = Date.now();
       saveState(project, state, 'archiver');
+      await finalizeBuiltin(true, `内置知识提炼完成，共处理 ${stableItems.length} 条知识`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await failBuiltin(`内置知识提炼失败：${message}`, error);
     } finally {
       await memoryClient.disconnect().catch(() => undefined);
     }
   }
 
-  private async listProjectFiles(rootPath: string, archiveRoot: string, subPath = ''): Promise<string[]> {
+  private async syncProviders(
+    project: Project,
+    archiveRoot: string
+  ): Promise<ArchiverProviderExecution> {
+    try {
+      return await this.providerOrchestrator.syncProject(project, archiveRoot);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[ArchiverRunner] Provider 编排失败，回退到内置知识提炼: ${message}`);
+      const now = Date.now();
+      return {
+        shouldRunBuiltin: true,
+        builtinRequired: true,
+        report: {
+          schemaVersion: 1,
+          projectId: project.id,
+          generatedAt: now,
+          selectedPrimary: 'builtin',
+          statuses: [
+            {
+              providerId: 'builtin',
+              placement: 'fallback',
+              state: 'deferred',
+              startedAt: now,
+              finishedAt: now,
+              message: `Provider 编排失败，等待内置阶段：${message}`,
+            },
+          ],
+        },
+      };
+    }
+  }
+
+  private async listProjectFiles(
+    rootPath: string,
+    archiveRoot: string,
+    subPath = ''
+  ): Promise<string[]> {
     const dir = join(rootPath, subPath);
     const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
     const files: string[] = [];
@@ -203,25 +341,29 @@ export class ArchiverRunner extends BaseRoleRunner {
       const relativePath = subPath ? `${subPath}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
         const absolutePath = join(rootPath, relativePath);
-        if (['node_modules', '.git', '.codekeeper', 'dist'].includes(entry.name)) continue;
+        if (isArchiverScanEntryExcluded(entry.name, true)) continue;
         // 跳过归档目录及其子目录，避免归档输出被反复扫描
-        if (!relative(archiveRoot, absolutePath).startsWith('..')) continue;
+        if (isPathInside(archiveRoot, absolutePath)) continue;
         files.push(...(await this.listProjectFiles(rootPath, archiveRoot, relativePath)));
       } else if (entry.isFile()) {
+        if (isArchiverScanEntryExcluded(entry.name, false)) continue;
         files.push(relativePath);
       }
     }
     return files;
   }
 
-  private async buildSourceFingerprint(rootPath: string, sourceFiles: string[]): Promise<string> {
+  private async readSourceFiles(
+    rootPath: string,
+    sourceFiles: string[]
+  ): Promise<Record<string, string | undefined>> {
     const fileContents: Record<string, string | undefined> = {};
     await Promise.all(
       sourceFiles.map(async file => {
         fileContents[file] = await readFile(join(rootPath, file), 'utf8').catch(() => undefined);
       })
     );
-    return buildArchiverSourceFingerprint(sourceFiles, fileContents);
+    return fileContents;
   }
 
   private async retryPendingKnowledge(
@@ -268,7 +410,10 @@ export class ArchiverRunner extends BaseRoleRunner {
     }
   }
 
-  private stabilizeKnowledgeItem(projectId: string, item: ProjectKnowledgeItem): ProjectKnowledgeItem {
+  private stabilizeKnowledgeItem(
+    projectId: string,
+    item: ProjectKnowledgeItem
+  ): ProjectKnowledgeItem {
     const canonical = JSON.stringify({
       sourceId: item.id,
       category: item.category,
@@ -292,4 +437,25 @@ export class ArchiverRunner extends BaseRoleRunner {
   private hash(value: string): string {
     return createHash('sha256').update(value).digest('hex');
   }
+}
+
+const CURRENT_PLATFORM_PATH: Pick<PlatformPath, 'relative' | 'isAbsolute' | 'sep'> = {
+  relative,
+  isAbsolute,
+  sep,
+};
+
+/** 判断候选路径是否位于父目录内，兼容 Windows 跨盘符路径。 */
+export function isPathInside(
+  parentPath: string,
+  candidatePath: string,
+  pathApi: Pick<PlatformPath, 'relative' | 'isAbsolute' | 'sep'> = CURRENT_PLATFORM_PATH
+): boolean {
+  const relativePath = pathApi.relative(parentPath, candidatePath);
+  return (
+    relativePath === '' ||
+    (!pathApi.isAbsolute(relativePath) &&
+      relativePath !== '..' &&
+      !relativePath.startsWith(`..${pathApi.sep}`))
+  );
 }

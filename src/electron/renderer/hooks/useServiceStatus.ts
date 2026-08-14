@@ -13,7 +13,7 @@ export interface ServiceStatusResult {
 }
 
 /**
- * 每 3 秒轮询 daemon.status、localModel.status 与 remoteModel.status，供右侧服务状态面板使用。
+ * 每 3 秒轮询 Daemon（含 EverOS/CodeGraph）、本地模型与远端模型状态。
  * 页面不可见时自动停止轮询，切回前台立即刷新。
  */
 export function useServiceStatus(): ServiceStatusResult {

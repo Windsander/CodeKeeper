@@ -22,10 +22,17 @@ import { MemoryWriteRetryService } from './classic/memory/memory-write-retry-ser
 import { LocalModelServiceManager } from './classic/memory/local-model-service.js';
 import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, getEmbeddingModelDimension, fetchEmbeddingModelDimension } from './classic/memory/local-model-catalog.js';
 import { RemoteModelChecker, cleanBaseUrl } from './classic/memory/remote-model-checker.js';
-import type { EverosStatus } from '../electron/shared/service-status.js';
+import type {
+  CodeGraphServiceStatus,
+  EverosStatus,
+} from '../electron/shared/service-status.js';
 import type { RemoteModelStatus } from '../electron/shared/service-status.js';
 import path from 'node:path';
 import { join } from 'node:path';
+import {
+  CodeGraphService,
+  type CodeGraphServiceController,
+} from './archiver/codegraph-service.js';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -54,6 +61,8 @@ export interface DaemonOptions {
   rerankModel?: string;
   /** EverOS 独立配置；未设置时继承 Agent 通用配置 */
   everos?: import('./config/daemon-config.js').EverOSConfig;
+  /** 测试或嵌入场景可替换 CodeGraph 服务实现 */
+  codeGraphService?: CodeGraphServiceController;
 }
 
 export class Daemon {
@@ -74,6 +83,7 @@ export class Daemon {
   private everosHttpUrl: string | null = null;
   private everosError: string | null = null;
   private localModelManager: LocalModelServiceManager;
+  private codeGraphService: CodeGraphServiceController;
   private memoryWriteQueue: MemoryWriteQueue;
   private memoryWriteRetryService: MemoryWriteRetryService;
   private embeddingDim: number | null = null;
@@ -114,6 +124,8 @@ export class Daemon {
       embeddingModel: this.options.embeddingModel,
       rerankModel: this.options.rerankModel,
     });
+    this.codeGraphService =
+      this.options.codeGraphService ?? new CodeGraphService({ registry: this.options.registry });
 
     this.memoryWriteQueue = new MemoryWriteQueue({ store: options.store });
     this.memoryWriteRetryService = new MemoryWriteRetryService({
@@ -128,6 +140,7 @@ export class Daemon {
       dbPath: options.dbPath,
       scanService: this.scanService,
       localModelManager: this.localModelManager,
+      codeGraphService: this.codeGraphService,
       remoteModelChecker: this.remoteModelChecker,
       getRemoteModelStatus: () => this.remoteModelStatus,
       getProvider: (project) => {
@@ -162,6 +175,7 @@ export class Daemon {
       }),
       isDaemonRunning: () => this.running,
       getEverosStatus: () => this.getEverosStatus(),
+      getCodeGraphStatus: () => this.getCodeGraphStatus(),
       watchProject: (project) => this.watchProject(project),
       unwatchProject: (projectId) => this.unwatchProject(projectId),
     };
@@ -179,6 +193,13 @@ export class Daemon {
       handler: (method, params) => this.handleIpc(method, params),
     });
     await this.ipcServer.start();
+
+    try {
+      const codeGraphUrl = await this.codeGraphService.start();
+      this.serviceRegistry.setCodeGraphUrl(codeGraphUrl);
+    } catch (err) {
+      logger.warn({ err }, 'CodeGraph Server 未启动，项目知识 Provider 暂不可用');
+    }
 
     // 启动本地 Embedding/Rerank 模型服务（后台进行，不阻塞 IPC），就绪后自动启动 EverOS
     this.localModelManager
@@ -249,6 +270,7 @@ export class Daemon {
     for (const role of ROLES) {
       await this.serviceRegistry.stop(role);
     }
+    await this.codeGraphService.stop();
     this.scanService.stop();
     this.scanJob?.stop();
     this.scanJob = null;
@@ -286,6 +308,10 @@ export class Daemon {
       url: this.everosHttpUrl,
       error: this.everosError,
     };
+  }
+
+  getCodeGraphStatus(): CodeGraphServiceStatus {
+    return this.codeGraphService.getStatus();
   }
 
   private async checkRemoteModels(): Promise<void> {

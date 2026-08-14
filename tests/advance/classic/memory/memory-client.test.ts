@@ -21,10 +21,10 @@ describe('MemoryClient', () => {
       mcpUrl: 'http://127.0.0.1:9999',
       context: {
         ...mockContext,
-        projectId: 'D:/project/path',
+        projectId: 'virtual-project/path',
       },
     });
-    expect(client.context.projectId).toBe('D__project_path');
+    expect(client.context.projectId).toBe('virtual-project_path');
   });
 });
 
@@ -82,7 +82,13 @@ describe('MemoryClient 记录方法', () => {
   });
 
   it('recordFixAttempt 调用 record_fix_attempt tool', async () => {
-    await client.recordFixAttempt({ mrIid: 42, file: 'src/index.ts', line: 10, success: true, reason: '已修复' });
+    await client.recordFixAttempt({
+      mrIid: 42,
+      file: 'src/index.ts',
+      line: 10,
+      success: true,
+      reason: '已修复',
+    });
     expect(callToolSpy).toHaveBeenCalledWith({
       name: 'record_fix_attempt',
       arguments: {
@@ -97,7 +103,12 @@ describe('MemoryClient 记录方法', () => {
   });
 
   it('recordInteraction 调用 record_interaction tool', async () => {
-    await client.recordInteraction({ discussionId: 'd-1', userId: 'bob', decision: 'fix', outcome: 'success' });
+    await client.recordInteraction({
+      discussionId: 'd-1',
+      userId: 'bob',
+      decision: 'fix',
+      outcome: 'success',
+    });
     expect(callToolSpy).toHaveBeenCalledWith({
       name: 'record_interaction',
       arguments: {
@@ -111,7 +122,11 @@ describe('MemoryClient 记录方法', () => {
   });
 
   it('recordReflection 调用 record_reflection tool', async () => {
-    await client.recordReflection({ caseKey: 'case:p1:mr-1:src_a_ts:10:rule-any', reflection: '下次优先删除未使用变量', outcome: 'success' });
+    await client.recordReflection({
+      caseKey: 'case:p1:mr-1:src_a_ts:10:rule-any',
+      reflection: '下次优先删除未使用变量',
+      outcome: 'success',
+    });
     expect(callToolSpy).toHaveBeenCalledWith({
       name: 'record_reflection',
       arguments: {
@@ -162,12 +177,19 @@ describe('MemoryClient 记录方法', () => {
   it('tool 调用失败时抛出异常', async () => {
     vi.spyOn(Client.prototype, 'callTool').mockRejectedValue(new Error('MCP 断开'));
     const testClient = new MemoryClient({ mcpUrl: 'http://127.0.0.1:9999', context: mockContext });
-    await expect(testClient.recordReview({ mrIid: 1, title: 'MR', findingsCount: 0, summary: 'ok' })).rejects.toThrow('MCP 断开');
+    await expect(
+      testClient.recordReview({ mrIid: 1, title: 'MR', findingsCount: 0, summary: 'ok' })
+    ).rejects.toThrow('MCP 断开');
   });
 
   it('tool 返回 isError 时抛出异常', async () => {
-    vi.spyOn(Client.prototype, 'callTool').mockResolvedValue({ content: [{ type: 'text', text: 'invalid' }], isError: true });
+    vi.spyOn(Client.prototype, 'callTool').mockResolvedValue({
+      content: [{ type: 'text', text: 'invalid' }],
+      isError: true,
+    });
     const testClient = new MemoryClient({ mcpUrl: 'http://127.0.0.1:9999', context: mockContext });
-    await expect(testClient.recordReview({ mrIid: 1, title: 'MR', findingsCount: 0, summary: 'ok' })).rejects.toThrow('invalid');
+    await expect(
+      testClient.recordReview({ mrIid: 1, title: 'MR', findingsCount: 0, summary: 'ok' })
+    ).rejects.toThrow('invalid');
   });
 });

@@ -8,7 +8,7 @@ import type { ModelServiceStatus } from '../../../../src/electron/shared/service
 describe('LocalModelServiceManager.getStatus', () => {
   it('聚合 embedding 与 rerank 两个 server 的状态', () => {
     const manager = new LocalModelServiceManager({
-      venvDir: '/tmp/fake-venv',
+      venvDir: 'virtual-model-venv',
       embeddingModel: 'intfloat/multilingual-e5-small',
       rerankModel: 'Xenova/ms-marco-MiniLM-L-6-v2',
     });
@@ -35,7 +35,7 @@ describe('LocalModelServiceManager.getStatus', () => {
   });
 
   it('未启动的 server 返回 idle 状态', () => {
-    const manager = new LocalModelServiceManager({ venvDir: '/tmp/fake-venv' });
+    const manager = new LocalModelServiceManager({ venvDir: 'virtual-model-venv' });
     const status = manager.getStatus();
     expect(status.embedding.state).toBe('idle');
     expect(status.rerank.state).toBe('idle');

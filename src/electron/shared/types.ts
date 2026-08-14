@@ -161,15 +161,76 @@ export interface MaintainerConfig {
   filter?: RoleFilter;
 }
 
+export interface ArchiverConfig {
+  role: 'archiver';
+  schemaVersion: 3;
+  archiverName: string;
+  automation: {
+    enabled: boolean;
+    cron: string;
+  };
+}
+
+export type ArchiverProviderCapability =
+  | 'code-structure'
+  | 'documents'
+  | 'query'
+  | 'impact-analysis'
+  | 'git-history'
+  | 'code-health'
+  | 'interactive-skill';
+
+export type ArchiverProviderPlacement = 'primary' | 'fallback' | 'enricher';
+
+export interface ArchiverProviderDescriptor {
+  id: string;
+  displayName: string;
+  description: string;
+  homepage: string;
+  license: string;
+  kind: 'builtin' | 'cli' | 'skill';
+  automation: 'full' | 'managed' | 'manual';
+  placements: ArchiverProviderPlacement[];
+  capabilities: ArchiverProviderCapability[];
+  preparation?: 'builtin' | 'managed' | 'manual';
+  licenseNotice?: string;
+}
+
+export interface ArchiverProviderProbeResult {
+  providerId: string;
+  available: boolean;
+  readiness?: 'ready' | 'preparable' | 'preparing' | 'manual' | 'unavailable';
+  prepared?: boolean;
+  version?: string;
+  message?: string;
+}
+
+export interface ArchiverProviderRunStatus {
+  providerId: string;
+  placement: ArchiverProviderPlacement;
+  state: 'selected' | 'completed' | 'unavailable' | 'failed' | 'skipped' | 'deferred';
+  startedAt: number;
+  finishedAt: number;
+  version?: string;
+}
+
+export interface ArchiverProviderRunReport {
+  schemaVersion: 1;
+  projectId: string;
+  generatedAt: number;
+  selectedPrimary: string;
+  statuses: ArchiverProviderRunStatus[];
+}
+
 /**
  * 角色配置联合类型
  */
-export type RoleConfig = ReviewerConfig | MaintainerConfig;
+export type RoleConfig = ReviewerConfig | MaintainerConfig | ArchiverConfig;
 
 /**
  * 按角色索引的配置映射
  */
-export type RoleConfigMap = Record<Role, RoleConfig>;
+export type RoleConfigMap = Partial<Record<Role, RoleConfig>>;
 
 /**
  * 项目运行时元数据（渲染端使用的最小子集）
@@ -178,6 +239,7 @@ export interface Project {
   id: string;
   name: string;
   rootPath: string;
+  archiveRoot?: string;
   gitlab?: GitlabConfig | null;
   roles?: RoleConfigMap;
 }

@@ -18,7 +18,7 @@ function createMockWorktreeManager(validateResult?: {
   typecheckReason?: string;
 }): WorktreeManager {
   return mockOf<WorktreeManager>({
-    getWorktreePath: () => '/tmp/fix-tool-loop-test-worktree',
+    getWorktreePath: () => 'virtual-worktree/fix-tool-loop',
     resolveFilePath: async (p: string) => p,
     readFile: () => 'line1\nline2\n',
     readFileRange: async (_p: string, start: number, end: number) => `lines ${start}-${end}\n`,

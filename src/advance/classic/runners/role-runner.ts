@@ -35,6 +35,7 @@ export interface IRoleRunner {
 export interface CreateRoleRunnerOptions {
   llmClient: LlmClient;
   mcpUrl?: string;
+  codeGraphUrl?: string;
 }
 
 /**
@@ -51,7 +52,11 @@ export function createRoleRunner(role: Role, options: CreateRoleRunnerOptions): 
     case 'maintainer':
       return new MaintainerRunner({ llmClient: options.llmClient });
     case 'archiver':
-      return new ArchiverRunner({ llmClient: options.llmClient, mcpUrl: options.mcpUrl ?? process.env.CK_EVEROS_MCP_URL ?? '' });
+      return new ArchiverRunner({
+        llmClient: options.llmClient,
+        mcpUrl: options.mcpUrl ?? process.env.CK_EVEROS_MCP_URL ?? '',
+        codeGraphUrl: options.codeGraphUrl ?? process.env.CK_CODEGRAPH_SERVER_URL,
+      });
     default:
       throw new Error(`未支持的角色: ${role}`);
   }

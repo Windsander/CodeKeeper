@@ -34,24 +34,26 @@ describe('everos-windows-shim', () => {
   });
 
   it('buildWindowsPythonPath 将 shim 目录置于最前', () => {
-    expect(buildWindowsPythonPath('C:\\shim', 'C:\\existing')).toBe('C:\\shim;C:\\existing');
-    expect(buildWindowsPythonPath('C:\\shim', undefined)).toBe('C:\\shim');
-    expect(buildWindowsPythonPath('C:\\shim', '')).toBe('C:\\shim');
+    expect(buildWindowsPythonPath('virtual-shim', 'virtual-existing')).toBe(
+      'virtual-shim;virtual-existing'
+    );
+    expect(buildWindowsPythonPath('virtual-shim', undefined)).toBe('virtual-shim');
+    expect(buildWindowsPythonPath('virtual-shim', '')).toBe('virtual-shim');
   });
 
   it('buildEverOSProcessEnv 只在 Windows 下注入 PYTHONPATH', () => {
     const env = { SOME_VAR: 'value' };
     expect(buildEverOSProcessEnv('linux', env, '/shim')).toBe(env);
 
-    const winEnv = buildEverOSProcessEnv('win32', env, 'C:\\shim');
+    const winEnv = buildEverOSProcessEnv('win32', env, 'virtual-shim');
     expect(winEnv).not.toBe(env);
-    expect(winEnv.PYTHONPATH).toBe('C:\\shim');
+    expect(winEnv.PYTHONPATH).toBe('virtual-shim');
     expect(winEnv.SOME_VAR).toBe('value');
   });
 
   it('buildEverOSProcessEnv 保留已有的 PYTHONPATH', () => {
-    const env = { PYTHONPATH: 'C:\\existing' };
-    const winEnv = buildEverOSProcessEnv('win32', env, 'C:\\shim');
-    expect(winEnv.PYTHONPATH).toBe('C:\\shim;C:\\existing');
+    const env = { PYTHONPATH: 'virtual-existing' };
+    const winEnv = buildEverOSProcessEnv('win32', env, 'virtual-shim');
+    expect(winEnv.PYTHONPATH).toBe('virtual-shim;virtual-existing');
   });
 });

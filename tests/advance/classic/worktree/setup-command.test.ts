@@ -7,7 +7,7 @@ describe('WorktreeManager.runSetupCommand', () => {
     const runner = vi.fn().mockResolvedValue({ success: true } as RunScriptResult);
     const manager = new WorktreeManager({
       projectId: 'p1',
-      rootPath: '/tmp/project',
+      rootPath: 'virtual-project',
       remoteUrl: 'https://example.com/repo.git',
       runSetupCommand: runner,
     });

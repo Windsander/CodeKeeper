@@ -2,7 +2,23 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import type { EverOSAddMessage } from '../classic/memory/everos-api.js';
-import type { Project, WatchedEvent, KnowledgeEntry, ArchiveAction, GitlabConfig, Role, RoleConfig, RoleFilter, ReviewerConfig } from '../types';
+import type {
+  Project,
+  WatchedEvent,
+  KnowledgeEntry,
+  ArchiveAction,
+  GitlabConfig,
+  Role,
+  RoleConfig,
+  RoleFilter,
+  ReviewerConfig,
+  MaintainerConfig,
+} from '../types';
+import { isRoleConfigEnabled } from '../types.js';
+import {
+  createDefaultArchiverConfig,
+  normalizeArchiverConfig,
+} from '../archiver/provider-config.js';
 
 /**
  * SQLite 元数据存储封装
@@ -21,16 +37,18 @@ export class MetadataStore {
 
   private migrate(): void {
     // 旧版 projects 表字段迁移
-    const projectColumns = this.db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
-    const hasArchiveRoot = projectColumns.some((c) => c.name === 'archive_root');
+    const projectColumns = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{
+      name: string;
+    }>;
+    const hasArchiveRoot = projectColumns.some(c => c.name === 'archive_root');
     if (!hasArchiveRoot) {
       this.db.exec('ALTER TABLE projects ADD COLUMN archive_root TEXT');
     }
-    if (!projectColumns.some((c) => c.name === 'gitlab_config')) {
+    if (!projectColumns.some(c => c.name === 'gitlab_config')) {
       this.db.exec('ALTER TABLE projects ADD COLUMN gitlab_config TEXT');
     }
     // mr_review_config 已废弃，迁移到 roles_config
-    if (!projectColumns.some((c) => c.name === 'roles_config')) {
+    if (!projectColumns.some(c => c.name === 'roles_config')) {
       this.db.exec("ALTER TABLE projects ADD COLUMN roles_config TEXT NOT NULL DEFAULT '{}'");
     }
 
@@ -61,34 +79,42 @@ export class MetadataStore {
     `);
 
     // mr_review_states 新增字段
-    const mrStateColumns = this.db.prepare("PRAGMA table_info(mr_review_states)").all() as Array<{ name: string }>;
-    if (!mrStateColumns.some((c) => c.name === 'posted_discussions_json')) {
+    const mrStateColumns = this.db.prepare('PRAGMA table_info(mr_review_states)').all() as Array<{
+      name: string;
+    }>;
+    if (!mrStateColumns.some(c => c.name === 'posted_discussions_json')) {
       this.db.exec('ALTER TABLE mr_review_states ADD COLUMN posted_discussions_json TEXT');
     }
-    if (!mrStateColumns.some((c) => c.name === 'last_review_at')) {
+    if (!mrStateColumns.some(c => c.name === 'last_review_at')) {
       this.db.exec('ALTER TABLE mr_review_states ADD COLUMN last_review_at INTEGER');
     }
 
     this.rebuildActionTablesIfNeeded();
 
     // archive_actions 新增 source_path / archive_path
-    const actionColumns = this.db.prepare("PRAGMA table_info(archive_actions)").all() as Array<{ name: string }>;
-    if (!actionColumns.some((c) => c.name === 'source_path')) {
+    const actionColumns = this.db.prepare('PRAGMA table_info(archive_actions)').all() as Array<{
+      name: string;
+    }>;
+    if (!actionColumns.some(c => c.name === 'source_path')) {
       this.db.exec('ALTER TABLE archive_actions ADD COLUMN source_path TEXT');
     }
-    if (!actionColumns.some((c) => c.name === 'archive_path')) {
+    if (!actionColumns.some(c => c.name === 'archive_path')) {
       this.db.exec('ALTER TABLE archive_actions ADD COLUMN archive_path TEXT');
     }
 
     // action_history 新增 archive_path
-    const historyColumns = this.db.prepare("PRAGMA table_info(action_history)").all() as Array<{ name: string }>;
-    if (!historyColumns.some((c) => c.name === 'archive_path')) {
+    const historyColumns = this.db.prepare('PRAGMA table_info(action_history)').all() as Array<{
+      name: string;
+    }>;
+    if (!historyColumns.some(c => c.name === 'archive_path')) {
       this.db.exec('ALTER TABLE action_history ADD COLUMN archive_path TEXT');
     }
 
     // archive_metadata 新增 type 列
-    const metadataColumns = this.db.prepare("PRAGMA table_info(archive_metadata)").all() as Array<{ name: string }>;
-    if (!metadataColumns.some((c) => c.name === 'type')) {
+    const metadataColumns = this.db.prepare('PRAGMA table_info(archive_metadata)').all() as Array<{
+      name: string;
+    }>;
+    if (!metadataColumns.some(c => c.name === 'type')) {
       this.db.exec("ALTER TABLE archive_metadata ADD COLUMN type TEXT NOT NULL DEFAULT 'copy'");
     }
 
@@ -155,7 +181,9 @@ export class MetadataStore {
 
   private rebuildActionTablesIfNeeded(): void {
     const tables = this.db
-      .prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name IN ('archive_actions', 'action_history')")
+      .prepare(
+        "SELECT name, sql FROM sqlite_master WHERE type='table' AND name IN ('archive_actions', 'action_history')"
+      )
       .all() as Array<{ name: string; sql: string }>;
 
     for (const { name, sql } of tables) {
@@ -234,13 +262,37 @@ export class MetadataStore {
   }
 
   private normalizeRoles(raw: unknown): Record<Role, RoleConfig> {
+    const defaultReviewer: ReviewerConfig = {
+      role: 'reviewer',
+      enabled: false,
+      reviewSchedule: '*/10 * * * *',
+      learningEnabled: true,
+      reviewerName: 'CodeKeeper Reviewer',
+      threadRiskLevels: ['CRITICAL', 'HIGH'],
+    };
+    const defaultMaintainer: MaintainerConfig = {
+      role: 'maintainer',
+      enabled: false,
+      reviewSchedule: '*/10 * * * *',
+      learningEnabled: true,
+      maintainerName: 'CodeKeeper Maintainer',
+      autoFixEnabled: true,
+      resolveOthersDiscussions: true,
+    };
     const defaults: Record<Role, RoleConfig> = {
-      reviewer: { role: 'reviewer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true, reviewerName: 'CodeKeeper Reviewer', threadRiskLevels: ['CRITICAL', 'HIGH'] },
-      maintainer: { role: 'maintainer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true, maintainerName: 'CodeKeeper Maintainer', autoFixEnabled: true, resolveOthersDiscussions: true },
-      archiver: { role: 'archiver', enabled: false, reviewSchedule: '0 2 * * *', learningEnabled: true, archiverName: 'CodeKeeper Archiver' },
+      reviewer: defaultReviewer,
+      maintainer: defaultMaintainer,
+      archiver: createDefaultArchiverConfig(),
     };
     if (!raw || typeof raw !== 'object') return defaults;
-    return { ...defaults, ...(raw as Record<Role, RoleConfig>) };
+    const roles = raw as Partial<Record<Role, RoleConfig>>;
+    const reviewer = roles.reviewer?.role === 'reviewer' ? roles.reviewer : undefined;
+    const maintainer = roles.maintainer?.role === 'maintainer' ? roles.maintainer : undefined;
+    return {
+      reviewer: reviewer ?? defaultReviewer,
+      maintainer: maintainer ?? defaultMaintainer,
+      archiver: normalizeArchiverConfig(roles.archiver),
+    };
   }
 
   close(): void {
@@ -284,7 +336,9 @@ export class MetadataStore {
   }
 
   listProjects(): Project[] {
-    const rows = this.db.prepare('SELECT * FROM projects ORDER BY registered_at DESC').all() as Array<{
+    const rows = this.db
+      .prepare('SELECT * FROM projects ORDER BY registered_at DESC')
+      .all() as Array<{
       id: string;
       root_path: string;
       archive_root: string | null;
@@ -294,7 +348,7 @@ export class MetadataStore {
       gitlab_config: string | null;
       roles_config: string;
     }>;
-    return rows.map((r) => ({
+    return rows.map(r => ({
       id: r.id,
       rootPath: r.root_path,
       archiveRoot: r.archive_root ?? undefined,
@@ -334,7 +388,9 @@ export class MetadataStore {
   }
 
   updateLastScannedAt(projectId: string, timestamp: number): void {
-    this.db.prepare('UPDATE projects SET last_scanned_at = ? WHERE id = ?').run(timestamp, projectId);
+    this.db
+      .prepare('UPDATE projects SET last_scanned_at = ? WHERE id = ?')
+      .run(timestamp, projectId);
   }
 
   // ---------- 监听事件 ----------
@@ -357,7 +413,7 @@ export class MetadataStore {
       event_type: string;
       timestamp: number;
     }>;
-    return rows.map((r) => ({
+    return rows.map(r => ({
       eventId: r.id,
       projectId: r.project_id,
       filePath: r.file_path,
@@ -373,13 +429,15 @@ export class MetadataStore {
     const rows = this.db
       .prepare('SELECT DISTINCT file_path FROM watch_events WHERE project_id = ? AND processed = 0')
       .all(projectId) as Array<{ file_path: string }>;
-    return rows.map((r) => r.file_path);
+    return rows.map(r => r.file_path);
   }
 
   markEventsProcessed(eventIds: number[]): void {
     if (eventIds.length === 0) return;
     const placeholders = eventIds.map(() => '?').join(',');
-    this.db.prepare(`UPDATE watch_events SET processed = 1 WHERE id IN (${placeholders})`).run(...eventIds);
+    this.db
+      .prepare(`UPDATE watch_events SET processed = 1 WHERE id IN (${placeholders})`)
+      .run(...eventIds);
   }
 
   // ---------- 知识条目 ----------
@@ -393,11 +451,21 @@ export class MetadataStore {
          status = excluded.status,
          updated_at = excluded.updated_at`
     );
-    stmt.run(entry.id, entry.projectId, entry.filePath, entry.contentHash, entry.status, entry.createdAt, entry.updatedAt);
+    stmt.run(
+      entry.id,
+      entry.projectId,
+      entry.filePath,
+      entry.contentHash,
+      entry.status,
+      entry.createdAt,
+      entry.updatedAt
+    );
   }
 
   listEntriesByProject(projectId: string): KnowledgeEntry[] {
-    const rows = this.db.prepare('SELECT * FROM knowledge_entries WHERE project_id = ?').all(projectId) as Array<{
+    const rows = this.db
+      .prepare('SELECT * FROM knowledge_entries WHERE project_id = ?')
+      .all(projectId) as Array<{
       id: string;
       project_id: string;
       file_path: string;
@@ -406,7 +474,7 @@ export class MetadataStore {
       created_at: number;
       updated_at: number;
     }>;
-    return rows.map((r) => ({
+    return rows.map(r => ({
       id: r.id,
       projectId: r.project_id,
       filePath: r.file_path,
@@ -424,7 +492,7 @@ export class MetadataStore {
     const rows = this.db
       .prepare('SELECT DISTINCT file_path FROM knowledge_entries WHERE project_id = ?')
       .all(projectId) as Array<{ file_path: string }>;
-    return rows.map((r) => r.file_path);
+    return rows.map(r => r.file_path);
   }
 
   // ---------- 分类 ----------
@@ -471,7 +539,9 @@ export class MetadataStore {
 
   listPendingActions(projectId: string): Array<ArchiveAction & { projectId: string }> {
     const rows = this.db
-      .prepare('SELECT * FROM archive_actions WHERE project_id = ? AND executed = 0 ORDER BY created_at ASC')
+      .prepare(
+        'SELECT * FROM archive_actions WHERE project_id = ? AND executed = 0 ORDER BY created_at ASC'
+      )
       .all(projectId) as Array<{
       id: string;
       entry_id: string;
@@ -486,7 +556,7 @@ export class MetadataStore {
       confidence: number;
       created_at: number;
     }>;
-    return rows.map((r) => ({
+    return rows.map(r => ({
       id: r.id,
       sourcePath: r.entry_id,
       projectId: r.project_id,
@@ -504,7 +574,11 @@ export class MetadataStore {
     if (actionIds.length === 0) return;
     const placeholders = actionIds.map(() => '?').join(',');
     const now = Date.now();
-    this.db.prepare(`UPDATE archive_actions SET executed = 1, executed_at = ? WHERE id IN (${placeholders})`).run(now, ...actionIds);
+    this.db
+      .prepare(
+        `UPDATE archive_actions SET executed = 1, executed_at = ? WHERE id IN (${placeholders})`
+      )
+      .run(now, ...actionIds);
   }
 
   // ---------- 动作历史（支持撤销） ----------
@@ -525,7 +599,11 @@ export class MetadataStore {
     );
   }
 
-  getActionHistory(actionId: string): (ArchiveAction & { projectId: string; historyId: number; status: 'applied' | 'undone' }) | null {
+  getActionHistory(
+    actionId: string
+  ):
+    | (ArchiveAction & { projectId: string; historyId: number; status: 'applied' | 'undone' })
+    | null {
     const r = this.db
       .prepare('SELECT * FROM action_history WHERE action_id = ? ORDER BY id DESC LIMIT 1')
       .get(actionId) as
@@ -557,21 +635,23 @@ export class MetadataStore {
     };
   }
 
-  listActionHistory(projectId: string): Array<ArchiveAction & { projectId: string; historyId: number; status: 'applied' | 'undone' }> {
+  listActionHistory(
+    projectId: string
+  ): Array<ArchiveAction & { projectId: string; historyId: number; status: 'applied' | 'undone' }> {
     const rows = this.db
       .prepare('SELECT * FROM action_history WHERE project_id = ? ORDER BY applied_at DESC')
       .all(projectId) as Array<{
-        id: number;
-        action_id: string;
-        project_id: string;
-        type: string;
-        source_path: string;
-        archive_path: string | null;
-        target_path: string | null;
-        status: string;
-        applied_at: number;
-      }>;
-    return rows.map((r) => ({
+      id: number;
+      action_id: string;
+      project_id: string;
+      type: string;
+      source_path: string;
+      archive_path: string | null;
+      target_path: string | null;
+      status: string;
+      applied_at: number;
+    }>;
+    return rows.map(r => ({
       historyId: r.id,
       id: r.action_id,
       projectId: r.project_id,
@@ -594,9 +674,15 @@ export class MetadataStore {
 
   // ---------- 项目统计 ----------
 
-  getProjectCounts(
-    projectId: string
-  ): { pending: number; archived: number; ignored: number; orphaned: number; copied: number; organized: number; flagged: number } {
+  getProjectCounts(projectId: string): {
+    pending: number;
+    archived: number;
+    ignored: number;
+    orphaned: number;
+    copied: number;
+    organized: number;
+    flagged: number;
+  } {
     const entryCounts = this.db
       .prepare(
         `SELECT
@@ -747,21 +833,21 @@ export class MetadataStore {
     const rows = this.db
       .prepare('SELECT * FROM archive_metadata WHERE project_id = ? ORDER BY archive_path')
       .all(projectId) as Array<{
-        entry_id: string;
-        project_id: string;
-        source_path: string;
-        archive_path: string;
-        category: string;
-        doc_type: string;
-        tags: string;
-        summary: string;
-        content_hash: string;
-        type: string;
-        copied_at: number;
-        organized_at: number | null;
-        status: string;
-      }>;
-    return rows.map((r) => ({
+      entry_id: string;
+      project_id: string;
+      source_path: string;
+      archive_path: string;
+      category: string;
+      doc_type: string;
+      tags: string;
+      summary: string;
+      content_hash: string;
+      type: string;
+      copied_at: number;
+      organized_at: number | null;
+      status: string;
+    }>;
+    return rows.map(r => ({
       entryId: r.entry_id,
       projectId: r.project_id,
       sourcePath: r.source_path,
@@ -778,10 +864,7 @@ export class MetadataStore {
     }));
   }
 
-  updateArchiveMetadataStatus(
-    entryId: string,
-    status: 'active' | 'orphaned' | 'superseded'
-  ): void {
+  updateArchiveMetadataStatus(entryId: string, status: 'active' | 'orphaned' | 'superseded'): void {
     this.db
       .prepare('UPDATE archive_metadata SET status = ? WHERE entry_id = ?')
       .run(status, entryId);
@@ -805,7 +888,7 @@ export class MetadataStore {
     const project = this.getProject(projectId);
     if (!project) throw new Error(`项目不存在: ${projectId}`);
     const roles = project.roles ?? this.normalizeRoles({});
-    roles[role] = config;
+    roles[role] = role === 'archiver' ? normalizeArchiverConfig(config) : config;
     this.db
       .prepare('UPDATE projects SET roles_config = ? WHERE id = ?')
       .run(JSON.stringify(roles), projectId);
@@ -813,12 +896,24 @@ export class MetadataStore {
 
   getRoleEnabledProjects(role: Role): Project[] {
     return this.listProjects().filter(
-      (p) => p.gitlab !== null && p.roles?.[role]?.enabled === true
+      p => isRoleConfigEnabled(p.roles?.[role]) && (role === 'archiver' || p.gitlab != null)
     );
   }
 
   /** @deprecated 请使用 updateProjectRoleConfig */
-  updateMrReviewConfig(projectId: string, mrReview: { enabled: boolean; autoMergeMode: 'full' | 'audit'; reviewSchedule: string; learningEnabled: boolean; maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH'; autoFixEnabled?: boolean; resolveOthersDiscussions?: boolean; filter?: unknown }): void {
+  updateMrReviewConfig(
+    projectId: string,
+    mrReview: {
+      enabled: boolean;
+      autoMergeMode: 'full' | 'audit';
+      reviewSchedule: string;
+      learningEnabled: boolean;
+      maxAutoMergeRisk: 'LOW' | 'MEDIUM' | 'HIGH';
+      autoFixEnabled?: boolean;
+      resolveOthersDiscussions?: boolean;
+      filter?: unknown;
+    }
+  ): void {
     // 兼容旧调用方：将 mrReview 配置映射为 reviewer 角色配置
     const reviewerConfig: ReviewerConfig = {
       role: 'reviewer',
@@ -902,27 +997,32 @@ export class MetadataStore {
     );
   }
 
-  getMrState(projectId: string, mrIid: number): {
-    id: string;
-    projectId: string;
-    mrIid: number;
-    sourceBranch: string;
-    targetBranch: string;
-    state: string;
-    title?: string;
-    webUrl?: string;
-    findingsJson?: string;
-    fixBranch?: string;
-    riskLevel?: string;
-    reviewerCommentsCount: number;
-    unresolvedCommentsCount: number;
-    ciStatus?: string;
-    lastReviewerCommentAt?: number;
-    postedDiscussionsJson?: string;
-    lastReviewAt?: number;
-    createdAt: number;
-    updatedAt: number;
-  } | undefined {
+  getMrState(
+    projectId: string,
+    mrIid: number
+  ):
+    | {
+        id: string;
+        projectId: string;
+        mrIid: number;
+        sourceBranch: string;
+        targetBranch: string;
+        state: string;
+        title?: string;
+        webUrl?: string;
+        findingsJson?: string;
+        fixBranch?: string;
+        riskLevel?: string;
+        reviewerCommentsCount: number;
+        unresolvedCommentsCount: number;
+        ciStatus?: string;
+        lastReviewerCommentAt?: number;
+        postedDiscussionsJson?: string;
+        lastReviewAt?: number;
+        createdAt: number;
+        updatedAt: number;
+      }
+    | undefined {
     const r = this.db
       .prepare('SELECT * FROM mr_review_states WHERE project_id = ? AND mr_iid = ?')
       .get(projectId, mrIid) as
@@ -976,27 +1076,27 @@ export class MetadataStore {
     const rows = this.db
       .prepare('SELECT * FROM mr_review_states WHERE project_id = ? ORDER BY updated_at DESC')
       .all(projectId) as Array<{
-        id: string;
-        project_id: string;
-        mr_iid: number;
-        source_branch: string;
-        target_branch: string;
-        state: string;
-        title: string | null;
-        web_url: string | null;
-        findings_json: string | null;
-        fix_branch: string | null;
-        risk_level: string | null;
-        reviewer_comments_count: number;
-        unresolved_comments_count: number;
-        ci_status: string | null;
-        last_reviewer_comment_at: number | null;
-        posted_discussions_json: string | null;
-        last_review_at: number | null;
-        created_at: number;
-        updated_at: number;
-      }>;
-    return rows.map((r) => ({
+      id: string;
+      project_id: string;
+      mr_iid: number;
+      source_branch: string;
+      target_branch: string;
+      state: string;
+      title: string | null;
+      web_url: string | null;
+      findings_json: string | null;
+      fix_branch: string | null;
+      risk_level: string | null;
+      reviewer_comments_count: number;
+      unresolved_comments_count: number;
+      ci_status: string | null;
+      last_reviewer_comment_at: number | null;
+      posted_discussions_json: string | null;
+      last_review_at: number | null;
+      created_at: number;
+      updated_at: number;
+    }>;
+    return rows.map(r => ({
       id: r.id,
       projectId: r.project_id,
       mrIid: r.mr_iid,
@@ -1023,27 +1123,27 @@ export class MetadataStore {
     const rows = this.db
       .prepare('SELECT * FROM mr_review_states WHERE state = ? ORDER BY updated_at DESC')
       .all(state) as Array<{
-        id: string;
-        project_id: string;
-        mr_iid: number;
-        source_branch: string;
-        target_branch: string;
-        state: string;
-        title: string | null;
-        web_url: string | null;
-        findings_json: string | null;
-        fix_branch: string | null;
-        risk_level: string | null;
-        reviewer_comments_count: number;
-        unresolved_comments_count: number;
-        ci_status: string | null;
-        last_reviewer_comment_at: number | null;
-        posted_discussions_json: string | null;
-        last_review_at: number | null;
-        created_at: number;
-        updated_at: number;
-      }>;
-    return rows.map((r) => ({
+      id: string;
+      project_id: string;
+      mr_iid: number;
+      source_branch: string;
+      target_branch: string;
+      state: string;
+      title: string | null;
+      web_url: string | null;
+      findings_json: string | null;
+      fix_branch: string | null;
+      risk_level: string | null;
+      reviewer_comments_count: number;
+      unresolved_comments_count: number;
+      ci_status: string | null;
+      last_reviewer_comment_at: number | null;
+      posted_discussions_json: string | null;
+      last_review_at: number | null;
+      created_at: number;
+      updated_at: number;
+    }>;
+    return rows.map(r => ({
       id: r.id,
       projectId: r.project_id,
       mrIid: r.mr_iid,
@@ -1069,7 +1169,9 @@ export class MetadataStore {
   updateMrState(
     projectId: string,
     mrIid: number,
-    patch: Partial<Omit<ReturnType<MetadataStore['getMrState']>, 'id' | 'projectId' | 'mrIid' | 'createdAt'>>
+    patch: Partial<
+      Omit<ReturnType<MetadataStore['getMrState']>, 'id' | 'projectId' | 'mrIid' | 'createdAt'>
+    >
   ): void {
     const allowedFields = [
       'sourceBranch',
@@ -1106,7 +1208,9 @@ export class MetadataStore {
       updatedAt: 'updated_at',
     };
 
-    const entries = Object.entries(patch).filter(([key]) => allowedFields.includes(key as (typeof allowedFields)[number]));
+    const entries = Object.entries(patch).filter(([key]) =>
+      allowedFields.includes(key as (typeof allowedFields)[number])
+    );
     if (entries.length === 0) return;
 
     const setClauses = entries.map(([key]) => {
@@ -1117,7 +1221,9 @@ export class MetadataStore {
     const values = entries.map(([, value]) => value ?? null);
 
     this.db
-      .prepare(`UPDATE mr_review_states SET ${setClauses.join(', ')} WHERE project_id = ? AND mr_iid = ?`)
+      .prepare(
+        `UPDATE mr_review_states SET ${setClauses.join(', ')} WHERE project_id = ? AND mr_iid = ?`
+      )
       .run(...values, projectId, mrIid);
   }
 
@@ -1144,7 +1250,7 @@ export class MetadataStore {
     const rows = this.db
       .prepare('SELECT session_id FROM deleted_memory_sessions WHERE project_id = ?')
       .all(projectId) as Array<{ session_id: string }>;
-    return rows.map((r) => r.session_id);
+    return rows.map(r => r.session_id);
   }
 
   // ---------- 记忆 owner 注册表 ----------
@@ -1167,11 +1273,17 @@ export class MetadataStore {
       .run(projectId, ownerId, ownerType, displayName ?? null, now, now);
   }
 
-  listMemoryOwners(projectId: string): Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }> {
+  listMemoryOwners(
+    projectId: string
+  ): Array<{ ownerId: string; ownerType: 'user' | 'agent'; displayName?: string }> {
     const rows = this.db
       .prepare('SELECT owner_id, owner_type, display_name FROM memory_owners WHERE project_id = ?')
-      .all(projectId) as Array<{ owner_id: string; owner_type: 'user' | 'agent'; display_name: string | null }>;
-    return rows.map((r) => ({
+      .all(projectId) as Array<{
+      owner_id: string;
+      owner_type: 'user' | 'agent';
+      display_name: string | null;
+    }>;
+    return rows.map(r => ({
       ownerId: r.owner_id,
       ownerType: r.owner_type,
       displayName: r.display_name ?? undefined,
@@ -1252,22 +1364,22 @@ export class MetadataStore {
          LIMIT ?`
       )
       .all(now, limit) as Array<{
-        id: string;
-        project_id: string;
-        app_id: string;
-        agent_id: string;
-        agent_display_name: string | null;
-        user_id: string;
-        session_id: string;
-        kind: string;
-        messages_json: string;
-        content_hash: string;
-        failure_count: number;
-        last_error: string | null;
-        next_retry_at: number;
-        created_at: number;
-      }>;
-    return rows.map((r) => ({
+      id: string;
+      project_id: string;
+      app_id: string;
+      agent_id: string;
+      agent_display_name: string | null;
+      user_id: string;
+      session_id: string;
+      kind: string;
+      messages_json: string;
+      content_hash: string;
+      failure_count: number;
+      last_error: string | null;
+      next_retry_at: number;
+      created_at: number;
+    }>;
+    return rows.map(r => ({
       id: r.id,
       projectId: r.project_id,
       appId: r.app_id,
@@ -1289,11 +1401,7 @@ export class MetadataStore {
     this.db.prepare('DELETE FROM pending_memory_writes WHERE id = ?').run(id);
   }
 
-  incrementPendingMemoryFailure(
-    id: string,
-    nextRetryAt: number,
-    lastError: string
-  ): void {
+  incrementPendingMemoryFailure(id: string, nextRetryAt: number, lastError: string): void {
     this.db
       .prepare(
         `UPDATE pending_memory_writes
