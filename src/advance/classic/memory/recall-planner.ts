@@ -4,9 +4,10 @@ import type { ToolDefinition } from '../../llm/tool-types.js';
 import type { IMemoryClient } from './types.js';
 import { logMemorySnapshot } from '../utils/memory-snapshot.js';
 import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
+import type { ProjectKnowledgeSource } from '../../archiver/project-knowledge-source.js';
 const RECALL_DECISION_TOOL: ToolDefinition = {
   name: 'recall_decision',
-  description: '判断当前任务是否需要查询历史记忆，以及需要查询哪些类型',
+  description: '判断当前任务是否需要查询项目知识与历史记忆，以及需要查询哪些类型',
   input_schema: {
     type: 'object',
     properties: {
@@ -67,7 +68,9 @@ export interface RecallPlannerOptions {
   /** LLM 客户端 */
   llmClient: LlmClient;
   /** 记忆客户端 */
-  memoryClient: IMemoryClient;
+  memoryClient?: IMemoryClient;
+  /** Archiver Provider 提供的当前项目知识源 */
+  projectKnowledgeSource?: ProjectKnowledgeSource;
   /** 可用的 recall 类型白名单，默认全开 */
   enabledTypes?: RecallType[];
   /** 自定义决策提示词（覆盖默认） */
@@ -100,12 +103,13 @@ const ALL_RECALL_TYPES: RecallType[] = [
 /**
  * 记忆查询规划器
  *
- * 让 Agent 自己决定是否需要查询记忆、查询哪类记忆、query 是什么。
+ * 让 Agent 自己决定是否需要查询项目知识或历史记忆、查询哪类内容、query 是什么。
  * 执行时按需调用 memoryClient 的对应 recall 方法，而不是一次性全查。
  */
 export class RecallPlanner {
   private readonly llmClient: LlmClient;
-  private readonly memoryClient: IMemoryClient;
+  private readonly memoryClient?: IMemoryClient;
+  private readonly projectKnowledgeSource?: ProjectKnowledgeSource;
   private readonly enabledTypes: Set<RecallType>;
   private readonly customDecisionPrompt?: string;
   private readonly promptLoader: PromptLoader;
@@ -113,7 +117,11 @@ export class RecallPlanner {
   constructor(options: RecallPlannerOptions) {
     this.llmClient = options.llmClient;
     this.memoryClient = options.memoryClient;
-    this.enabledTypes = new Set(options.enabledTypes ?? ALL_RECALL_TYPES);
+    this.projectKnowledgeSource = options.projectKnowledgeSource;
+    const availableTypes = this.getAvailableTypes();
+    this.enabledTypes = new Set(
+      (options.enabledTypes ?? ALL_RECALL_TYPES).filter(type => availableTypes.has(type))
+    );
     this.customDecisionPrompt = options.decisionPrompt;
     this.promptLoader = options.promptLoader ?? defaultPromptLoader;
   }
@@ -147,7 +155,7 @@ export class RecallPlanner {
       return [];
     }
 
-    const validQueries = plan.queries.filter((q) => {
+    const validQueries = plan.queries.filter(q => {
       if (!this.enabledTypes.has(q.type)) {
         logger.warn({ query: q }, 'RecallPlanner 忽略未启用的 recall 类型');
         return false;
@@ -170,7 +178,7 @@ export class RecallPlanner {
     logMemorySnapshot('RecallPlanner.execute 开始');
 
     const results = await Promise.all(
-      validQueries.map(async (q) => {
+      validQueries.map(async q => {
         try {
           const items = await this.executeQuery(q);
           return items;
@@ -183,7 +191,9 @@ export class RecallPlanner {
     );
 
     const flat = results.flat();
-    console.log(`[RecallPlanner] 召回总条目=${flat.length}, 总字符=${flat.reduce((sum, m) => sum + m.length, 0)}`);
+    console.log(
+      `[RecallPlanner] 召回总条目=${flat.length}, 总字符=${flat.reduce((sum, m) => sum + m.length, 0)}`
+    );
     logMemorySnapshot('RecallPlanner.execute 结束');
     return flat;
   }
@@ -191,13 +201,13 @@ export class RecallPlanner {
   private async executeQuery(query: RecallQuery): Promise<string[]> {
     switch (query.type) {
       case 'review':
-        return this.memoryClient.recallForReview(query.query);
+        return this.memoryClient?.recallForReview(query.query) ?? [];
       case 'maintenance':
-        return this.memoryClient.recallForMaintenance(query.query);
+        return this.memoryClient?.recallForMaintenance(query.query) ?? [];
       case 'project_knowledge':
-        return this.memoryClient.recallProjectKnowledge(query.query);
+        return this.recallProjectKnowledge(query.query);
       case 'user_preferences':
-        if (!query.userId) {
+        if (!query.userId || !this.memoryClient) {
           return [];
         }
         return this.memoryClient.recallUserPreferences(query.userId, query.query);
@@ -221,7 +231,41 @@ export class RecallPlanner {
       availableFindings: input.availableFindings
         ? `\n当前已知的 findings：\n${input.availableFindings}`
         : '',
+      availableRecallTypes: [...this.enabledTypes].join(', ') || '无',
     });
+  }
+
+  private async recallProjectKnowledge(query: string): Promise<string[]> {
+    const [memoryItems, providerItems] = await Promise.all([
+      this.memoryClient
+        ? this.memoryClient.recallProjectKnowledge(query).catch(error => {
+            logger.warn(
+              { err: error instanceof Error ? error.message : String(error) },
+              'RecallPlanner 项目记忆查询失败'
+            );
+            return [];
+          })
+        : Promise.resolve([]),
+      this.projectKnowledgeSource
+        ? this.projectKnowledgeSource.query(query).catch(error => {
+            logger.warn(
+              { err: error instanceof Error ? error.message : String(error) },
+              'RecallPlanner Provider 项目知识查询失败'
+            );
+            return [];
+          })
+        : Promise.resolve([]),
+    ]);
+    return [...new Set([...memoryItems, ...providerItems])];
+  }
+
+  private getAvailableTypes(): Set<RecallType> {
+    const types = new Set<RecallType>();
+    if (this.memoryClient) {
+      for (const type of ALL_RECALL_TYPES) types.add(type);
+    }
+    if (this.projectKnowledgeSource) types.add('project_knowledge');
+    return types;
   }
 
   private parsePlan(input: Record<string, unknown>): RecallPlan {
@@ -229,12 +273,12 @@ export class RecallPlanner {
       const rawQueries = Array.isArray(input.queries) ? input.queries : [];
       const queries = rawQueries
         .filter((q): q is Record<string, unknown> => typeof q === 'object' && q !== null)
-        .map((q) => ({
+        .map(q => ({
           type: this.normalizeRecallType(String(q.type ?? '')),
           query: String(q.query ?? ''),
           userId: q.userId ? String(q.userId) : undefined,
         }))
-        .filter((q) => q.type !== undefined && q.query.trim().length > 0) as RecallQuery[];
+        .filter(q => q.type !== undefined && q.query.trim().length > 0) as RecallQuery[];
 
       return {
         needsRecall: input.needsRecall === true && queries.length > 0,
@@ -253,6 +297,6 @@ export class RecallPlanner {
   private normalizeRecallType(type: string): RecallType | undefined {
     const valid: RecallType[] = ['review', 'maintenance', 'project_knowledge', 'user_preferences'];
     const lower = type.toLowerCase().trim();
-    return valid.find((v) => v === lower || v.replace(/_/g, '') === lower.replace(/_/g, ''));
+    return valid.find(v => v === lower || v.replace(/_/g, '') === lower.replace(/_/g, ''));
   }
 }

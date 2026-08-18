@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
-import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { ReviewerActor } from '../../../../src/advance/classic/review/reviewer-actor.js';
 import type { GitLabProvider } from '../../../../src/advance/classic/provider/gitlab-provider.js';
 import type { MergeRequest, ReviewResult } from '../../../../src/advance/classic/provider/types.js';
@@ -15,8 +18,6 @@ function createMockProvider(): GitLabProvider {
       .mockResolvedValue({ baseSha: 'base', headSha: 'head', startSha: 'start' }),
   } as unknown as GitLabProvider;
 }
-
-const mockProject = { id: 'p1', rootPath: '/tmp/p1', name: 'P' } as Project;
 
 const mockMR: MergeRequest = {
   iid: 1,
@@ -52,6 +53,18 @@ function hashBody(body: string): string {
 }
 
 describe('ReviewerActor', () => {
+  let testRoot: string;
+  let mockProject: Project;
+
+  beforeEach(() => {
+    testRoot = mkdtempSync(join(tmpdir(), 'reviewer-actor-'));
+    mockProject = { id: 'p1', rootPath: testRoot, name: 'P' } as Project;
+  });
+
+  afterEach(() => {
+    rmSync(testRoot, { recursive: true, force: true });
+  });
+
   it('调用 provider 发表 summary 评论', async () => {
     const provider = createMockProvider();
     const actor = new ReviewerActor({ provider });

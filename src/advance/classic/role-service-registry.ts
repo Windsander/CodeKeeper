@@ -34,6 +34,7 @@ export class RoleServiceRegistry {
    */
   async start(role: Role): Promise<void> {
     await this.waitForMemoryMcpUrl(60000);
+    await this.waitForCodeGraphUrl(60000);
     await this.getService(role).start();
   }
 
@@ -47,6 +48,17 @@ export class RoleServiceRegistry {
         throw new Error('等待 EverOS MCP URL 超时，无法启动角色服务');
       }
       await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  /** 等待 Daemon 设置统一 CodeGraph Server URL。 */
+  private async waitForCodeGraphUrl(timeoutMs = 60000): Promise<void> {
+    const start = Date.now();
+    while (!this.options.codeGraphUrl) {
+      if (Date.now() - start > timeoutMs) {
+        throw new Error('等待 CodeGraph Server URL 超时，无法启动角色服务');
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
 
@@ -84,6 +96,14 @@ export class RoleServiceRegistry {
     this.options = { ...this.options, mcpUrl: url };
     for (const service of this.services.values()) {
       service.setMcpUrl(url);
+    }
+  }
+
+  /** 设置 CodeGraph Server URL，并同步给已经懒创建的角色服务。 */
+  setCodeGraphUrl(url: string): void {
+    this.options = { ...this.options, codeGraphUrl: url };
+    for (const service of this.services.values()) {
+      service.setCodeGraphUrl(url);
     }
   }
 

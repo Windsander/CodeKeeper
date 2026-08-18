@@ -3,6 +3,7 @@ import { createRoleRunner } from '../../../../src/advance/classic/runners/role-r
 import { ReviewerRunner, buildReviewerSessionId } from '../../../../src/advance/classic/runners/reviewer-runner.js';
 import { MaintainerRunner, buildMaintainerMrSessionId } from '../../../../src/advance/classic/runners/maintainer-runner.js';
 import { ArchiverRunner, buildArchiverSessionId } from '../../../../src/advance/classic/runners/archiver-runner.js';
+import { CodeGraphClient } from '../../../../src/advance/archiver/codegraph-client.js';
 
 const mockLlmClient = {
   complete: vi.fn(),
@@ -19,7 +20,13 @@ describe('createRoleRunner', () => {
 
   it('archiver 返回 ArchiverRunner', () => {
     process.env.CK_EVEROS_MCP_URL = 'http://127.0.0.1:9999';
-    expect(createRoleRunner('archiver', { llmClient: mockLlmClient, mcpUrl: 'http://127.0.0.1:9999' })).toBeInstanceOf(ArchiverRunner);
+    const runner = createRoleRunner('archiver', {
+      llmClient: mockLlmClient,
+      mcpUrl: 'http://127.0.0.1:9999',
+      codeGraphUrl: 'http://127.0.0.1:7010',
+    });
+    expect(runner).toBeInstanceOf(ArchiverRunner);
+    expect((runner as any).providerOrchestrator).toBeInstanceOf(CodeGraphClient);
   });
 });
 

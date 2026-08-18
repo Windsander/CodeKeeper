@@ -68,7 +68,7 @@ function setupMocks(options?: {
           },
         };
       case 'project.soul.get':
-        return { soul: { content: '', sourcePath: '/tmp/soul.md' } };
+        return { soul: { content: '', sourcePath: 'virtual-project/soul.md' } };
       case 'project.members':
         return { members: options?.members ?? [] };
       case 'project.labels':
@@ -92,12 +92,17 @@ function createProject(): Project {
   return {
     id: 'p1',
     name: 'test-project',
-    rootPath: '/tmp/test',
+    rootPath: 'virtual-project',
     registeredAt: Date.now(),
     lastScannedAt: null,
     gitlab: null,
     roles: {
-      reviewer: { role: 'reviewer', enabled: false, reviewSchedule: '*/10 * * * *', learningEnabled: true },
+      reviewer: {
+        role: 'reviewer',
+        enabled: false,
+        reviewSchedule: '*/10 * * * *',
+        learningEnabled: true,
+      },
       maintainer: {
         role: 'maintainer',
         enabled: false,
@@ -178,7 +183,7 @@ describe('RoleProjectConfig', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
-      const call = mockInvoke.mock.calls.find((call) => call[0] === 'project.role.config.update');
+      const call = mockInvoke.mock.calls.find(call => call[0] === 'project.role.config.update');
       expect(call).toBeTruthy();
       expect((call![1] as { role: string }).role).toBe('maintainer');
       expect((call![1] as { config: { maintainerName: string } }).config.maintainerName).toBe(
@@ -216,7 +221,7 @@ describe('RoleProjectConfig', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     await waitFor(() => {
-      const verifyCall = mockInvoke.mock.calls.find((call) => call[0] === 'project.gitlab.verify');
+      const verifyCall = mockInvoke.mock.calls.find(call => call[0] === 'project.gitlab.verify');
       expect(verifyCall).toBeTruthy();
     });
 
@@ -242,7 +247,9 @@ describe('RoleProjectConfig', () => {
     });
 
     await waitFor(() => {
-      const updateCall = mockInvoke.mock.calls.find((call) => call[0] === 'project.role.config.update');
+      const updateCall = mockInvoke.mock.calls.find(
+        call => call[0] === 'project.role.config.update'
+      );
       expect(updateCall).toBeFalsy();
     });
 

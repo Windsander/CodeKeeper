@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { LlmClient } from '../../../../src/advance/llm/client.js';
 import { RecallPlanner } from '../../../../src/advance/classic/memory/recall-planner.js';
 import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
+import type { ProjectKnowledgeSource } from '../../../../src/advance/archiver/project-knowledge-source.js';
 
 function createMockLlm(input: Record<string, unknown>): LlmClient {
   return new LlmClient({
@@ -35,7 +36,11 @@ function createMemoryClient(): IMemoryClient {
 
 describe('RecallPlanner', () => {
   it('LLM 决定不查时返回空计划', async () => {
-    const llmClient = createMockLlm({ needsRecall: false, queries: [], reason: '当前任务不需要记忆' });
+    const llmClient = createMockLlm({
+      needsRecall: false,
+      queries: [],
+      reason: '当前任务不需要记忆',
+    });
     const memoryClient = createMemoryClient();
     const planner = new RecallPlanner({ llmClient, memoryClient });
 
@@ -98,6 +103,82 @@ describe('RecallPlanner', () => {
     expect(memoryClient.recallForMaintenance).toHaveBeenCalledWith('修复历史');
     expect(memoryClient.recallUserPreferences).toHaveBeenCalledWith('alice', '用户习惯');
     expect(memories).toEqual(['knowledge memory', 'maintenance memory', 'user preference']);
+  });
+
+  it('EverOS 不可用时仍可通过 Archiver Provider 查询项目知识', async () => {
+    const llmClient = createMockLlm({
+      needsRecall: true,
+      queries: [{ type: 'project_knowledge', query: '调用链' }],
+      reason: '需要代码结构',
+    });
+    const projectKnowledgeSource: ProjectKnowledgeSource = {
+      isAvailable: vi.fn().mockResolvedValue(true),
+      loadContext: vi.fn().mockResolvedValue(''),
+      query: vi.fn().mockResolvedValue(['[Graphify] ReviewerRunner calls loadRoleContext']),
+    };
+    const planner = new RecallPlanner({ llmClient, projectKnowledgeSource });
+
+    const plan = await planner.plan({
+      role: 'reviewer',
+      taskType: 'review',
+      taskSummary: '检查角色上下文装配',
+    });
+    const memories = await planner.execute(plan);
+
+    expect(projectKnowledgeSource.query).toHaveBeenCalledWith('调用链');
+    expect(memories).toEqual(['[Graphify] ReviewerRunner calls loadRoleContext']);
+  });
+
+  it('project_knowledge 聚合 EverOS 与 Archiver Provider 并去重', async () => {
+    const llmClient = createMockLlm({
+      needsRecall: true,
+      queries: [{ type: 'project_knowledge', query: '架构' }],
+      reason: '需要完整项目知识',
+    });
+    const memoryClient = createMemoryClient();
+    memoryClient.recallProjectKnowledge = vi
+      .fn()
+      .mockResolvedValue(['shared knowledge', 'memory only']);
+    const projectKnowledgeSource: ProjectKnowledgeSource = {
+      isAvailable: vi.fn().mockResolvedValue(true),
+      loadContext: vi.fn().mockResolvedValue(''),
+      query: vi.fn().mockResolvedValue(['shared knowledge', 'provider only']),
+    };
+    const planner = new RecallPlanner({ llmClient, memoryClient, projectKnowledgeSource });
+
+    const plan = await planner.plan({
+      role: 'maintainer',
+      taskType: 'fix',
+      taskSummary: '跨模块修复',
+    });
+    const memories = await planner.execute(plan);
+
+    expect(memories).toEqual(['shared knowledge', 'memory only', 'provider only']);
+  });
+
+  it('Archiver Provider 查询失败时仍返回 EverOS 项目知识', async () => {
+    const llmClient = createMockLlm({
+      needsRecall: true,
+      queries: [{ type: 'project_knowledge', query: '架构' }],
+      reason: '需要项目知识',
+    });
+    const memoryClient = createMemoryClient();
+    memoryClient.recallProjectKnowledge = vi.fn().mockResolvedValue(['memory only']);
+    const projectKnowledgeSource: ProjectKnowledgeSource = {
+      isAvailable: vi.fn().mockResolvedValue(true),
+      loadContext: vi.fn().mockResolvedValue(''),
+      query: vi.fn().mockRejectedValue(new Error('Provider 查询失败')),
+    };
+    const planner = new RecallPlanner({ llmClient, memoryClient, projectKnowledgeSource });
+
+    const plan = await planner.plan({
+      role: 'reviewer',
+      taskType: 'review',
+      taskSummary: '检查架构约束',
+    });
+    const memories = await planner.execute(plan);
+
+    expect(memories).toEqual(['memory only']);
   });
 
   it('过滤 enabledTypes 之外的类型', async () => {

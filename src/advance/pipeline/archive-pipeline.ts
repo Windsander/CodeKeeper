@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { relative } from 'node:path';
-import { minimatch } from 'minimatch';
 import { ArchiveExecutor } from '../archive/archive-executor';
 import { DocumentClassifier } from '../archive/classifier';
 import { parseDocument } from '../archive/document-parser';
@@ -15,7 +14,7 @@ import type { LlmClient } from '../llm/client';
 import type { MetadataStore } from '../store/metadata-store';
 import type { Project, ArchiveAction, ClassificationResult } from '../types';
 import { getArchiveRoot } from '../types';
-import { loadProjectConfig } from '../config/project-config';
+import { loadProjectConfig, matchesProjectPathPatterns } from '../config/project-config';
 import { logger } from '../../core/logger';
 
 export interface ArchivePipelineOptions {
@@ -72,7 +71,7 @@ export class ArchivePipeline {
     for (const event of events) {
       try {
         const relPath = relative(project.rootPath, event.filePath).replace(/\\/g, '/');
-        if (config.exclude.some((pattern) => minimatch(relPath, pattern, { dot: true }))) {
+        if (matchesProjectPathPatterns(relPath, config.exclude)) {
           processedEventIds.push(event.eventId);
           continue;
         }

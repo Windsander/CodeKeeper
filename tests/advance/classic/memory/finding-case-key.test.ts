@@ -25,12 +25,12 @@ describe('buildFindingCaseKey', () => {
 
   it('清洗非法字符', () => {
     const key = buildFindingCaseKey({
-      projectId: 'D:/project/path',
+      projectId: 'virtual-project/path',
       mrIid: 1,
       file: 'src/a b.ts',
       line: 10,
       ruleId: 'rule@any',
     });
-    expect(key).toBe('case:D__project_path:mr-1:src_a_b.ts:10:rule@any');
+    expect(key).toBe('case:virtual-project_path:mr-1:src_a_b.ts:10:rule@any');
   });
 });

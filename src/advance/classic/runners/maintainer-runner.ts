@@ -87,6 +87,10 @@ import {
   MAX_DISCUSSION_REPLY_CHARS,
 } from './shared/reply-safety.js';
 import { defaultPromptLoader } from '../../llm/prompts/loader.js';
+import {
+  ArchiverProjectKnowledgeSource,
+  mergeProjectKnowledgeContext,
+} from '../../archiver/project-knowledge-source.js';
 
 function logMemoryUsage(label: string): void {
   const usage = process.memoryUsage();
@@ -526,7 +530,13 @@ export class MaintainerRunner extends BaseRoleRunner {
 
     const provider = new GitLabProvider(gitlabConfig);
 
-    const { soul, projectContext } = this.loadRoleContext(project);
+    const { soul, projectContext: legacyProjectContext } = this.loadRoleContext(project);
+    const projectKnowledgeSource = new ArchiverProjectKnowledgeSource({ project });
+    const [providerContext, providerKnowledgeAvailable] = await Promise.all([
+      projectKnowledgeSource.loadContext(6000).catch(() => ''),
+      projectKnowledgeSource.isAvailable().catch(() => false),
+    ]);
+    const projectContext = mergeProjectKnowledgeContext(legacyProjectContext, providerContext);
 
     const mcpUrl = process.env.CK_EVEROS_MCP_URL ?? '';
     const baseMemoryContext = {
@@ -573,7 +583,7 @@ export class MaintainerRunner extends BaseRoleRunner {
 
     let mrs: MergeRequest[];
     try {
-      mrs = await provider.listOpenMRs(config.filter);
+      mrs = await provider.listOpenMRs(maintainerConfig.filter);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[MaintainerRunner] 列出项目 ${project.name} 的 MR 失败: ${message}`);
@@ -649,9 +659,16 @@ export class MaintainerRunner extends BaseRoleRunner {
           })
         : undefined;
       await memoryClient?.connect().catch(() => undefined);
-      const recallPlanner = memoryClient
-        ? new RecallPlanner({ llmClient: this.llmClient, memoryClient })
-        : undefined;
+      const recallPlanner =
+        memoryClient || providerKnowledgeAvailable
+          ? new RecallPlanner({
+              llmClient: this.llmClient,
+              memoryClient,
+              projectKnowledgeSource: providerKnowledgeAvailable
+                ? projectKnowledgeSource
+                : undefined,
+            })
+          : undefined;
       const brain = new MaintainerBrain({ ...brainOptions, memoryClient, recallPlanner });
       const actor = new MaintainerActor({
         provider,

@@ -12,14 +12,14 @@ describe('ci-review-parser', () => {
 <details>
 <summary>展开规则结果</summary>
 
-- **任意保护策略名称** \`D:\\builds\\group\\project\\src\\app\\main.ts:1\` | 保护文件被修改，请确认必要性
+  - **任意保护策略名称** \`virtual-project/src/app/main.ts:1\` | 保护文件被修改，请确认必要性
 </details>
 
 ### AI 分析
 
 #### 🟢 低风险
 
-- \`D:\\builds\\group\\project\\packages\\example-memory\\src\\core\\foundation\\telemetry\\__tests__\\tracker.test.ts:36\` | 删除的 no-op 测试覆盖了默认 sink 路径 | 可考虑补一条未注入时调用不抛异常的单行用例
+  - \`virtual-project/packages/example-memory/src/core/foundation/telemetry/__tests__/tracker.test.ts:36\` | 删除的 no-op 测试覆盖了默认 sink 路径 | 可考虑补一条未注入时调用不抛异常的单行用例
 
 #### 优点
 
@@ -27,7 +27,7 @@ describe('ci-review-parser', () => {
 `;
 
     const result = parseStructuredCiReview(body, {
-      projectRootPath: 'D:\\WorkingSpace\\ai-framework\\project',
+      projectRootPath: 'virtual-project',
       changedFiles: [
         'src/app/main.ts',
         'packages/example-memory/src/core/foundation/telemetry/__tests__/tracker.test.ts',

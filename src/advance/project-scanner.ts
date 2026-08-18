@@ -1,15 +1,14 @@
 import { readdir, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { minimatch } from 'minimatch';
 import type { MetadataStore } from './store/metadata-store';
 import type { Project } from './types';
-import type { ProjectConfig } from './config/project-config';
+import { matchesProjectPathPatterns, type ProjectConfig } from './config/project-config';
 
 /**
  * 让出事件循环，避免长时间同步 IO 阻塞 daemon 的 IPC/定时任务
  */
 async function yieldEventLoop(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>(resolve => setImmediate(resolve));
 }
 
 /**
@@ -47,7 +46,7 @@ export async function scanExistingFiles(
       const relPath = relative(project.rootPath, fullPath).replace(/\\/g, '/');
 
       // 排除规则优先
-      if (config.exclude.some((pattern) => minimatch(relPath, pattern, { dot: true }))) {
+      if (matchesProjectPathPatterns(relPath, config.exclude)) {
         continue;
       }
 
@@ -60,7 +59,7 @@ export async function scanExistingFiles(
 
       if (isDirectory) {
         await walk(fullPath);
-      } else if (config.include.some((pattern) => minimatch(relPath, pattern, { dot: true }))) {
+      } else if (matchesProjectPathPatterns(relPath, config.include)) {
         if (!tracked.has(fullPath)) {
           matched.push(fullPath);
         }

@@ -54,9 +54,11 @@ describe('prompt assets', () => {
       taskType: 'review',
       taskSummary: 'summary',
       availableFindings: '',
+      availableRecallTypes: 'review, project_knowledge',
     });
     expect(content).toContain('当前角色：reviewer');
     expect(content).toContain('summary');
+    expect(content).toContain('review, project_knowledge');
   });
 
   it('cross-file-plan 变量可替换', () => {
@@ -107,8 +109,9 @@ describe('prompt assets', () => {
   it('archiver-analyze 变量可替换', () => {
     const content = defaultPromptLoader.load('archiver-analyze', {
       projectName: 'p',
-      projectRootPath: '/tmp/p',
+      projectRootPath: 'virtual-workspace/project',
       filePaths: '- a\n- b',
+      fileContents: '',
     });
     expect(content).toContain('项目名称: p');
     expect(content).toContain('- a');

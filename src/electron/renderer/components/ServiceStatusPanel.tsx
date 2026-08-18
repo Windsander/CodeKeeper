@@ -1,5 +1,11 @@
 import { useState } from 'react';
-import type { DaemonStatus, LocalModelStatus, ModelServiceStatus, RemoteModelStatus } from '../../shared/service-status';
+import type {
+  CodeGraphProviderStatus,
+  DaemonStatus,
+  LocalModelStatus,
+  ModelServiceStatus,
+  RemoteModelStatus,
+} from '../../shared/service-status';
 import { CircularProgress } from './CircularProgress';
 
 export interface ServiceStatusPanelProps {
@@ -8,7 +14,7 @@ export interface ServiceStatusPanelProps {
   remoteModel: RemoteModelStatus | null;
 }
 
-type NodeKey = 'daemon' | 'everos' | 'localModel' | 'embedding' | 'rerank' | 'remoteModel' | 'remoteModel-llm' | 'remoteModel-multimodal';
+type NodeKey = string;
 
 interface StatusDisplay {
   label: string;
@@ -16,13 +22,19 @@ interface StatusDisplay {
   dotClass: string;
 }
 
-const STATE_DISPLAY: Record<ModelServiceStatus['state'], StatusDisplay> = {
+const STATE_DISPLAY: Record<string, StatusDisplay> = {
   idle: { label: '闲置', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' },
   starting: { label: '启动中', badgeClass: 'badge-info', dotClass: 'status-dot-starting' },
   downloading: { label: '下载中', badgeClass: 'badge-warning', dotClass: 'status-dot-downloading' },
   loading: { label: '加载中', badgeClass: 'badge-info', dotClass: 'status-dot-loading' },
   running: { label: '运行中', badgeClass: 'badge-success', dotClass: 'status-dot-running' },
   error: { label: '错误', badgeClass: 'badge-danger', dotClass: 'status-dot-error' },
+  ready: { label: '就绪', badgeClass: 'badge-success', dotClass: 'status-dot-running' },
+  preparable: { label: '待准备', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' },
+  preparing: { label: '准备中', badgeClass: 'badge-info', dotClass: 'status-dot-starting' },
+  manual: { label: '需 Agent', badgeClass: 'badge-warning', dotClass: 'status-dot-downloading' },
+  unavailable: { label: '不可用', badgeClass: 'badge-danger', dotClass: 'status-dot-error' },
+  unconfigured: { label: '未配置', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' },
 };
 
 const MAX_ERROR_LENGTH = 200;
@@ -40,7 +52,7 @@ function StatusBadge({ state, isDaemon = false, running }: { state?: string; isD
       ? { label: '运行中', badgeClass: 'badge-success', dotClass: 'status-dot-running' }
       : { label: '未运行', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' };
   } else if (state && state in STATE_DISPLAY) {
-    display = STATE_DISPLAY[state as ModelServiceStatus['state']];
+    display = STATE_DISPLAY[state];
   } else {
     display = { label: state ?? '未知', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' };
   }
@@ -61,6 +73,7 @@ interface TreeNodeProps {
   isDaemon?: boolean;
   running?: boolean;
   url?: string | null;
+  detail?: string | null;
   error?: string | null | undefined;
   expandedKeys: Set<NodeKey>;
   onToggle: (key: NodeKey) => void;
@@ -76,6 +89,7 @@ function TreeNode({
   isDaemon,
   running,
   url,
+  detail,
   error,
   expandedKeys,
   onToggle,
@@ -105,6 +119,7 @@ function TreeNode({
       {url && status === 'running' && (
         <div className="service-status-url">{url}</div>
       )}
+      {detail && <div className={'service-status-meta'}>{detail}</div>}
       {hasError && (
         <div className={`service-status-error ${isExpanded ? 'service-status-error--expanded' : ''}`}>
           <div className="service-status-error-inner">
@@ -146,7 +161,7 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
               icon="🖥️"
               isDaemon
               running={daemon?.daemonRunning ?? false}
-              error={daemon?.everos?.state === 'error' ? daemon.everos.error : null}
+              error={inferDaemonError(daemon)}
               expandedKeys={expandedKeys}
               onToggle={toggle}
             >
@@ -160,6 +175,31 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
                 expandedKeys={expandedKeys}
                 onToggle={toggle}
               />
+              <TreeNode
+                title={'代码图谱服务'}
+                nodeKey={'codeGraph'}
+                icon={'🕸️'}
+                status={daemon?.codeGraph.state}
+                url={daemon?.codeGraph.url}
+                detail={formatCodeGraphJobStatus(daemon)}
+                error={daemon?.codeGraph.error ?? null}
+                expandedKeys={expandedKeys}
+                onToggle={toggle}
+              >
+                {daemon?.codeGraph.providers.map(provider => (
+                  <TreeNode
+                    key={provider.providerId}
+                    title={provider.displayName}
+                    nodeKey={`codeGraph-provider-${provider.providerId}`}
+                    icon={'◈'}
+                    status={provider.state}
+                    detail={formatCodeGraphProviderDetail(provider)}
+                    error={provider.state === 'unavailable' ? provider.message : null}
+                    expandedKeys={expandedKeys}
+                    onToggle={toggle}
+                  />
+                ))}
+              </TreeNode>
               <TreeNode
                 title="本地模型服务"
                 nodeKey="localModel"
@@ -229,6 +269,21 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
       </div>
     </div>
   );
+}
+
+function inferDaemonError(daemon: DaemonStatus | null): string | null {
+  if (!daemon) return null;
+  return [daemon.everos.error, daemon.codeGraph.error].filter(Boolean).join('; ') || null;
+}
+
+function formatCodeGraphJobStatus(daemon: DaemonStatus | null): string | null {
+  if (!daemon) return null;
+  return `活跃任务 ${daemon.codeGraph.activeJobs} · 排队 ${daemon.codeGraph.queuedJobs}`;
+}
+
+function formatCodeGraphProviderDetail(provider: CodeGraphProviderStatus): string | null {
+  const parts = [provider.version ? `v${provider.version}` : '', provider.message ?? ''].filter(Boolean);
+  return parts.join(' · ') || null;
 }
 
 function inferLocalModelState(localModel: LocalModelStatus | null): ModelServiceStatus['state'] | undefined {

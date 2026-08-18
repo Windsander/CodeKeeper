@@ -4,9 +4,24 @@ import { Dropdown } from '../components/Dropdown';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { getRoleUI, type RoleFieldConfig } from '../roles/role-registry.js';
-import type { Role, RoleConfig, Project, GitlabConfig, MaintainerConfig } from '../../shared/types.js';
+import type {
+  ReviewerConfig,
+  Project,
+  GitlabConfig,
+  MaintainerConfig,
+} from '../../shared/types.js';
 
-type FilterField = 'author' | 'assignee' | 'reviewer' | 'label' | 'sourceBranch' | 'targetBranch' | 'draft';
+type GitlabRole = 'reviewer' | 'maintainer';
+type GitlabRoleConfig = ReviewerConfig | MaintainerConfig;
+
+type FilterField =
+  | 'author'
+  | 'assignee'
+  | 'reviewer'
+  | 'label'
+  | 'sourceBranch'
+  | 'targetBranch'
+  | 'draft';
 
 interface FilterCondition {
   field: FilterField;
@@ -14,7 +29,7 @@ interface FilterCondition {
 }
 
 interface RoleProjectConfigProps {
-  role: Role;
+  role: GitlabRole;
   project: Project;
   onSaved: () => void;
 }
@@ -92,7 +107,7 @@ function getAutocompleteOptions(
     case 'author':
     case 'assignee':
     case 'reviewer':
-      return members.map((m) => (m.name ? `${m.username} (${m.name})` : m.username));
+      return members.map(m => (m.name ? `${m.username} (${m.name})` : m.username));
     case 'label':
       return labels;
     default:
@@ -100,7 +115,7 @@ function getAutocompleteOptions(
   }
 }
 
-function configsEqualIgnoringFilter(a: RoleConfig, b: RoleConfig): boolean {
+function configsEqualIgnoringFilter(a: GitlabRoleConfig, b: GitlabRoleConfig): boolean {
   const { filter: _a, ...restA } = a;
   const { filter: _b, ...restB } = b;
   return JSON.stringify(restA) === JSON.stringify(restB);
@@ -126,7 +141,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
     setToken(updatedGitlab.token);
   }, [project.gitlab?.baseUrl, project.gitlab?.projectPath, project.gitlab?.token]);
 
-  const [config, setConfig] = useState<RoleConfig>(() => ui.defaultConfig);
+  const [config, setConfig] = useState<GitlabRoleConfig>(() => ui.defaultConfig);
   const [filterConditions, setFilterConditions] = useState<FilterCondition[]>([]);
 
   const [members, setMembers] = useState<Array<{ username: string; name?: string }>>([]);
@@ -147,7 +162,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
 
   const reviewSchedule = config.reviewSchedule;
   const learningEnabled = config.learningEnabled;
-  const isCustom = !REVIEW_INTERVALS.some((i) => i.cron === reviewSchedule && i.cron !== 'custom');
+  const isCustom = !REVIEW_INTERVALS.some(i => i.cron === reviewSchedule && i.cron !== 'custom');
   const [customSchedule, setCustomSchedule] = useState(reviewSchedule);
 
   const parsedGitlab = parseGitlabUrl(gitlabUrl);
@@ -189,8 +204,8 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   // 加载角色配置（缺失字段用默认值补齐，方便新增配置项时向后兼容）
   useEffect(() => {
     let cancelled = false;
-    invoke<{ config: RoleConfig }>('project.role.config.get', { projectId: project.id, role })
-      .then((res) => {
+    invoke<{ config: GitlabRoleConfig }>('project.role.config.get', { projectId: project.id, role })
+      .then(res => {
         if (cancelled) return;
         const loaded = res.config;
         const merged = { ...ui.defaultConfig, ...loaded };
@@ -198,7 +213,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
         setFilterConditions(loaded.filter?.conditions ?? []);
         setCustomSchedule(loaded.reviewSchedule);
       })
-      .catch((err) => {
+      .catch(err => {
         if (cancelled) return;
         console.error(`加载 ${role} 配置失败:`, err);
       });
@@ -212,13 +227,13 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
     let cancelled = false;
     setSoulLoading(true);
     invoke('project.soul.get', { projectId: project.id })
-      .then((res) => {
+      .then(res => {
         if (cancelled) return;
         const soul = (res as { soul: { content: string; sourcePath: string } }).soul;
         setSoulContent(soul.content);
         setSoulSourcePath(soul.sourcePath);
       })
-      .catch((err) => {
+      .catch(err => {
         if (cancelled) return;
         console.error('加载 SOUL.md 失败:', err);
       })
@@ -237,7 +252,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
     invoke('project.gitlab.verify', {
       projectId: project.id,
       gitlab: project.gitlab,
-    }).catch((err) => {
+    }).catch(err => {
       if (cancelled) return;
       const message = err instanceof Error ? err.message : String(err);
       if (/\b(401|403)\b/.test(message)) {
@@ -288,16 +303,16 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
 
   const handleIntervalChange = (value: string) => {
     if (value === 'custom') {
-      setConfig((prev) => ({ ...prev, reviewSchedule: customSchedule }));
+      setConfig(prev => ({ ...prev, reviewSchedule: customSchedule }));
     } else {
-      setConfig((prev) => ({ ...prev, reviewSchedule: value }));
+      setConfig(prev => ({ ...prev, reviewSchedule: value }));
       setCustomSchedule(value);
     }
   };
 
   const handleCustomScheduleChange = (value: string) => {
     setCustomSchedule(value);
-    setConfig((prev) => ({ ...prev, reviewSchedule: value }));
+    setConfig(prev => ({ ...prev, reviewSchedule: value }));
   };
 
   const detectGit = async () => {
@@ -325,15 +340,15 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   };
 
   const addFilterCondition = () => {
-    setFilterConditions((prev) => [...prev, { field: 'author', values: [''] }]);
+    setFilterConditions(prev => [...prev, { field: 'author', values: [''] }]);
   };
 
   const removeFilterCondition = (index: number) => {
-    setFilterConditions((prev) => prev.filter((_, i) => i !== index));
+    setFilterConditions(prev => prev.filter((_, i) => i !== index));
   };
 
   const updateFilterField = (index: number, field: FilterField) => {
-    setFilterConditions((prev) => {
+    setFilterConditions(prev => {
       const next = [...prev];
       next[index] = { field, values: field === 'draft' ? ['false'] : [''] };
       return next;
@@ -341,12 +356,12 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   };
 
   const updateFilterValues = (index: number, raw: string) => {
-    setFilterConditions((prev) => {
+    setFilterConditions(prev => {
       const next = [...prev];
       const field = next[index].field;
       const values = raw
         .split(',')
-        .map((v) => {
+        .map(v => {
           const trimmed = v.trim();
           if (field === 'author' || field === 'assignee' || field === 'reviewer') {
             const match = trimmed.match(/^(.+?)\s*\(/);
@@ -361,19 +376,22 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   };
 
   const updateDraftValue = (index: number, value: string) => {
-    setFilterConditions((prev) => {
+    setFilterConditions(prev => {
       const next = [...prev];
       next[index] = { ...next[index], values: [value] };
       return next;
     });
   };
 
-  const updateConfigField = <K extends keyof RoleConfig>(key: K, value: RoleConfig[K]) => {
-    setConfig((prev) => ({ ...prev, [key]: value }));
+  const updateConfigField = <K extends keyof GitlabRoleConfig>(
+    key: K,
+    value: GitlabRoleConfig[K]
+  ) => {
+    setConfig(prev => ({ ...prev, [key]: value }));
   };
 
-  const renderRoleField = (field: RoleFieldConfig<Role>) => {
-    const value = config[field.key as keyof RoleConfig];
+  const renderRoleField = (field: RoleFieldConfig<GitlabRole>) => {
+    const value = config[field.key as keyof GitlabRoleConfig];
     const fieldId = `role-field-${role}-${String(field.key)}`;
     switch (field.type) {
       case 'text': {
@@ -385,7 +403,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               id={fieldId}
               className="input"
               value={textValue}
-              onChange={(e) => updateConfigField(field.key as keyof RoleConfig, e.target.value)}
+              onChange={e => updateConfigField(field.key as keyof GitlabRoleConfig, e.target.value)}
             />
           </div>
         );
@@ -401,7 +419,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
                 { value: 'on', label: '开启' },
                 { value: 'off', label: '关闭' },
               ]}
-              onChange={(v) => updateConfigField(field.key as keyof RoleConfig, v === 'on')}
+              onChange={v => updateConfigField(field.key as keyof GitlabRoleConfig, v === 'on')}
               aria-labelledby={`${fieldId}-label`}
             />
           </div>
@@ -417,7 +435,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               className="input"
               value={scheduleValue}
               placeholder="*/10 * * * *"
-              onChange={(e) => updateConfigField(field.key as keyof RoleConfig, e.target.value)}
+              onChange={e => updateConfigField(field.key as keyof GitlabRoleConfig, e.target.value)}
             />
           </div>
         );
@@ -428,18 +446,18 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
           <div key={String(field.key)} className="form-group">
             <label>{field.label}</label>
             <div className="form-row" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-              {RISK_LEVEL_OPTIONS.map((opt) => (
+              {RISK_LEVEL_OPTIONS.map(opt => (
                 <label key={opt.value} className="form-checkbox">
                   <input
                     type="checkbox"
                     checked={levels.includes(opt.value)}
                     onChange={() => {
                       const next = levels.includes(opt.value)
-                        ? levels.filter((v) => v !== opt.value)
+                        ? levels.filter(v => v !== opt.value)
                         : [...levels, opt.value];
                       updateConfigField(
-                        field.key as keyof RoleConfig,
-                        next as unknown as RoleConfig[keyof RoleConfig]
+                        field.key as keyof GitlabRoleConfig,
+                        next as unknown as GitlabRoleConfig[keyof GitlabRoleConfig]
                       );
                     }}
                   />
@@ -459,7 +477,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
             <Dropdown
               value={selectValue}
               options={selectOptions}
-              onChange={(v) => updateConfigField(field.key as keyof RoleConfig, v)}
+              onChange={v => updateConfigField(field.key as keyof GitlabRoleConfig, v)}
               aria-labelledby={`${fieldId}-label`}
             />
           </div>
@@ -511,9 +529,11 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
       await loadSuggestions();
 
       // 从 project 中读取当前启用状态，避免保存时覆盖用户在卡片上切换的启停开关
-      const currentEnabled = project.roles?.[role]?.enabled ?? false;
+      const currentRoleConfig = project.roles?.[role];
+      const currentEnabled =
+        currentRoleConfig?.role === 'archiver' ? false : (currentRoleConfig?.enabled ?? false);
 
-      const nextConfig: RoleConfig = {
+      const nextConfig: GitlabRoleConfig = {
         ...config,
         enabled: currentEnabled,
         reviewSchedule: reviewSchedule.trim(),
@@ -561,13 +581,17 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
 
   return (
     <div className="card" style={{ marginTop: 16, background: 'var(--main-bg)' }}>
-      {error && <div className="error-message" style={{ marginBottom: 16 }}>{error}</div>}
+      {error && (
+        <div className="error-message" style={{ marginBottom: 16 }}>
+          {error}
+        </div>
+      )}
 
       <CollapsibleSection
         title="Git 仓库"
         defaultExpanded={true}
         expanded={gitExpanded}
-        onToggle={() => setGitExpanded((prev) => !prev)}
+        onToggle={() => setGitExpanded(prev => !prev)}
         collapsible={isGitlabReady}
         headerExtra={isGitlabReady ? <span className="badge badge-info">已配置</span> : null}
       >
@@ -578,7 +602,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               className="input"
               value={gitlabUrl}
               placeholder="https://gitlab.com/group/project"
-              onChange={(e) => setGitlabUrl(e.target.value)}
+              onChange={e => setGitlabUrl(e.target.value)}
             />
             <button
               type="button"
@@ -599,7 +623,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               className={`input input-with-btn ${tokenError ? 'input-error input-flash' : ''}`}
               value={token}
               placeholder="请输入 GitLab Access Token"
-              onChange={(e) => {
+              onChange={e => {
                 setToken(e.target.value);
                 if (tokenError) setTokenError(false);
               }}
@@ -607,24 +631,45 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
             <button
               type="button"
               className="input-inline-btn"
-              onClick={() => setShowToken((prev) => !prev)}
+              onClick={() => setShowToken(prev => !prev)}
               aria-label={showToken ? '隐藏 Access Token' : '显示 Access Token'}
               title={showToken ? '隐藏' : '显示'}
             >
               {showToken ? (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
                   <line x1="1" y1="1" x2="23" y2="23" />
                 </svg>
               ) : (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                   <circle cx="12" cy="12" r="3" />
                 </svg>
               )}
             </button>
           </div>
-          <div className={`input-hint ${tokenError ? 'input-hint-error' : ''}`} style={{ marginTop: 6 }}>
+          <div
+            className={`input-hint ${tokenError ? 'input-hint-error' : ''}`}
+            style={{ marginTop: 6 }}
+          >
             {tokenError
               ? 'Access Token 不能为空'
               : '需要 api、read_repository、write_repository 权限以读取 MR 并发表评论'}
@@ -638,7 +683,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
             title="过滤条件"
             defaultExpanded={false}
             expanded={filterExpanded}
-            onToggle={() => setFilterExpanded((prev) => !prev)}
+            onToggle={() => setFilterExpanded(prev => !prev)}
             headerExtra={
               <span className={`badge ${isFilterConfigured ? 'badge-success' : 'badge-warning'}`}>
                 {isFilterConfigured ? '有过滤' : '无过滤'}
@@ -658,15 +703,15 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               >
                 <Dropdown
                   value={condition.field}
-                  options={FILTER_FIELD_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-                  onChange={(value) => updateFilterField(index, value as FilterField)}
+                  options={FILTER_FIELD_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+                  onChange={value => updateFilterField(index, value as FilterField)}
                   className="filter-field-dropdown"
                 />
                 {condition.field === 'draft' ? (
                   <Dropdown
                     value={condition.values[0] ?? 'false'}
                     options={DRAFT_OPTIONS}
-                    onChange={(value) => updateDraftValue(index, value)}
+                    onChange={value => updateDraftValue(index, value)}
                   />
                 ) : condition.field === 'sourceBranch' ? (
                   <AutocompleteInput
@@ -674,13 +719,13 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
                     options={branches}
                     placeholder="输入分支名，如 feature/my-branch"
                     loading={suggestLoading}
-                    onChange={(value) => updateFilterValues(index, value)}
+                    onChange={value => updateFilterValues(index, value)}
                   />
                 ) : condition.field === 'targetBranch' ? (
                   <Dropdown
                     value={condition.values[0] ?? ''}
-                    options={protectedBranches.map((b) => ({ value: b, label: b }))}
-                    onChange={(value) => updateFilterValues(index, value)}
+                    options={protectedBranches.map(b => ({ value: b, label: b }))}
+                    onChange={value => updateFilterValues(index, value)}
                   />
                 ) : (
                   <AutocompleteInput
@@ -692,7 +737,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
                         : '输入用户名，多个用英文逗号分隔'
                     }
                     loading={suggestLoading}
-                    onChange={(value) => updateFilterValues(index, value)}
+                    onChange={value => updateFilterValues(index, value)}
                   />
                 )}
                 <button
@@ -704,11 +749,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
                 </button>
               </div>
             ))}
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={addFilterCondition}
-            >
+            <button type="button" className="btn btn-primary btn-sm" onClick={addFilterCondition}>
               + 添加条件
             </button>
           </CollapsibleSection>
@@ -717,7 +758,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
             title="Agent 策略"
             defaultExpanded={false}
             expanded={agentExpanded}
-            onToggle={() => setAgentExpanded((prev) => !prev)}
+            onToggle={() => setAgentExpanded(prev => !prev)}
             headerExtra={
               <span className={`badge ${isAgentDefault ? 'badge-info' : 'badge-success'}`}>
                 {isAgentDefault ? '默认值' : '已配置'}
@@ -731,7 +772,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               <Dropdown
                 value={learningEnabled ? 'on' : 'off'}
                 options={LEARNING_OPTIONS}
-                onChange={(value) => updateConfigField('learningEnabled', value === 'on')}
+                onChange={value => updateConfigField('learningEnabled', value === 'on')}
               />
               <div className="project-meta" style={{ marginTop: 6 }}>
                 开启后，Agent 会从人工 review、resolve/comment 行为中学习并优化后续策略。
@@ -742,8 +783,8 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               <label>调度间隔</label>
               <Dropdown
                 value={isCustom ? 'custom' : reviewSchedule}
-                options={REVIEW_INTERVALS.map((i) => ({ value: i.cron, label: i.label }))}
-                onChange={(value) => handleIntervalChange(value)}
+                options={REVIEW_INTERVALS.map(i => ({ value: i.cron, label: i.label }))}
+                onChange={value => handleIntervalChange(value)}
               />
               {isCustom && (
                 <input
@@ -751,7 +792,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
                   style={{ marginTop: 8 }}
                   value={customSchedule}
                   placeholder="*/10 * * * *"
-                  onChange={(e) => handleCustomScheduleChange(e.target.value)}
+                  onChange={e => handleCustomScheduleChange(e.target.value)}
                 />
               )}
               <div className="project-meta" style={{ marginTop: 6 }}>
@@ -764,13 +805,11 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
             title={`Agent 个性配置（${displaySoulFileName}）`}
             defaultExpanded={false}
             expanded={soulExpanded}
-            onToggle={() => setSoulExpanded((prev) => !prev)}
+            onToggle={() => setSoulExpanded(prev => !prev)}
             headerExtra={
               <span
                 className={`badge ${
-                  soulConfigStatus === 'full'
-                    ? 'badge-success'
-                    : 'badge-warning'
+                  soulConfigStatus === 'full' ? 'badge-success' : 'badge-warning'
                 }`}
               >
                 {soulConfigStatus === 'full'
@@ -782,7 +821,10 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
             }
           >
             <div className="form-group">
-              <div className="form-row" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div
+                className="form-row"
+                style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}
+              >
                 <label style={{ marginBottom: 0 }}>SOUL.md 内容</label>
                 <button
                   type="button"
@@ -795,10 +837,15 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
               </div>
               <textarea
                 className="input"
-                style={{ minHeight: 240, fontFamily: 'monospace', lineHeight: 1.5, resize: 'vertical' }}
+                style={{
+                  minHeight: 240,
+                  fontFamily: 'monospace',
+                  lineHeight: 1.5,
+                  resize: 'vertical',
+                }}
                 value={soulContent}
                 placeholder="# Agent 个性配置&#10;## 风格&#10;..."
-                onChange={(e) => setSoulContent(e.target.value)}
+                onChange={e => setSoulContent(e.target.value)}
               />
               <div className="project-meta" style={{ marginTop: 6 }}>
                 保存位置: {soulSourcePath}
@@ -809,11 +856,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button
-          className="btn btn-primary"
-          onClick={save}
-          disabled={saving || !isGitlabValid}
-        >
+        <button className="btn btn-primary" onClick={save} disabled={saving || !isGitlabValid}>
           {saving ? '保存中...' : '保存'}
         </button>
         {saved && <span className="badge badge-success">已保存</span>}

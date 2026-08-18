@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react';
-import type { Role } from '../../shared/types.js';
+import type { Project, Role } from '../../shared/types.js';
 
 /**
  * 根据角色获取对应配置类型的辅助类型
@@ -8,7 +8,9 @@ type RoleConfigOf<R extends Role> = R extends 'reviewer'
   ? import('../../shared/types.js').ReviewerConfig
   : R extends 'maintainer'
     ? import('../../shared/types.js').MaintainerConfig
-    : never;
+    : R extends 'archiver'
+      ? import('../../shared/types.js').ArchiverConfig
+      : never;
 
 /**
  * 字段类型：文本输入、开关、定时调度、风险等级多选、下拉选择
@@ -53,6 +55,14 @@ export interface RoleUIConfig<R extends Role> {
   projectConfigFields: RoleFieldConfig<R>[];
   /** 默认配置 */
   defaultConfig: RoleConfigOf<R>;
+  /** 是否依赖 GitLab 配置，默认 true */
+  requiresGitlab?: boolean;
+  /** 项目配置区域说明 */
+  projectDescription?: string;
+  /** 页面底部运行机制说明 */
+  serviceDescription?: string;
+  /** 角色自定义项目配置面板 */
+  projectConfigComponent?: ComponentType<{ project: Project; onSaved: () => void }>;
 }
 
 /** 内部注册表 */

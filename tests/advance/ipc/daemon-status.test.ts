@@ -11,7 +11,7 @@ describe('daemon.status handler', () => {
       store: {} as HandlerContext['store'],
       registry: {} as HandlerContext['registry'],
       serviceRegistry: {} as HandlerContext['serviceRegistry'],
-      dbPath: '/tmp/db.sqlite',
+      dbPath: 'virtual-state/database.sqlite',
       getClient: () => null,
       isDaemonRunning: () => true,
       getEverosStatus: () => ({
@@ -19,12 +19,28 @@ describe('daemon.status handler', () => {
         url: 'http://127.0.0.1:8000',
         error: null,
       }),
+      getCodeGraphStatus: () => ({
+        state: 'running',
+        url: 'http://127.0.0.1:7010',
+        error: null,
+        activeJobs: 1,
+        queuedJobs: 2,
+        providers: [],
+      }),
     };
 
     const result = await handlers['daemon.status'](ctx, undefined);
     expect(result).toEqual({
       daemonRunning: true,
       everos: { state: 'running', url: 'http://127.0.0.1:8000', error: null },
+      codeGraph: {
+        state: 'running',
+        url: 'http://127.0.0.1:7010',
+        error: null,
+        activeJobs: 1,
+        queuedJobs: 2,
+        providers: [],
+      },
     });
   });
 
@@ -33,7 +49,7 @@ describe('daemon.status handler', () => {
       store: {} as HandlerContext['store'],
       registry: {} as HandlerContext['registry'],
       serviceRegistry: {} as HandlerContext['serviceRegistry'],
-      dbPath: '/tmp/db.sqlite',
+      dbPath: 'virtual-state/database.sqlite',
       getClient: () => null,
     };
 
@@ -41,6 +57,14 @@ describe('daemon.status handler', () => {
     expect(result).toEqual({
       daemonRunning: false,
       everos: { state: 'idle', url: null, error: null },
+      codeGraph: {
+        state: 'idle',
+        url: null,
+        error: null,
+        activeJobs: 0,
+        queuedJobs: 0,
+        providers: [],
+      },
     });
   });
 });
@@ -51,7 +75,7 @@ describe('localModel.status handler', () => {
       store: {} as HandlerContext['store'],
       registry: {} as HandlerContext['registry'],
       serviceRegistry: {} as HandlerContext['serviceRegistry'],
-      dbPath: '/tmp/db.sqlite',
+      dbPath: 'virtual-state/database.sqlite',
       getClient: () => null,
       localModelManager: {
         getStatus: () => ({

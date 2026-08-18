@@ -1,8 +1,7 @@
 /**
  * project-status-store 单元测试
  *
- * 状态文件存放在 CodeKeeper App 存储空间：
- * ~/.codekeeper/memory/agents/{projectName}/mr-agent-project-status.json
+ * 状态文件存放在应用存储空间的项目代理目录中。
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -25,7 +24,7 @@ function makeProject(): Project {
   return {
     id: `test-${TEST_PROJECT_NAME}`,
     name: TEST_PROJECT_NAME,
-    rootPath: '/tmp/ck-status-project',
+    rootPath: 'virtual-project/status',
     registeredAt: Date.now(),
     lastScannedAt: null,
   };

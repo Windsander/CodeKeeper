@@ -40,6 +40,25 @@ vi.mock('../../src/advance/classic/memory/local-model-service.js', () => ({
   },
 }));
 
+vi.mock('../../src/advance/archiver/codegraph-service.js', () => ({
+  CodeGraphService: class {
+    async start(): Promise<string> {
+      return 'http://127.0.0.1:7010';
+    }
+    async stop(): Promise<void> {}
+    getStatus() {
+      return {
+        state: 'running',
+        url: 'http://127.0.0.1:7010',
+        error: null,
+        activeJobs: 0,
+        queuedJobs: 0,
+        providers: [],
+      };
+    }
+  },
+}));
+
 async function waitCondition(condition: () => boolean, timeoutMs: number): Promise<void> {
   const start = Date.now();
   while (!condition()) {

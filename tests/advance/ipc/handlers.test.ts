@@ -6,10 +6,8 @@ import { MetadataStore } from '../../../src/advance/store/metadata-store';
 import { ProjectRegistry } from '../../../src/advance/project-registry';
 import { handlers, type HandlerContext } from '../../../src/advance/ipc/handlers';
 import type { LocalModelServiceManager } from '../../../src/advance/classic/memory/local-model-service.js';
-import {
-  loadDaemonConfig,
-  saveDaemonConfig,
-} from '../../../src/advance/config/daemon-config.js';
+import type { ArchiverProviderOrchestrator } from '../../../src/advance/archiver/provider-orchestrator.js';
+import { loadDaemonConfig, saveDaemonConfig } from '../../../src/advance/config/daemon-config.js';
 
 vi.mock('../../../src/advance/config/daemon-config.js', () => ({
   loadDaemonConfig: vi.fn(),
@@ -67,7 +65,150 @@ describe('ipc handlers', () => {
       getModelLogs: vi.fn(),
     } as unknown as LocalModelServiceManager;
 
-    await expect(handlers['localModel.logs'](ctx, { capability: 'invalid' })).rejects.toThrow('无效的模型能力');
+    await expect(handlers['localModel.logs'](ctx, { capability: 'invalid' })).rejects.toThrow(
+      '无效的模型能力'
+    );
+  });
+
+  it('拒绝角色与配置角色不一致的更新', async () => {
+    const root = mkdtempSync(join(tmp, 'project-'));
+    const project = registry.register(root);
+
+    await expect(
+      handlers['project.role.config.update'](ctx, {
+        projectId: project.id,
+        role: 'archiver',
+        config: {
+          role: 'reviewer',
+          enabled: false,
+          reviewSchedule: '*/10 * * * *',
+          learningEnabled: true,
+        },
+      })
+    ).rejects.toThrow('角色配置不匹配');
+  });
+
+  it('返回 Archiver Provider Catalog', async () => {
+    const result = (await handlers['archiver.provider.catalog'](ctx, {})) as {
+      providers: Array<Record<string, unknown> & { id: string }>;
+    };
+
+    expect(result.providers.map(provider => provider.id)).toEqual(
+      expect.arrayContaining(['builtin', 'graphify', 'codebase-memory-mcp'])
+    );
+    expect(result.providers.every(provider => !('defaultExecutable' in provider))).toBe(true);
+    expect(result.providers.every(provider => !('launchPresets' in provider))).toBe(true);
+    expect(result.providers.every(provider => !('options' in provider))).toBe(true);
+    expect(result.providers.every(provider => !('managedRuntime' in provider))).toBe(true);
+    expect(result.providers.find(provider => provider.id === 'graphify')).toMatchObject({
+      preparation: 'managed',
+    });
+    expect(result.providers.find(provider => provider.id === 'builtin')).toMatchObject({
+      preparation: 'builtin',
+    });
+  });
+
+  it('使用项目配置探测 Archiver Provider', async () => {
+    const root = mkdtempSync(join(tmp, 'project-'));
+    const project = registry.register(root);
+    const probeProject = vi.fn().mockResolvedValue([
+      {
+        providerId: 'graphify',
+        available: true,
+        executable: 'virtual-provider-command',
+        version: 'test',
+        message: '自动选择 virtual-provider-command',
+      },
+    ]);
+    ctx.archiverProviderOrchestrator = {
+      probeProject,
+    } as unknown as ArchiverProviderOrchestrator;
+
+    const result = (await handlers['archiver.provider.probe'](ctx, {
+      projectId: project.id,
+    })) as {
+      providers: Array<Record<string, unknown> & { providerId: string; available: boolean }>;
+    };
+
+    expect(result.providers).toEqual([
+      {
+        providerId: 'graphify',
+        available: true,
+        readiness: 'ready',
+        prepared: false,
+        version: 'test',
+        message: '已检测到可用的本机 Provider。',
+      },
+    ]);
+    expect(result.providers[0]).not.toHaveProperty('executable');
+    expect(result.providers[0].message).toBe('已检测到可用的本机 Provider。');
+    expect(probeProject).toHaveBeenCalledWith(
+      expect.objectContaining({ id: project.id }),
+      expect.any(String)
+    );
+  });
+
+  it('返回 Provider 运行状态时不暴露归档产物路径', async () => {
+    const root = mkdtempSync(join(tmp, 'project-'));
+    const project = registry.register(root);
+    ctx.archiverProviderOrchestrator = {
+      readStatus: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        projectId: project.id,
+        generatedAt: 1,
+        selectedPrimary: 'graphify',
+        statuses: [
+          {
+            providerId: 'graphify',
+            placement: 'primary',
+            state: 'completed',
+            startedAt: 1,
+            finishedAt: 2,
+            artifacts: ['virtual-archive/providers/graphify/graph.json'],
+            message: '执行失败：virtual-provider-root/internal-error',
+          },
+        ],
+      }),
+    } as unknown as ArchiverProviderOrchestrator;
+
+    const result = (await handlers['archiver.provider.status'](ctx, {
+      projectId: project.id,
+    })) as { status: { statuses: Array<Record<string, unknown>> } };
+
+    expect(result.status.statuses[0]).not.toHaveProperty('artifacts');
+    expect(result.status.statuses[0]).not.toHaveProperty('message');
+    expect(result.status.statuses[0]).toMatchObject({
+      providerId: 'graphify',
+      state: 'completed',
+    });
+  });
+
+  it('Provider 自动准备失败时只返回脱敏后的环境诊断', async () => {
+    const root = mkdtempSync(join(tmp, 'project-'));
+    const project = registry.register(root);
+    ctx.archiverProviderOrchestrator = {
+      probeProject: vi.fn().mockResolvedValue([
+        {
+          providerId: 'understand-anything',
+          available: false,
+          readiness: 'manual',
+          prepared: false,
+          message: '未检测到 Git，无法准备 Skill 资源：virtual-provider-root/internal',
+        },
+      ]),
+    } as unknown as ArchiverProviderOrchestrator;
+
+    const result = (await handlers['archiver.provider.probe'](ctx, {
+      projectId: project.id,
+    })) as { providers: Array<Record<string, unknown>> };
+
+    expect(result.providers[0]).toMatchObject({
+      providerId: 'understand-anything',
+      readiness: 'manual',
+      prepared: false,
+      message: 'Skill 自动准备失败：未检测到可用的 Git。',
+    });
+    expect(JSON.stringify(result.providers[0])).not.toContain('virtual-provider-root');
   });
 
   describe('daemon.config', () => {

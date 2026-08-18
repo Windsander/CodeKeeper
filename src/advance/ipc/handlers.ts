@@ -16,7 +16,11 @@ import {
 import { UndoExecutor } from '../archive/undo-executor';
 import { detectGitInfo } from '../utils/git-info';
 import { loadSoulContent, saveSoulContent } from '../classic/soul/soul-loader.js';
-import { loadProjectStatus, clearProjectError, recordProjectError } from '../classic/status/project-status-store.js';
+import {
+  loadProjectStatus,
+  clearProjectError,
+  recordProjectError,
+} from '../classic/status/project-status-store.js';
 import type { ScanService } from '../scan/scan-service.js';
 import type { IGitProvider } from '../classic/provider/types.js';
 import type { RoleServiceRegistry } from '../classic/role-service-registry.js';
@@ -24,14 +28,42 @@ import type { LocalModelServiceManager } from '../classic/memory/local-model-ser
 import type { ModelCapability } from '../classic/memory/model-server.js';
 import { ReviewerManager } from '../classic/roles/reviewer-manager.js';
 import { MaintainerManager } from '../classic/roles/maintainer-manager.js';
+import { ArchiverManager } from '../classic/roles/archiver-manager.js';
 import type { Role, RoleConfig, GitlabConfig } from '../types.js';
 import type { IRoleManager } from '../classic/roles/role-manager.js';
+import { ArchiverProviderOrchestrator } from '../archiver/provider-orchestrator.js';
+import type { CodeGraphServiceController } from '../archiver/codegraph-service.js';
 
 import { readDirectoryTree } from '../utils/file-tree';
-import { everosMemorySearch, type EverOSSearchItem, everosMemoryGet, extractOwnersFromGetResult, type EverOSMemoryGetResult, type EverOSMemoryGetParams } from '../classic/memory/everos-api.js';
+import {
+  everosMemorySearch,
+  type EverOSSearchItem,
+  everosMemoryGet,
+  extractOwnersFromGetResult,
+  type EverOSMemoryGetResult,
+  type EverOSMemoryGetParams,
+} from '../classic/memory/everos-api.js';
 import { buildMemoryGraph } from '../classic/memory/graph-builder.js';
-import type { MemoryEntry, MemorySearchParams, MemoryDeleteParams } from '../../electron/shared/types.js';
-import type { DaemonStatus, EverosStatus, LocalModelStatus, RemoteModelStatus } from '../../electron/shared/service-status.js';
+import type {
+  ArchiverProviderDescriptor as PublicArchiverProviderDescriptor,
+  ArchiverProviderProbeResult as PublicArchiverProviderProbeResult,
+  ArchiverProviderRunReport as PublicArchiverProviderRunReport,
+  MemoryEntry,
+  MemorySearchParams,
+  MemoryDeleteParams,
+} from '../../electron/shared/types.js';
+import type {
+  ArchiverProviderDescriptor as InternalArchiverProviderDescriptor,
+  ArchiverProviderProbeResult as InternalArchiverProviderProbeResult,
+  ArchiverProviderRunReport as InternalArchiverProviderRunReport,
+} from '../archiver/provider-types.js';
+import type {
+  DaemonStatus,
+  CodeGraphServiceStatus,
+  EverosStatus,
+  LocalModelStatus,
+  RemoteModelStatus,
+} from '../../electron/shared/service-status.js';
 import type { RemoteModelChecker } from '../classic/memory/remote-model-checker.js';
 
 export interface HandlerContext {
@@ -77,6 +109,12 @@ export interface HandlerContext {
   isDaemonRunning?: () => boolean;
   /** 获取 EverOS 当前状态 */
   getEverosStatus?: () => EverosStatus;
+  /** Daemon 托管的统一 CodeGraph 服务 */
+  codeGraphService?: CodeGraphServiceController;
+  /** 获取 CodeGraph 服务当前状态 */
+  getCodeGraphStatus?: () => CodeGraphServiceStatus;
+  /** Archiver Provider 编排器，测试或自定义运行时可替换 */
+  archiverProviderOrchestrator?: ArchiverProviderOrchestrator;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -124,9 +162,9 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { success: true };
   },
 
-  'project.list': async (ctx) => {
+  'project.list': async ctx => {
     const projects = ctx.registry.list();
-    return projects.map((p) => {
+    return projects.map(p => {
       const dbCounts = ctx.store.getProjectCounts(p.id);
       const archiveRoot = getArchiveRoot(p);
       const statusPath = join(archiveRoot, 'status.json');
@@ -184,7 +222,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const client = ctx.getClient();
     if (!client) throw new Error('未配置 API Key');
     if (!ctx.scanService) throw new Error('扫描服务未初始化');
-    logger.info({ projectId: project.id, projectRoot: project.rootPath }, '收到手动扫描请求，已加入后台队列');
+    logger.info(
+      { projectId: project.id, projectRoot: project.rootPath },
+      '收到手动扫描请求，已加入后台队列'
+    );
     ctx.scanService.scanProject(params.projectId);
     return { queued: true, scannedAt: Date.now() };
   },
@@ -240,7 +281,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'action.history': async (ctx, params) => {
     if (params.projectId === 'all') {
       const projects = ctx.registry.list();
-      return projects.flatMap((p) => ctx.store.listActionHistory(p.id));
+      return projects.flatMap(p => ctx.store.listActionHistory(p.id));
     }
     return ctx.store.listActionHistory(params.projectId);
   },
@@ -252,7 +293,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return executor.undo(params.actionId);
   },
 
-  'daemon.config': async (ctx) => {
+  'daemon.config': async ctx => {
     const fromDaemon = ctx.getDaemonConfig?.();
     if (fromDaemon) {
       return fromDaemon;
@@ -292,7 +333,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const role = (params.role as string) ?? '';
     const roleLower = role.toLowerCase();
     const all = readFileSync(logPath, 'utf-8').split('\n');
-    const filtered = all.filter((line) => line.toLowerCase().includes(roleLower));
+    const filtered = all.filter(line => line.toLowerCase().includes(roleLower));
     const count = params.lines ?? 100;
     return { lines: filtered.slice(-count) };
   },
@@ -334,7 +375,9 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (params.everos !== undefined) {
       if (params.everos) {
         try {
-          config.everos = JSON.parse(params.everos) as import('../config/daemon-config.js').EverOSConfig;
+          config.everos = JSON.parse(
+            params.everos
+          ) as import('../config/daemon-config.js').EverOSConfig;
         } catch {
           throw new Error('EverOS 配置不是合法 JSON');
         }
@@ -351,27 +394,25 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { success: true };
   },
 
-  'classic.start': async (ctx) => {
+  'classic.start': async ctx => {
     await ctx.serviceRegistry.start('reviewer');
     return { running: true };
   },
 
-  'classic.stop': async (ctx) => {
+  'classic.stop': async ctx => {
     await ctx.serviceRegistry.stop('reviewer');
     return { running: false };
   },
 
-  'classic.restart': async (ctx) => {
+  'classic.restart': async ctx => {
     await ctx.serviceRegistry.stop('reviewer');
     await ctx.serviceRegistry.start('reviewer');
     return { running: true };
   },
 
-  'classic.status': async (ctx) => {
+  'classic.status': async ctx => {
     const projects = ctx.registry.list();
-    const enabledProjects = projects.filter(
-      (p) => p.mrReview?.enabled && p.gitlab
-    ).length;
+    const enabledProjects = projects.filter(p => p.mrReview?.enabled && p.gitlab).length;
     const status = ctx.serviceRegistry.getStatus('reviewer');
     return {
       running: status.running,
@@ -441,7 +482,10 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
           recordProjectError(project, err, 'gitlab-api');
         }
       }
-      logger.warn({ err: message, gitlab: { baseUrl: gitlab.baseUrl, projectPath: gitlab.projectPath } }, 'GitLab 配置验证失败');
+      logger.warn(
+        { err: message, gitlab: { baseUrl: gitlab.baseUrl, projectPath: gitlab.projectPath } },
+        'GitLab 配置验证失败'
+      );
       throw new Error(`GitLab 配置验证失败：${message}`);
     }
   },
@@ -599,8 +643,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
     const deletedSessions = new Set(ctx.store.listDeletedMemorySessions(projectId));
     const entries: MemoryEntry[] = result.items
-      .filter((item) => !deletedSessions.has(item.sessionId ?? ''))
-      .map((item) => mapEverOSSearchItemToMemoryEntry(item));
+      .filter(item => !deletedSessions.has(item.sessionId ?? ''))
+      .map(item => mapEverOSSearchItemToMemoryEntry(item));
 
     return { entries };
   },
@@ -612,13 +656,13 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     return { success: true };
   },
 
-  'memory.graph': async (ctx) => {
+  'memory.graph': async ctx => {
     const projects = ctx.registry.list();
 
     // EverOS 尚未就绪时返回空记忆数据（保留项目节点），避免 UI 轮询抛错
     if (!ctx.everosUrl) {
       return buildMemoryGraph({
-        projects: projects.map((p) => ({ id: p.id, name: p.name, rootPath: p.rootPath })),
+        projects: projects.map(p => ({ id: p.id, name: p.name, rootPath: p.rootPath })),
         getResults: new Map(),
       });
     }
@@ -642,7 +686,13 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.warn(
-          { err, projectId: params.projectId, ownerKind: params.ownerKind, ownerId: params.ownerId, memoryType: params.memoryType },
+          {
+            err,
+            projectId: params.projectId,
+            ownerKind: params.ownerKind,
+            ownerId: params.ownerId,
+            memoryType: params.memoryType,
+          },
           `EverOS memory/get 查询失败，跳过: ${message}`
         );
         return { episodes: [], profiles: [], agent_cases: [], agent_skills: [], total_count: 0 };
@@ -666,7 +716,11 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     // 第一轮：用已知 agent 拉取 agent 侧数据，同时从 agent_case 中发现用户
     for (const project of projects) {
       const projectResult: EverOSMemoryGetResult = {
-        episodes: [], profiles: [], agent_cases: [], agent_skills: [], total_count: 0,
+        episodes: [],
+        profiles: [],
+        agent_cases: [],
+        agent_skills: [],
+        total_count: 0,
       };
 
       for (const agentId of knownAgents) {
@@ -697,7 +751,6 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
       getResults.set(project.id, projectResult);
     }
-
 
     // 第二轮：用发现的 users 拉取 user 侧数据
     for (const project of projects) {
@@ -740,7 +793,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     }
 
     const graph = buildMemoryGraph({
-      projects: projects.map((p) => ({ id: p.id, name: p.name, rootPath: p.rootPath })),
+      projects: projects.map(p => ({ id: p.id, name: p.name, rootPath: p.rootPath })),
       getResults,
       ownerDisplayNames,
     });
@@ -749,22 +802,28 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
   // ---------- Daemon 状态 IPC Handler ----------
 
-  'daemon.status': async (ctx) => {
+  'daemon.status': async ctx => {
     return {
       daemonRunning: ctx.isDaemonRunning?.() ?? false,
       everos: ctx.getEverosStatus?.() ?? { state: 'idle', url: null, error: null },
+      codeGraph: ctx.getCodeGraphStatus?.() ?? {
+        state: 'idle',
+        url: null,
+        error: null,
+        activeJobs: 0,
+        queuedJobs: 0,
+        providers: [],
+      },
     } satisfies DaemonStatus;
   },
 
   // ---------- 本地模型服务 IPC Handler ----------
 
-  'localModel.status': async (ctx) => {
-    return (
-      ctx.localModelManager?.getStatus() ?? {
-        embedding: { state: 'idle', url: null, error: null, progress: null },
-        rerank: { state: 'idle', url: null, error: null, progress: null },
-      }
-    ) satisfies LocalModelStatus;
+  'localModel.status': async ctx => {
+    return (ctx.localModelManager?.getStatus() ?? {
+      embedding: { state: 'idle', url: null, error: null, progress: null },
+      rerank: { state: 'idle', url: null, error: null, progress: null },
+    }) satisfies LocalModelStatus;
   },
 
   'localModel.logs': async (ctx, params) => {
@@ -772,19 +831,32 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (capability !== 'embedding' && capability !== 'rerank') {
       throw new Error(`无效的模型能力: ${capability}`);
     }
-    const lines = ctx.localModelManager?.getModelLogs(capability as ModelCapability, params.lines ?? 200) ?? [];
+    const lines =
+      ctx.localModelManager?.getModelLogs(capability as ModelCapability, params.lines ?? 200) ?? [];
     return { lines };
   },
 
   // ---------- 远端模型服务 IPC Handler ----------
 
-  'remoteModel.status': async (ctx) => {
-    return (
-      ctx.getRemoteModelStatus?.() ?? {
-        llm: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
-        multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
-      }
-    ) satisfies RemoteModelStatus;
+  'remoteModel.status': async ctx => {
+    return (ctx.getRemoteModelStatus?.() ?? {
+      llm: {
+        state: 'unconfigured',
+        modelLabel: '未配置',
+        fullModel: '',
+        baseUrl: null,
+        error: null,
+        lastCheckedAt: 0,
+      },
+      multimodal: {
+        state: 'unconfigured',
+        modelLabel: '未配置',
+        fullModel: '',
+        baseUrl: null,
+        error: null,
+        lastCheckedAt: 0,
+      },
+    }) satisfies RemoteModelStatus;
   },
 
   // ---------- 角色 IPC Handler ----------
@@ -797,7 +869,14 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   },
 
   'project.role.config.update': async (ctx, params) => {
-    const { projectId, role, config } = params as { projectId: string; role: Role; config: RoleConfig };
+    const { projectId, role, config } = params as {
+      projectId: string;
+      role: Role;
+      config: RoleConfig;
+    };
+    if (!config || config.role !== role) {
+      throw new Error(`角色配置不匹配: 请求角色为 ${role}，配置角色为 ${config?.role ?? '缺失'}`);
+    }
     const manager = createRoleManager(role, ctx.store);
     await manager.updateConfig(projectId, config);
     // 触发服务重启由后续 task 补齐
@@ -808,6 +887,32 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const { projectId, role } = params as { projectId: string; role: Role };
     const manager = createRoleManager(role, ctx.store);
     return manager.getStatus(projectId);
+  },
+
+  'archiver.provider.catalog': async ctx => {
+    const orchestrator = getArchiverProviderOrchestrator(ctx);
+    return { providers: orchestrator.listProviders().map(toPublicArchiverProviderDescriptor) };
+  },
+
+  'archiver.provider.probe': async (ctx, params) => {
+    const { projectId } = params as { projectId: string };
+    const project = ctx.store.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+    const orchestrator = getArchiverProviderOrchestrator(ctx);
+    const providers = await orchestrator.probeProject(project, getArchiveRoot(project));
+    return { providers: providers.map(toPublicArchiverProviderProbeResult) };
+  },
+
+  'archiver.provider.status': async (ctx, params) => {
+    const { projectId } = params as { projectId: string };
+    const project = ctx.store.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+    const orchestrator = getArchiverProviderOrchestrator(ctx);
+    return {
+      status: toPublicArchiverProviderRunReport(
+        await orchestrator.readStatus(getArchiveRoot(project))
+      ),
+    };
   },
 
   'role.service.start': async (ctx, params) => {
@@ -863,9 +968,99 @@ function createRoleManager(role: Role, store: MetadataStore): IRoleManager {
       return new ReviewerManager(store);
     case 'maintainer':
       return new MaintainerManager(store);
+    case 'archiver':
+      return new ArchiverManager(store);
     default:
       throw new Error(`未支持的角色: ${role}`);
   }
+}
+
+function getArchiverProviderOrchestrator(
+  ctx: HandlerContext
+): Pick<ArchiverProviderOrchestrator, 'listProviders' | 'probeProject' | 'readStatus'> {
+  return (
+    ctx.codeGraphService ??
+    ctx.archiverProviderOrchestrator ??
+    new ArchiverProviderOrchestrator()
+  );
+}
+
+function toPublicArchiverProviderDescriptor(
+  descriptor: InternalArchiverProviderDescriptor
+): PublicArchiverProviderDescriptor {
+  return {
+    id: descriptor.id,
+    displayName: descriptor.displayName,
+    description: descriptor.description,
+    homepage: descriptor.homepage,
+    license: descriptor.license,
+    kind: descriptor.kind,
+    automation: descriptor.automation,
+    placements: [...descriptor.placements],
+    capabilities: [...descriptor.capabilities],
+    preparation:
+      descriptor.kind === 'builtin' ? 'builtin' : descriptor.managedRuntime ? 'managed' : 'manual',
+    ...(descriptor.licenseNotice ? { licenseNotice: descriptor.licenseNotice } : {}),
+  };
+}
+
+function toPublicArchiverProviderProbeResult(
+  result: InternalArchiverProviderProbeResult
+): PublicArchiverProviderProbeResult {
+  const message = toSafeProviderProbeMessage(result);
+  return {
+    providerId: result.providerId,
+    available: result.available,
+    readiness: result.readiness ?? (result.available ? 'ready' : 'unavailable'),
+    prepared: result.prepared ?? false,
+    ...(result.version ? { version: result.version } : {}),
+    ...(message ? { message } : {}),
+  };
+}
+
+function toSafeProviderProbeMessage(
+  result: InternalArchiverProviderProbeResult
+): string | undefined {
+  if (result.readiness === 'ready' || result.available) {
+    return result.prepared ? '已通过 Provider 就绪检查。' : '已检测到可用的本机 Provider。';
+  }
+  if (result.readiness === 'manual') {
+    const message = result.message ?? '';
+    if (!result.prepared && /Git/i.test(message)) {
+      return 'Skill 自动准备失败：未检测到可用的 Git。';
+    }
+    return result.prepared
+      ? 'Skill 已由系统自动准备；运行时需要 Agent 工作流调度。'
+      : 'Skill 自动准备未完成；运行时需要 Agent 工作流调度。';
+  }
+  if (result.readiness === 'preparing') return '系统正在自动准备 Provider。';
+  if (result.readiness === 'preparable') return '系统可自动准备该 Provider。';
+
+  const message = result.message ?? '';
+  if (/Python 3|python/i.test(message)) return '自动准备失败：未检测到可用的 Python 3。';
+  if (/npm/i.test(message)) return '自动准备失败：未检测到可用的 npm 运行时。';
+  if (/Git/i.test(message)) return '自动准备失败：未检测到可用的 Git。';
+  return 'Provider 自动准备或启动检查失败，系统会继续尝试其它知识源。';
+}
+
+function toPublicArchiverProviderRunReport(
+  report: InternalArchiverProviderRunReport | null
+): PublicArchiverProviderRunReport | null {
+  if (!report) return null;
+  return {
+    schemaVersion: report.schemaVersion,
+    projectId: report.projectId,
+    generatedAt: report.generatedAt,
+    selectedPrimary: report.selectedPrimary,
+    statuses: report.statuses.map(status => ({
+      providerId: status.providerId,
+      placement: status.placement,
+      state: status.state,
+      startedAt: status.startedAt,
+      finishedAt: status.finishedAt,
+      ...(status.version ? { version: status.version } : {}),
+    })),
+  };
 }
 
 function mergeResult(target: EverOSMemoryGetResult, source: EverOSMemoryGetResult): void {

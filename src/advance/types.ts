@@ -57,19 +57,55 @@ export interface MaintainerConfig extends BaseRoleConfig {
   ciFixEnabled?: boolean;
 }
 
+/** Provider 内部知识提炼策略，不进入项目持久化配置。 */
+export type ArchiverSynthesisPolicy = 'off' | 'fallback' | 'always';
+
+/**
+ * Provider 内部知识组合策略。
+ *
+ * 该类型仅用于兼容旧的编排器调用，不属于 ArchiverConfig，用户不需要配置它。
+ */
+export interface ArchiverProviderStrategy {
+  /** 按顺序尝试的项目知识源，第一个成功者作为主知识源 */
+  sources: string[];
+  /** 主知识源成功后追加执行的外部增强 Provider */
+  augmenters: string[];
+  /** 文档、约定、领域知识和维护风险的提炼策略 */
+  synthesis: {
+    provider: string;
+    policy: ArchiverSynthesisPolicy;
+  };
+}
+
 /**
  * Archiver 专属配置
  */
-export interface ArchiverConfig extends BaseRoleConfig {
+export interface ArchiverConfig {
   role: 'archiver';
-  /** Archiver Agent 显示名称，用于日志/签名 */
-  archiverName?: string;
+  schemaVersion: 3;
+  /** Archiver 在 EverOS 中的 Agent 显示名称 */
+  archiverName: string;
+  /** 自动运行配置 */
+  automation: {
+    enabled: boolean;
+    cron: string;
+  };
 }
 
 /**
  * 角色配置联合类型
  */
 export type RoleConfig = ReviewerConfig | MaintainerConfig | ArchiverConfig;
+
+/** 获取角色是否启用，兼容 Archiver 与其它角色配置 */
+export function isRoleConfigEnabled(config: RoleConfig | undefined): boolean {
+  return config?.role === 'archiver' ? config.automation.enabled : config?.enabled === true;
+}
+
+/** 获取角色调度表达式，兼容 Archiver 与其它角色配置 */
+export function getRoleConfigSchedule(config: RoleConfig | undefined): string | undefined {
+  return config?.role === 'archiver' ? config.automation.cron : config?.reviewSchedule;
+}
 
 /**
  * 角色配置的类型映射，用于按角色窄化

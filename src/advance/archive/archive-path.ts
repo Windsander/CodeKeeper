@@ -38,7 +38,12 @@ export function computeArchivePath(params: ComputeArchivePathParams): string {
 
 export function computeFlaggedArchivePath(params: ComputeArchivePathParams): string {
   const base = computeArchivePath(params);
-  return join(dirname(base), 'flagged', basename(base));
+  return toFlaggedArchivePath(base);
+}
+
+/** 将已计算的标准归档路径转换为同层 flagged 子目录路径。 */
+export function toFlaggedArchivePath(archivePath: string): string {
+  return join(dirname(archivePath), 'flagged', basename(archivePath));
 }
 
 export function sanitizePathSegment(segment: string): string {
