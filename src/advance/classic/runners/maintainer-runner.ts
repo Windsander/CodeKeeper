@@ -7,6 +7,7 @@
  */
 
 import { LlmClient } from '../../llm/client.js';
+import { LlmMaintainerLocalJudge } from '../fix/maintainer-llm-judge.js';
 import { ConservativeLocalJudgeStub, type MaintainerLocalJudge } from '../fix/maintainer-local-judge.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
@@ -511,7 +512,7 @@ export class MaintainerRunner extends BaseRoleRunner {
 
   constructor(options: MaintainerRunnerOptions) {
     super({ llmClient: options.llmClient });
-    this.localJudge = new ConservativeLocalJudgeStub();
+    this.localJudge = new LlmMaintainerLocalJudge(this.llmClient);
   }
 
   protected getRole(): 'maintainer' {
@@ -2860,7 +2861,21 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
 
     try {
-      return await brain.recheckAlreadyFixed(finding);
+      const baseResult = await brain.recheckAlreadyFixed(finding);
+
+      const assist = await this.localJudge.assistAlreadyFixedCheck(
+        finding.description,
+        focusedContent
+      );
+      if (assist.kind === 'reliable' && assist.likelyAlreadyFixed) {
+        return {
+          alreadyFixed: true,
+          reason: assist.reason,
+          evidence: assist.evidence,
+        };
+      }
+
+      return baseResult;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(
