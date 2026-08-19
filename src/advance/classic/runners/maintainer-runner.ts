@@ -7,6 +7,7 @@
  */
 
 import { LlmClient } from '../../llm/client.js';
+import { ConservativeLocalJudgeStub, type MaintainerLocalJudge } from '../fix/maintainer-local-judge.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';
@@ -505,8 +506,12 @@ const CONTINUE_AFTER_CI: CiHandlingResult = {
 };
 
 export class MaintainerRunner extends BaseRoleRunner {
+  /** 本地判别辅助（目前为保守桩，未来可替换为本地轻量模型实现） */
+  private localJudge: MaintainerLocalJudge;
+
   constructor(options: MaintainerRunnerOptions) {
     super({ llmClient: options.llmClient });
+    this.localJudge = new ConservativeLocalJudgeStub();
   }
 
   protected getRole(): 'maintainer' {
