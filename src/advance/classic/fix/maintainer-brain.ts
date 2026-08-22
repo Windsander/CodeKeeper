@@ -2,6 +2,7 @@ import type { ReviewFinding } from '../provider/types.js';
 import { LlmClient, LlmDecisionError } from '../../llm/client.js';
 import type { ToolDefinition } from '../../llm/tool-types.js';
 import type { IMemoryClient } from '../memory/types.js';
+import type { MaintainerLocalJudge } from './maintainer-local-judge.js';
 import { IssueScopeClassifier, type IssueScope } from './issue-scope.js';
 import { buildFocusedContext, type FocusedContext } from './focused-context-builder.js';
 import { focusedContextToString } from './focused-context-streamer.js';
@@ -182,6 +183,8 @@ export interface MaintainerBrainOptions {
   worktreeManager?: WorktreeManager;
   /** 可选的 prompt 加载器，默认使用全局 loader */
   promptLoader?: PromptLoader;
+  /** 可选的轻量判别辅助，用于非 finding 讨论的前置语义过滤 */
+  localJudge?: MaintainerLocalJudge;
 }
 
 export interface ParseFindingsInput {
@@ -425,6 +428,36 @@ export class MaintainerBrain {
     userId: string;
     mrContext?: MrContext;
   }): Promise<NonFindingDecision> {
+    if (
+      this.options.localJudge &&
+      typeof this.options.localJudge.preFilterNonFindingDiscussion === 'function'
+    ) {
+      const verdict = await this.options.localJudge.preFilterNonFindingDiscussion(
+        params.body,
+        undefined,
+      );
+      if ('kind' in verdict && verdict.kind === 'reliable') {
+        if (verdict.isProbablyNonFinding) {
+          console.log(
+            `[LlmMaintainerLocalJudge] decideNonFindingComment preFilterNonFindingDiscussion=reliable isProbablyNonFinding=true reason=${verdict.reason}`
+          );
+          return {
+            action: 'ignore',
+            reason: `本地判别辅助认为该讨论很可能不是待逐条修复的代码问题: ${verdict.reason}`,
+            replyBody: '感谢 Review。',
+          };
+        } else {
+          console.log(
+            `[LlmMaintainerLocalJudge] decideNonFindingComment preFilterNonFindingDiscussion=reliable isProbablyNonFinding=false reason=${verdict.reason}`
+          );
+        }
+      } else {
+        console.log(
+          `[LlmMaintainerLocalJudge] decideNonFindingComment preFilterNonFindingDiscussion=unreliable reason=${verdict.reason}`
+        );
+      }
+    }
+
     const mrContextText = params.mrContext
       ? [
           `标题：${params.mrContext.title}`,
