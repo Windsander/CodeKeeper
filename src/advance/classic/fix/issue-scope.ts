@@ -8,6 +8,7 @@
 import type { LlmClient } from '../../llm/client.js';
 import type { ReviewFinding } from '../provider/types.js';
 import type { FocusedContext } from './focused-context-builder.js';
+import type { MaintainerLocalJudge } from './maintainer-local-judge.js';
 import { extractJsonText } from '../utils/json-extraction.js';
 import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 
@@ -23,6 +24,8 @@ export interface ScopeClassifierOptions {
   llmClient?: LlmClient;
   /** 是否启用 LLM 二次确认；默认 false，避免每个 finding 都调用 LLM */
   enableLlmConfirm?: boolean;
+  /** 可选的轻量判别辅助，用于启发式规则未命中时的 scope 初筛 */
+  localJudge?: MaintainerLocalJudge;
   /** 可选的 prompt 加载器，默认使用全局 loader */
   promptLoader?: PromptLoader;
 }
@@ -40,6 +43,25 @@ export class IssueScopeClassifier {
     const heuristic = this.classifyByRules(finding);
     if (heuristic.scope !== 'local') {
       return heuristic;
+    }
+
+    if (
+      this.options.localJudge &&
+      typeof this.options.localJudge.preFilterScope === 'function'
+    ) {
+      const verdict = await this.options.localJudge.preFilterScope(
+        finding.message,
+        finding.file,
+        finding.line,
+      );
+      if ('kind' in verdict && verdict.kind === 'reliable') {
+        if (verdict.scope !== 'local') {
+          return {
+            scope: verdict.scope,
+            reason: verdict.reason,
+          };
+        }
+      }
     }
 
     if (this.options.enableLlmConfirm && this.options.llmClient) {

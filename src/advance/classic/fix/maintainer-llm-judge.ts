@@ -14,6 +14,8 @@ import type {
   SemanticReidentificationResult,
   StuckCorrectionResult,
   AlreadyFixedAssistanceResult,
+  PreFilterScopeVerdict,
+  PreFilterNonFindingVerdict,
 } from './maintainer-local-judge.js';
 
 interface ReidentifyPromptPayload {
@@ -31,6 +33,17 @@ interface StuckPromptPayload {
 interface AlreadyFixedPromptPayload {
   findingDescription: string;
   currentCodeContextHint?: string;
+}
+
+interface PreFilterScopePromptPayload {
+  findingDescription: string;
+  findingFile?: string;
+  findingLine?: number;
+}
+
+interface PreFilterNonFindingPromptPayload {
+  discussionBody: string;
+  discussionNoteCount?: number;
 }
 
 /**
@@ -81,7 +94,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
       return {
         likelySame: body.likelySame,
         confidence,
-        reason: body.reason ?? '',
+        reason: typeof body.reason === 'string' ? body.reason : '',
       };
     } catch (error) {
       return {
@@ -119,7 +132,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
         },
       );
       const body = this.parseSimpleJson(json);
-      if (!body || !['continue', 'refocus', 'broaden', 'stop'].includes(body.suggestion)) {
+      if (!body || typeof body.suggestion !== 'string' || !['continue', 'refocus', 'broaden', 'stop'].includes(body.suggestion)) {
         return {
           kind: 'unreliable',
           reason: 'LLM 返回了不可解析的卡点校正结果',
@@ -128,7 +141,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
       return {
         suggestion: body.suggestion as StuckCorrectionResult['suggestion'],
         suggestStop: Boolean(body.suggestStop),
-        reason: body.reason ?? '',
+        reason: typeof body.reason === 'string' ? body.reason : '',
       };
     } catch (error) {
       return {
@@ -169,8 +182,101 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
       }
       return {
         likelyAlreadyFixed: body.likelyAlreadyFixed,
-        reason: body.reason ?? '',
-        evidence: body.evidence,
+        reason: typeof body.reason === 'string' ? body.reason : '',
+        evidence: typeof body.evidence === 'string' ? body.evidence : undefined,
+      };
+    } catch (error) {
+      return {
+        kind: 'unreliable',
+        reason: this.wrapError(error),
+      };
+    }
+  }
+
+  async preFilterScope(
+    findingDescription: string,
+    findingFile?: string,
+    findingLine?: number,
+  ): Promise<PreFilterScopeVerdict> {
+    const payload: PreFilterScopePromptPayload = {
+      findingDescription,
+      findingFile,
+      findingLine,
+    };
+    try {
+      const json = await this.llmClient.completeJson(
+        this.buildPreFilterScopePrompt(payload),
+        this.preFilterScopeSystem(),
+        {
+          type: 'object',
+          properties: {
+            scope: {
+              type: 'string',
+              enum: ['trivial', 'local', 'cross-file', 'needs-clarification'],
+            },
+            reason: { type: 'string' },
+          },
+          required: ['scope', 'reason'],
+        },
+      );
+      const body = this.parseSimpleJson(json);
+      if (!body || typeof body.scope !== 'string') {
+        return {
+          kind: 'unreliable',
+          reason: 'LLM 返回了不可解析的 scope 初筛结果',
+        };
+      }
+      if (!['trivial', 'local', 'cross-file', 'needs-clarification'].includes(body.scope)) {
+        return {
+          kind: 'unreliable',
+          reason: `LLM 返回了无效的 scope 值: ${String(body.scope)}`,
+        };
+      }
+      return {
+        kind: 'reliable',
+        scope: body.scope as 'trivial' | 'local' | 'cross-file' | 'needs-clarification',
+        reason: typeof body.reason === 'string' ? body.reason : '',
+      };
+    } catch (error) {
+      return {
+        kind: 'unreliable',
+        reason: this.wrapError(error),
+      };
+    }
+  }
+
+  async preFilterNonFindingDiscussion(
+    discussionBody: string,
+    discussionNoteCount?: number,
+  ): Promise<PreFilterNonFindingVerdict> {
+    const payload: PreFilterNonFindingPromptPayload = {
+      discussionBody,
+      discussionNoteCount,
+    };
+    try {
+      const json = await this.llmClient.completeJson(
+        this.buildPreFilterNonFindingPrompt(payload),
+        this.preFilterNonFindingSystem(),
+        {
+          type: 'object',
+          properties: {
+            isProbablyNonFinding: { type: 'boolean' },
+            reason: { type: 'string' },
+          },
+          required: ['isProbablyNonFinding', 'reason'],
+        },
+      );
+      const body = this.parseSimpleJson(json);
+      if (!body || typeof body.isProbablyNonFinding !== 'boolean') {
+        return {
+          kind: 'unreliable',
+          reason: 'LLM 返回了不可解析的非 finding 过滤结果',
+        };
+      }
+      return {
+        kind: 'reliable',
+        isProbablyNonFinding: body.isProbablyNonFinding,
+        reason: typeof body.reason === 'string' ? body.reason : '',
       };
     } catch (error) {
       return {
@@ -181,6 +287,65 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
   }
 
   // ---------- 提示构造 ----------
+
+  private buildPreFilterScopePrompt(payload: PreFilterScopePromptPayload): string {
+    const loc = payload.findingFile
+      ? `文件：${payload.findingFile}${payload.findingLine ? `, 行：${payload.findingLine}` : ''}`
+      : '（文件定位信息未提供）';
+    return [
+      '你正在帮助维护者判断一个审查问题的大致范围（前置初筛）。',
+      '目标是辅助判断该问题更可能属于：trivial / local / cross-file / needs-clarification。',
+      '',
+      `位置信息：${loc}`,
+      '',
+      '问题描述：',
+      payload.findingDescription,
+      '',
+      '范围定义：',
+      '- trivial：单行、小范围、注释/TODO/命名/常量补全之类，几乎不影响其他代码。',
+      '- local：集中在单个文件或一个小范围内，修复边界清楚。',
+      '- cross-file：涉及类型/接口/签名变更或明显影响多个调用点，可能需要多文件一起动。',
+      '- needs-clarification：关键信息（文件/行/意图）不足以给出范围结论。',
+      '',
+      '规则：',
+      '- 如果位置信息缺失或问题描述过短/模糊，倾向于 needs-clarification。',
+      '- 如果明显影响接口、签名、导出或多个调用点，倾向于 cross-file。',
+      '- 如果只能看到单行/字段/注释/常量层面的修改，且无控制流或类型扩散迹象，倾向于 trivial。',
+      '- 其余则判为 local。',
+      '',
+      '请返回 JSON，包含 scope(one of trivial/local/cross-file/needs-clarification)、reason(字符串)。',
+    ].join('\\n');
+  }
+
+  private buildPreFilterNonFindingPrompt(
+    payload: PreFilterNonFindingPromptPayload,
+  ): string {
+    const noteCount = payload.discussionNoteCount != null
+      ? `（讨论 note 数量：${payload.discussionNoteCount}）`
+      : '';
+    return [
+      '你正在帮助维护者判断：一条 MR discussion 是否很可能不是待逐条修复的代码问题。',
+      '',
+      '讨论正文：',
+      payload.discussionBody,
+      noteCount,
+      '',
+      '判断规则：',
+      '- 如果正文只询问/提示而不给出具体文件行号的问题，就倾向于 isProbablyNonFinding=true。',
+      '- 如果正文指向具体文件和行号，且表达的是可操作的代码问题，就倾向于 isProbablyNonFinding=false。',
+      '- 如果信息不足以判断，保守返回 isProbablyNonFinding=false。',
+      '',
+      '请返回 JSON，包含 isProbablyNonFinding(boolean)、reason(字符串)。',
+    ].join('\\n');
+  }
+
+  private preFilterScopeSystem(): string {
+    return '你是一个保守的 scope 初筛辅助。只在理由充分时才给出 non-trivial/non-cross-file 的范围结论；信息不足时不要编造范围。';
+  }
+
+  private preFilterNonFindingSystem(): string {
+    return '你是一个保守的非 finding 过滤辅助。只有在有明确理由时才标记 isProbablyNonFinding=true；怀疑是具体代码问题时，就返回 false。';
+  }
 
   private buildReidentifyPrompt(payload: ReidentifyPromptPayload): string {
     const ctx = payload.fileContextHint ? `\n\n当前文件上下文提示：\n${payload.fileContextHint}` : '';
@@ -202,7 +367,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
       '- 如果信息不足以判断，请返回 likelySame=false 并且 confidence=low。',
       '',
       '请返回 JSON，包含 likelySame(boolean)、confidence(one of high/medium/low)、reason(字符串)。',
-    ].join('\n');
+    ].join('\\n');
   }
 
   private buildStuckPrompt(payload: StuckPromptPayload): string {
@@ -226,7 +391,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
       '- stop：当前信息下不再继续有意义，建议收拢或换方式。',
       '',
       '请返回 JSON，包含 suggestion(one of continue/refocus/broaden/stop)、suggestStop(boolean)、reason(字符串)。',
-    ].join('\n');
+    ].join('\\n');
   }
 
   private buildAlreadyFixedPrompt(payload: AlreadyFixedPromptPayload): string {
@@ -247,7 +412,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
       '- evidence(可选字符串，仅在你确信该片段能作为最小证据时提供)',
       '',
       '注意：如果信息不足，不要武断返回 already-fixed。',
-    ].join('\n');
+    ].join('\\n');
   }
 
   // ---------- system / helper ----------
