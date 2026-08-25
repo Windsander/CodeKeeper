@@ -11,6 +11,14 @@ export type LocalJudgeVerdict =
   | { kind: 'reliable'; value: boolean; reason: string }
   | { kind: 'unreliable'; reason: string };
 
+export type PreFilterScopeVerdict =
+  | { kind: 'reliable'; scope: 'trivial' | 'local' | 'cross-file' | 'needs-clarification'; reason: string }
+  | { kind: 'unreliable'; reason: string };
+
+export type PreFilterNonFindingVerdict =
+  | { kind: 'reliable'; isProbablyNonFinding: boolean; reason: string }
+  | { kind: 'unreliable'; reason: string };
+
 /**
  * 语义重识别辅助的结果
  */
@@ -93,4 +101,29 @@ export interface MaintainerLocalJudge {
     findingDescription: string,
     currentCodeContextHint?: string,
   ): Promise<LocalJudgeVerdict | AlreadyFixedAssistanceResult>;
+
+  /**
+   * Scope 初筛辅助（中优先级位置）
+   *
+   * 在启发式规则尚未给出明确范围结论时，辅助判断一个 finding
+   * 更可能属于 trivial / local / cross-file / needs-clarification。
+   * 不可靠时返回不可靠，不改变现有范围判定。
+   */
+  preFilterScope(
+    findingDescription: string,
+    findingFile?: string,
+    findingLine?: number,
+  ): Promise<PreFilterScopeVerdict>;
+
+  /**
+   * 非 finding 讨论的语义过滤辅助（中优先级位置）
+   *
+   * 在 discussion 无法解析出具体文件/行号时，辅助判断该讨论是否
+   * 很可能不是待逐条修复的代码问题（例如纯统计/汇总/提问_hint/误报指示等）。
+   * 不可靠时返回不可靠，调用方继续走原有非 finding 处理路径。
+   */
+  preFilterNonFindingDiscussion(
+    discussionBody: string,
+    discussionNoteCount?: number,
+  ): Promise<PreFilterNonFindingVerdict>;
 }
