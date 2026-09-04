@@ -11,6 +11,7 @@ import { LlmClient } from '../../llm/client.js';
 import type {
   MaintainerLocalJudge,
   LocalJudgeVerdict,
+  AdversarialReviewResult,
   SemanticReidentificationResult,
   StuckCorrectionResult,
   AlreadyFixedAssistanceResult,
@@ -46,6 +47,16 @@ interface PreFilterNonFindingPromptPayload {
   discussionNoteCount?: number;
 }
 
+interface AdversarialReviewPromptPayload {
+  findingDescription: string;
+  candidateOptions: string;
+  currentCodeContextHint?: string;
+}
+
+interface AdversarialDecisionReviewPromptPayload extends AdversarialReviewPromptPayload {
+  finalDecision: string;
+}
+
 /**
  * 基于 LlmClient 的 Maintainer 判别辅助实现
  */
@@ -59,7 +70,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
   async reassessSemanticIdentity(
     currentFindingDescription: string,
     previousDecisionSummary: string,
-    fileContextHint?: string,
+    fileContextHint?: string
   ): Promise<LocalJudgeVerdict | SemanticReidentificationResult> {
     const payload: ReidentifyPromptPayload = {
       currentDescription: currentFindingDescription,
@@ -81,7 +92,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
             reason: { type: 'string' },
           },
           required: ['likelySame', 'confidence', 'reason'],
-        },
+        }
       );
       const body = this.parseSimpleJson(json);
       if (!body || typeof body.likelySame !== 'boolean') {
@@ -107,7 +118,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
   async adviseOnStuckProgress(
     findingDescription: string,
     recentProgressSummary: string,
-    attemptedDirectionsSummary?: string,
+    attemptedDirectionsSummary?: string
   ): Promise<LocalJudgeVerdict | StuckCorrectionResult> {
     const payload: StuckPromptPayload = {
       findingDescription,
@@ -129,10 +140,14 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
             reason: { type: 'string' },
           },
           required: ['suggestion', 'suggestStop', 'reason'],
-        },
+        }
       );
       const body = this.parseSimpleJson(json);
-      if (!body || typeof body.suggestion !== 'string' || !['continue', 'refocus', 'broaden', 'stop'].includes(body.suggestion)) {
+      if (
+        !body ||
+        typeof body.suggestion !== 'string' ||
+        !['continue', 'refocus', 'broaden', 'stop'].includes(body.suggestion)
+      ) {
         return {
           kind: 'unreliable',
           reason: 'LLM 返回了不可解析的卡点校正结果',
@@ -153,8 +168,8 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
 
   async assistAlreadyFixedCheck(
     findingDescription: string,
-    currentCodeContextHint?: string,
-  ): Promise<LocalJudgeVerdict | AlreadyFixedAssistanceResult> {
+    currentCodeContextHint?: string
+  ): Promise<AlreadyFixedAssistanceResult | { kind: 'unreliable'; reason: string }> {
     const payload: AlreadyFixedPromptPayload = {
       findingDescription,
       currentCodeContextHint,
@@ -171,7 +186,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
             evidence: { type: 'string' },
           },
           required: ['likelyAlreadyFixed', 'reason'],
-        },
+        }
       );
       const body = this.parseSimpleJson(json);
       if (!body || typeof body.likelyAlreadyFixed !== 'boolean') {
@@ -181,6 +196,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
         };
       }
       return {
+        kind: 'reliable',
         likelyAlreadyFixed: body.likelyAlreadyFixed,
         reason: typeof body.reason === 'string' ? body.reason : '',
         evidence: typeof body.evidence === 'string' ? body.evidence : undefined,
@@ -196,7 +212,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
   async preFilterScope(
     findingDescription: string,
     findingFile?: string,
-    findingLine?: number,
+    findingLine?: number
   ): Promise<PreFilterScopeVerdict> {
     const payload: PreFilterScopePromptPayload = {
       findingDescription,
@@ -217,7 +233,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
             reason: { type: 'string' },
           },
           required: ['scope', 'reason'],
-        },
+        }
       );
       const body = this.parseSimpleJson(json);
       if (!body || typeof body.scope !== 'string') {
@@ -247,7 +263,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
 
   async preFilterNonFindingDiscussion(
     discussionBody: string,
-    discussionNoteCount?: number,
+    discussionNoteCount?: number
   ): Promise<PreFilterNonFindingVerdict> {
     const payload: PreFilterNonFindingPromptPayload = {
       discussionBody,
@@ -264,7 +280,7 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
             reason: { type: 'string' },
           },
           required: ['isProbablyNonFinding', 'reason'],
-        },
+        }
       );
       const body = this.parseSimpleJson(json);
       if (!body || typeof body.isProbablyNonFinding !== 'boolean') {
@@ -284,6 +300,39 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
         reason: this.wrapError(error),
       };
     }
+  }
+
+  async adversarialReview(
+    findingDescription: string,
+    candidateOptions: string,
+    currentCodeContextHint?: string
+  ): Promise<AdversarialReviewResult | { kind: 'unreliable'; reason: string }> {
+    const payload: AdversarialReviewPromptPayload = {
+      findingDescription,
+      candidateOptions,
+      currentCodeContextHint,
+    };
+    return this.completeAdversarialReview(
+      this.buildAdversarialReviewPrompt(payload),
+      '你是一个保守但有洞察力的代码修复方案红队评审。必须指出候选方案可能遗漏的根因、回归风险和验证缺口。'
+    );
+  }
+
+  async adversarialDecisionReview(
+    findingDescription: string,
+    candidateOptions: string,
+    finalDecision: string,
+    currentCodeContextHint?: string
+  ): Promise<AdversarialReviewResult | { kind: 'unreliable'; reason: string }> {
+    return this.completeAdversarialReview(
+      this.buildAdversarialDecisionReviewPrompt({
+        findingDescription,
+        candidateOptions,
+        finalDecision,
+        currentCodeContextHint,
+      }),
+      '你是最终修复决策的独立红队验收员。不要重复主决策的自我评价，必须检查它是否用可执行方案真正回应了既有风险。'
+    );
   }
 
   // ---------- 提示构造 ----------
@@ -317,12 +366,11 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
     ].join('\\n');
   }
 
-  private buildPreFilterNonFindingPrompt(
-    payload: PreFilterNonFindingPromptPayload,
-  ): string {
-    const noteCount = payload.discussionNoteCount != null
-      ? `（讨论 note 数量：${payload.discussionNoteCount}）`
-      : '';
+  private buildPreFilterNonFindingPrompt(payload: PreFilterNonFindingPromptPayload): string {
+    const noteCount =
+      payload.discussionNoteCount != null
+        ? `（讨论 note 数量：${payload.discussionNoteCount}）`
+        : '';
     return [
       '你正在帮助维护者判断：一条 MR discussion 是否很可能不是待逐条修复的代码问题。',
       '',
@@ -348,7 +396,9 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
   }
 
   private buildReidentifyPrompt(payload: ReidentifyPromptPayload): string {
-    const ctx = payload.fileContextHint ? `\n\n当前文件上下文提示：\n${payload.fileContextHint}` : '';
+    const ctx = payload.fileContextHint
+      ? `\n\n当前文件上下文提示：\n${payload.fileContextHint}`
+      : '';
     return [
       '你正在帮助维护者判断：同一个代码审查问题是否可能已经在之前的轮次中被处理过。',
       '请根据当前发现描述和之前决策摘要，判断二者是否可能是同一个语义问题。',
@@ -413,6 +463,89 @@ export class LlmMaintainerLocalJudge implements MaintainerLocalJudge {
       '',
       '注意：如果信息不足，不要武断返回 already-fixed。',
     ].join('\\n');
+  }
+
+  private buildAdversarialReviewPrompt(payload: AdversarialReviewPromptPayload): string {
+    const context = payload.currentCodeContextHint
+      ? `\n\n当前代码上下文：\n${payload.currentCodeContextHint}`
+      : '';
+    return [
+      '请对以下代码修复候选方案进行独立红队评审。',
+      '',
+      '原始问题：',
+      payload.findingDescription,
+      '',
+      '候选方案：',
+      payload.candidateOptions,
+      context,
+      '',
+      '请重点检查：是否真正解决根因、是否遗漏相关调用点、是否引入行为回归、是否有可验证的完成标准。',
+      '只有没有关键阻断风险时 approve 才能为 true；不要因为方案看起来简单就放过未验证的假设。',
+      '请返回 JSON：approve(boolean)、concerns(string[])、requiredChanges(string[])、reason(string)。',
+    ].join('\n');
+  }
+
+  private buildAdversarialDecisionReviewPrompt(
+    payload: AdversarialDecisionReviewPromptPayload
+  ): string {
+    const context = payload.currentCodeContextHint
+      ? `\n\n当前代码上下文：\n${payload.currentCodeContextHint}`
+      : '';
+    return [
+      '请独立复核以下最终修复决策是否能够安全执行。',
+      '',
+      '原始问题：',
+      payload.findingDescription,
+      '',
+      '候选方案与此前红队意见：',
+      payload.candidateOptions,
+      '',
+      '主模型最终决策：',
+      payload.finalDecision,
+      context,
+      '',
+      '检查重点：最终决策是否解决根因、覆盖必要影响范围、逐项回应关键疑虑，并给出可执行的验证标准。不要因为它自称已回应就批准。',
+      '只有不存在关键阻断风险时 approve 才能为 true；否则把仍需补齐的内容写入 requiredChanges。',
+      '请返回 JSON：approve(boolean)、concerns(string[])、requiredChanges(string[])、reason(string)。',
+    ].join('\n');
+  }
+
+  private async completeAdversarialReview(
+    prompt: string,
+    system: string
+  ): Promise<AdversarialReviewResult | { kind: 'unreliable'; reason: string }> {
+    try {
+      const json = await this.llmClient.completeJson(prompt, system, {
+        type: 'object',
+        properties: {
+          approve: { type: 'boolean' },
+          concerns: { type: 'array', items: { type: 'string' } },
+          requiredChanges: { type: 'array', items: { type: 'string' } },
+          reason: { type: 'string' },
+        },
+        required: ['approve', 'concerns', 'requiredChanges', 'reason'],
+      });
+      const body = this.parseSimpleJson(json);
+      if (
+        !body ||
+        typeof body.approve !== 'boolean' ||
+        !Array.isArray(body.concerns) ||
+        !Array.isArray(body.requiredChanges)
+      ) {
+        return { kind: 'unreliable', reason: 'LLM 返回了不可解析的红队评审结果' };
+      }
+      return {
+        kind: 'reliable',
+        approve: body.approve,
+        concerns: body.concerns.filter((item): item is string => typeof item === 'string'),
+        requiredChanges: body.requiredChanges.filter(
+          (item): item is string => typeof item === 'string'
+        ),
+        reason: typeof body.reason === 'string' ? body.reason : '',
+      };
+    } catch (error) {
+      return { kind: 'unreliable', reason: this.wrapError(error) };
+    }
   }
 
   // ---------- system / helper ----------

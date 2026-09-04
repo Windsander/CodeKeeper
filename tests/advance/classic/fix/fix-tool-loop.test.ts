@@ -149,6 +149,7 @@ describe('FixToolLoop', () => {
       finding: mockFinding,
       mr: mockMR,
       maxSteps: 20,
+      maxStepsWithoutProgress: 5,
     });
 
     const result = await loop.run();

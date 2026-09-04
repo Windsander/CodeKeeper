@@ -6,7 +6,16 @@
  * - 后续可替换为本地轻量模型实现，且无需修改调用方
  */
 
-import type { MaintainerLocalJudge, LocalJudgeVerdict, SemanticReidentificationResult, StuckCorrectionResult, AlreadyFixedAssistanceResult, PreFilterScopeVerdict, PreFilterNonFindingVerdict } from './maintainer-local-judge.js';
+import type {
+  AdversarialReviewResult,
+  MaintainerLocalJudge,
+  LocalJudgeVerdict,
+  SemanticReidentificationResult,
+  StuckCorrectionResult,
+  AlreadyFixedAssistanceResult,
+  PreFilterScopeVerdict,
+  PreFilterNonFindingVerdict,
+} from './maintainer-local-judge.js';
 
 export class ConservativeLocalJudgeStub implements MaintainerLocalJudge {
   /** 当前桩始终可用（避免调用方因“不可用”而改变流程），但判定均不可靠 */
@@ -17,7 +26,7 @@ export class ConservativeLocalJudgeStub implements MaintainerLocalJudge {
   reassessSemanticIdentity(
     _currentFindingDescription: string,
     _previousDecisionSummary: string,
-    _fileContextHint?: string,
+    _fileContextHint?: string
   ): Promise<LocalJudgeVerdict | SemanticReidentificationResult> {
     return Promise.resolve({
       kind: 'unreliable',
@@ -28,7 +37,7 @@ export class ConservativeLocalJudgeStub implements MaintainerLocalJudge {
   adviseOnStuckProgress(
     _findingDescription: string,
     _recentProgressSummary: string,
-    _attemptedDirectionsSummary?: string,
+    _attemptedDirectionsSummary?: string
   ): Promise<LocalJudgeVerdict | StuckCorrectionResult> {
     return Promise.resolve({
       kind: 'unreliable',
@@ -38,8 +47,8 @@ export class ConservativeLocalJudgeStub implements MaintainerLocalJudge {
 
   assistAlreadyFixedCheck(
     _findingDescription: string,
-    _currentCodeContextHint?: string,
-  ): Promise<LocalJudgeVerdict | AlreadyFixedAssistanceResult> {
+    _currentCodeContextHint?: string
+  ): Promise<AlreadyFixedAssistanceResult | { kind: 'unreliable'; reason: string }> {
     return Promise.resolve({
       kind: 'unreliable',
       reason: '本地判别辅助尚未启用，already-fixed 判定由现有机制处理',
@@ -49,7 +58,7 @@ export class ConservativeLocalJudgeStub implements MaintainerLocalJudge {
   preFilterScope(
     _findingDescription: string,
     _findingFile?: string,
-    _findingLine?: number,
+    _findingLine?: number
   ): Promise<PreFilterScopeVerdict> {
     return Promise.resolve({
       kind: 'unreliable',
@@ -59,11 +68,18 @@ export class ConservativeLocalJudgeStub implements MaintainerLocalJudge {
 
   preFilterNonFindingDiscussion(
     _discussionBody: string,
-    _discussionNoteCount?: number,
+    _discussionNoteCount?: number
   ): Promise<PreFilterNonFindingVerdict> {
     return Promise.resolve({
       kind: 'unreliable',
       reason: '本地判别辅助尚未启用，非 finding 过滤由现有机制处理',
+    });
+  }
+
+  adversarialReview(): Promise<AdversarialReviewResult | { kind: 'unreliable'; reason: string }> {
+    return Promise.resolve({
+      kind: 'unreliable',
+      reason: '本地判别辅助尚未启用，跳过方案红队评审',
     });
   }
 }

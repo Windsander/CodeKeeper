@@ -1927,6 +1927,10 @@ describe('MaintainerRunner', () => {
         reason: '可以自动补充保护',
         fixDescription: '补充边界判断',
         scope: 'local',
+        verificationPlan: ['覆盖边界值测试'],
+        risks: ['旧调用方可能依赖宽松行为'],
+        adversarialConcerns: ['必须确认边界变化不会影响正常路径'],
+        adversarialResponses: ['已将正常路径回归测试加入验证计划'],
       }),
     });
     const actor = mockOf<MaintainerActor>({
@@ -2008,6 +2012,18 @@ describe('MaintainerRunner', () => {
     );
 
     expect(actor.executeBatchFix).toHaveBeenCalledOnce();
+    expect(vi.mocked(actor.executeBatchFix).mock.calls[0][1][0]).toMatchObject({
+      fixDescription: '补充边界判断',
+      verificationPlan: ['覆盖边界值测试'],
+      risks: ['旧调用方可能依赖宽松行为'],
+      adversarialConcerns: ['必须确认边界变化不会影响正常路径'],
+      adversarialResponses: ['已将正常路径回归测试加入验证计划'],
+    });
+    expect(state.maintainerThreadState?.[discussion.id]?.decisions['src/b.ts:20']).toMatchObject({
+      fixDescription: '补充边界判断',
+      risks: ['旧调用方可能依赖宽松行为'],
+      adversarialResponses: ['已将正常路径回归测试加入验证计划'],
+    });
     expect(actor.postSummary).toHaveBeenCalledOnce();
     expect(vi.mocked(actor.postSummary).mock.calls[0][2]).toEqual(['src/b.ts:20']);
     expect(vi.mocked(actor.postSummary).mock.calls[0][4]).toEqual([]);

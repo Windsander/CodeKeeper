@@ -28,7 +28,18 @@ function createFastDecisionLlmClient(input: Record<string, unknown>): LlmClient 
   return new LlmClient({
     apiKey: 'test',
     mock: {
-      toolResponses: [{ toolCalls: [{ id: '1', name: 'fast_decision', input }] }],
+      toolResponses: [
+        {
+          toolCalls: [
+            {
+              id: '0',
+              name: 'already_fixed_check',
+              input: { alreadyFixed: false, reason: '问题仍存在' },
+            },
+          ],
+        },
+        { toolCalls: [{ id: '1', name: 'fast_decision', input }] },
+      ],
     },
   });
 }
@@ -56,6 +67,15 @@ function createNonFindingDecisionLlmClient(input: Record<string, unknown>): LlmC
     apiKey: 'test',
     mock: {
       toolResponses: [{ toolCalls: [{ id: '1', name: 'non_finding_decision', input }] }],
+    },
+  });
+}
+
+function createVerifyFixLlmClient(input: Record<string, unknown>): LlmClient {
+  return new LlmClient({
+    apiKey: 'test',
+    mock: {
+      toolResponses: [{ toolCalls: [{ id: '1', name: 'verify_fix', input }] }],
     },
   });
 }
@@ -106,6 +126,76 @@ describe('MaintainerBrain', () => {
       userId: 'reviewer',
     });
     expect(decision.action).toBe('ignore');
+  });
+
+  it('语义验收只有在证据、摘要和空剩余问题清单齐全时才通过', async () => {
+    const llmClient = createVerifyFixLlmClient({
+      passed: true,
+      issueResolved: true,
+      evidence: '第 5 行已经删除未使用变量',
+      remainingIssues: [],
+      verificationSummary: 'finding 已消失，静态验证通过',
+      nextAction: 'commit',
+    });
+    const completeDecision = vi.spyOn(llmClient, 'completeDecision');
+    const brain = new MaintainerBrain({
+      llmClient,
+    });
+
+    const result = await brain.verifyFix({
+      finding: makeFinding(),
+      risks: ['调用方可能仍依赖旧行为'],
+      adversarialConcerns: ['必须核对所有调用点'],
+      adversarialResponses: ['已搜索调用点，并将对应测试加入验证计划'],
+      changedFiles: ['src/index.ts'],
+      codeContext: 'const value = 1;',
+    });
+
+    expect(result.passed).toBe(true);
+    expect(result.verdictSource).toBe('llm');
+    expect(result.verdictId).toBe('1');
+    expect(completeDecision.mock.calls[0]?.[1]).toContain('调用方可能仍依赖旧行为');
+    expect(completeDecision.mock.calls[0]?.[1]).toContain('必须核对所有调用点');
+    expect(completeDecision.mock.calls[0]?.[1]).toContain('已搜索调用点');
+  });
+
+  it('语义验收字段缺失或仍有剩余问题时禁止通过', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: createVerifyFixLlmClient({
+        passed: true,
+        issueResolved: true,
+        evidence: '  ',
+        remainingIssues: ['仍需确认调用方'],
+        verificationSummary: '  ',
+        nextAction: 'commit',
+      }),
+    });
+
+    const result = await brain.verifyFix({
+      finding: makeFinding(),
+      changedFiles: ['src/index.ts'],
+      codeContext: 'const value = 1;',
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.remainingIssues).toEqual(['仍需确认调用方']);
+  });
+
+  it('LLM 语义验收不可用时直接失败，不产生默认通过结论', async () => {
+    const brain = new MaintainerBrain({
+      llmClient: new LlmClient({
+        apiKey: 'test',
+        mock: { error: new Error('模拟 API 不可用') },
+      }),
+    });
+
+    await expect(
+      brain.verifyFix({
+        finding: makeFinding(),
+        changedFiles: ['src/index.ts'],
+        codeContext: 'const value = 1;',
+      })
+    ).rejects.toThrow('禁止提交');
   });
 
   it('风险等级未开启时直接 ask，不调用 LLM', async () => {
@@ -268,7 +358,7 @@ describe('MaintainerBrain', () => {
     });
 
     expect(memoryClient.recallUserPreferences).toHaveBeenCalledWith('alice', expect.any(String));
-    const prompt = completeDecision.mock.calls[0][1] as string;
+    const prompt = completeDecision.mock.calls[1][1] as string;
     expect(prompt).toContain('该用户偏好显式类型注解');
   });
 
@@ -314,6 +404,11 @@ describe('MaintainerBrain', () => {
       })
       .mockResolvedValueOnce({
         id: '2',
+        name: 'already_fixed_check',
+        input: { alreadyFixed: false, reason: '问题仍存在' },
+      })
+      .mockResolvedValueOnce({
+        id: '3',
         name: 'fast_decision',
         input: {
           action: 'fix',
@@ -353,7 +448,7 @@ describe('MaintainerBrain', () => {
 
     expect(memoryClient.recallForMaintenance).toHaveBeenCalled();
     expect(memoryClient.recallUserPreferences).not.toHaveBeenCalled();
-    const prompt = completeDecision.mock.calls[1][1] as string;
+    const prompt = completeDecision.mock.calls[2][1] as string;
     expect(prompt).toContain('历史修复方式：显式类型注解');
   });
 
@@ -510,7 +605,7 @@ describe('MaintainerBrain 聚焦上下文与范围分类', () => {
       userId: 'reviewer',
     });
 
-    const prompt = completeDecision.mock.calls[0][1] as string;
+    const prompt = completeDecision.mock.calls[1][1] as string;
     expect(prompt).toContain('相关代码');
     expect(prompt).toContain("import { foo } from './foo';");
     expect(prompt).toContain('function target');

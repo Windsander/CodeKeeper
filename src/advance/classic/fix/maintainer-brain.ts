@@ -119,6 +119,31 @@ const STATISTICAL_REPORT_TOOL: ToolDefinition = {
   },
 };
 
+const VERIFY_FIX_TOOL: ToolDefinition = {
+  name: 'verify_fix',
+  description: '根据当前代码和验证证据判断 finding 是否已经被真正解决，决定是否允许提交',
+  input_schema: {
+    type: 'object',
+    properties: {
+      passed: { type: 'boolean' },
+      issueResolved: { type: 'boolean' },
+      evidence: { type: 'string' },
+      remainingIssues: { type: 'array', items: { type: 'string' } },
+      verificationSummary: { type: 'string' },
+      nextAction: { type: 'string', enum: ['commit', 'revise', 'ask'] },
+    },
+    required: [
+      'passed',
+      'issueResolved',
+      'evidence',
+      'remainingIssues',
+      'verificationSummary',
+      'nextAction',
+    ],
+    additionalProperties: false,
+  },
+};
+
 /**
  * Maintainer 对单条 finding/discussion 可执行的最终动作
  */
@@ -144,6 +169,18 @@ export interface MaintainerDecision {
   alreadyFixed?: boolean;
   /** 当 alreadyFixed=true 时，向 Reviewer 解释问题已修复的回复正文 */
   replyBody?: string;
+  /** finding 是误报、重复项或按项目约定无需改动时标记为 true */
+  notActionable?: boolean;
+  /** 认知阶段推断出的可能受影响文件，供执行阶段做受控审计 */
+  affectedFiles?: string[];
+  /** 修复完成后必须检查的语义验证目标 */
+  verificationPlan?: string[];
+  /** 方案评审阶段识别出的风险或控制措施 */
+  risks?: string[];
+  /** 红队评审发现的关键风险 */
+  adversarialConcerns?: string[];
+  /** 最终决策对红队意见的逐项回应 */
+  adversarialResponses?: string[];
 }
 
 /**
@@ -162,6 +199,25 @@ export interface NonFindingDecision {
   memoryCategory?: 'convention' | 'architecture' | 'domain' | 'risk' | 'stack' | 'graph';
   /** action=record 时的记忆内容 */
   memoryContent?: string;
+}
+
+export interface SemanticFixVerification {
+  /** 裁决来源。语义验收结果只能来自大模型的结构化输出。 */
+  verdictSource: 'llm';
+  /** 大模型 verify_fix 工具调用 ID，用于追溯本次定论。 */
+  verdictId: string;
+  /** 是否满足 finding 和验证计划，可以进入提交阶段 */
+  passed: boolean;
+  /** finding 描述的问题是否已经消失 */
+  issueResolved: boolean;
+  /** 当前代码中的具体证据 */
+  evidence: string;
+  /** 尚未解决的问题或验证缺口 */
+  remainingIssues: string[];
+  /** 面向维护流程的验证摘要 */
+  verificationSummary: string;
+  /** 下一步建议 */
+  nextAction: 'commit' | 'revise' | 'ask';
 }
 
 export interface MaintainerBrainOptions {
@@ -264,6 +320,7 @@ export class MaintainerBrain {
       typeof fileContent === 'string' ? buildFocusedContext(fileContent, finding) : fileContent;
     const classification = await new IssueScopeClassifier({
       llmClient: this.options.llmClient,
+      localJudge: this.options.localJudge,
     }).classify(finding, focusedContext);
     logMemorySnapshot('MaintainerBrain.decide 范围分类后');
 
@@ -290,6 +347,7 @@ export class MaintainerBrain {
       recallPlanner: this.options.recallPlanner,
       memoryClient: this.options.memoryClient,
       worktreeManager: this.options.worktreeManager,
+      localJudge: this.options.localJudge,
     });
 
     logMemorySnapshot('MaintainerBrain.decide 调用认知引擎前');
@@ -391,6 +449,7 @@ export class MaintainerBrain {
         recallPlanner: this.options.recallPlanner,
         memoryClient: this.options.memoryClient,
         worktreeManager: manager,
+        localJudge: this.options.localJudge,
       });
       return engine.checkAlreadyFixed({
         finding: { ...finding, file: resolved },
@@ -420,6 +479,108 @@ export class MaintainerBrain {
   }
 
   /**
+   * 在工具循环完成后独立验证 finding 是否真正消失。
+   * lint/typecheck 只能说明工程仍可检查，不能证明 Reviewer 指出的问题已被解决。
+   */
+  async verifyFix(params: {
+    finding: ReviewFinding;
+    fixDescription?: string;
+    verificationPlan?: string[];
+    risks?: string[];
+    adversarialConcerns?: string[];
+    adversarialResponses?: string[];
+    changedFiles: string[];
+    deletedFiles?: string[];
+    codeContext: string;
+    validationSummary?: string;
+    previousFailure?: string;
+  }): Promise<SemanticFixVerification> {
+    const prompt = this.promptLoader.load('maintainer-verify-fix-task', {
+      findingFile: params.finding.file,
+      findingLine: String(params.finding.line),
+      findingMessage: params.finding.message,
+      findingSuggestion: params.finding.suggestion ?? '',
+      fixDescription: params.fixDescription ?? '',
+      verificationPlan: params.verificationPlan?.join('\n- ') || '未提供，必须自行建立完成标准',
+      risks: params.risks?.join('\n- ') || '无显式风险记录',
+      adversarialConcerns: params.adversarialConcerns?.join('\n- ') || '无红队意见记录',
+      adversarialResponses: params.adversarialResponses?.join('\n- ') || '无主决策回应记录',
+      changedFiles: params.changedFiles.join(', ') || '无',
+      deletedFiles: params.deletedFiles?.join(', ') || '无',
+      codeContext: params.codeContext,
+      validationSummary: params.validationSummary ?? '未提供静态验证摘要',
+      previousFailure: params.previousFailure ?? '无',
+    });
+
+    try {
+      const toolCall = await this.options.llmClient.completeDecision(
+        [VERIFY_FIX_TOOL],
+        prompt,
+        this.systemPrompt()
+      );
+      const input = toolCall.input as {
+        passed?: boolean;
+        issueResolved?: boolean;
+        evidence?: string;
+        remainingIssues?: unknown;
+        verificationSummary?: string;
+        nextAction?: string;
+      };
+      const nextAction =
+        input.nextAction === 'commit' || input.nextAction === 'revise' || input.nextAction === 'ask'
+          ? input.nextAction
+          : undefined;
+      if (
+        typeof input.passed !== 'boolean' ||
+        typeof input.issueResolved !== 'boolean' ||
+        typeof input.evidence !== 'string' ||
+        !Array.isArray(input.remainingIssues) ||
+        input.remainingIssues.some(item => typeof item !== 'string') ||
+        typeof input.verificationSummary !== 'string' ||
+        !nextAction
+      ) {
+        throw new LlmDecisionError(
+          '大模型未返回完整、合法的 verify_fix 结构化裁决',
+          'invalid_input'
+        );
+      }
+
+      const remainingIssues = input.remainingIssues.map(item => item.trim()).filter(Boolean);
+      const issueResolved = input.issueResolved;
+      const evidence = input.evidence.trim();
+      const verificationSummary = input.verificationSummary.trim();
+      const verdictId = toolCall.id.trim();
+      if (!verdictId) {
+        throw new LlmDecisionError(
+          '大模型 verify_fix 裁决缺少可追溯的工具调用标识',
+          'invalid_input'
+        );
+      }
+      return {
+        verdictSource: 'llm',
+        verdictId,
+        passed:
+          input.passed &&
+          issueResolved &&
+          nextAction === 'commit' &&
+          evidence.length > 0 &&
+          verificationSummary.length > 0 &&
+          remainingIssues.length === 0 &&
+          verdictId.length > 0,
+        issueResolved,
+        evidence,
+        remainingIssues,
+        verificationSummary: verificationSummary || '模型未提供验证摘要',
+        nextAction,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[MaintainerBrain] 语义修复验证失败，禁止直接提交: ${message}`);
+      throw new Error(`无法取得大模型语义裁决，禁止提交：${message}`);
+    }
+  }
+
+  /**
    * 当 discussion 无法解析出具体 finding 时，由 LLM 决定如何处理
    */
   async decideNonFindingComment(params: {
@@ -434,7 +595,7 @@ export class MaintainerBrain {
     ) {
       const verdict = await this.options.localJudge.preFilterNonFindingDiscussion(
         params.body,
-        undefined,
+        undefined
       );
       if ('kind' in verdict && verdict.kind === 'reliable') {
         if (verdict.isProbablyNonFinding) {

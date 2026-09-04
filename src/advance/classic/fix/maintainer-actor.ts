@@ -7,7 +7,12 @@ import type {
 } from '../provider/types.js';
 import type { LlmClient } from '../../llm/client.js';
 import type { WorktreeChangedFile, WorktreeManager } from '../worktree/worktree-manager.js';
-import type { MaintainerBrain, MaintainerDecision } from './maintainer-brain.js';
+import type { FixAttemptResult } from './fix-result.js';
+import type {
+  MaintainerBrain,
+  MaintainerDecision,
+  SemanticFixVerification,
+} from './maintainer-brain.js';
 import type { IssueScope } from './issue-scope.js';
 import type { CognitiveDecision } from './cognitive-types.js';
 import type { MrAgentState } from '../runners/shared/state-utils.js';
@@ -87,6 +92,18 @@ export interface BatchFixResult {
   alreadyFixedItems: Array<{ file: string; line: number; reason: string }>;
   itemResults: BatchFixItemResult[];
 }
+
+const MAX_VERIFICATION_CONTEXT_CHARS = 48_000;
+const MAX_VERIFICATION_FILE_CHARS = 12_000;
+
+interface HookReflowState {
+  changed: boolean;
+  loop?: FixToolLoop;
+  result?: FixAttemptResult;
+  failure?: string;
+}
+
+type HookReflowResult = boolean | HookReflowState;
 
 export interface ApplyDecisionOptions {
   /** 单次修复失败后是否立即向 Reviewer 求助；Runner 默认自行管理重试次数。 */
@@ -192,6 +209,214 @@ export class MaintainerActor {
     return targets;
   }
 
+  /** 将认知阶段批准的文件转换为可用于实际工作区审计的路径集合。 */
+  private async resolveApprovedPaths(
+    finding: ReviewFinding,
+    affectedFiles: string[] = []
+  ): Promise<Set<string>> {
+    const approvedPaths = await this.resolveTargetPaths(finding.file);
+    for (const filePath of affectedFiles) {
+      const normalized = filePath.trim();
+      if (!normalized) continue;
+      const resolvedPaths = await this.resolveTargetPaths(normalized);
+      for (const path of resolvedPaths) approvedPaths.add(path);
+    }
+    return approvedPaths;
+  }
+
+  /** 读取提交前的实际代码，为独立语义验收提供当前状态而非工具调用记录。 */
+  private async buildVerificationCodeContext(
+    changes: WorktreeChangedFile[],
+    fallbackContexts: Array<{ path: string; content: string }> = []
+  ): Promise<string> {
+    const fallbackByPath = new Map(
+      fallbackContexts.map(context => [this.normalizeRepoPath(context.path), context.content])
+    );
+    const sections: string[] = [];
+    let totalChars = 0;
+
+    for (const change of changes) {
+      const path = this.normalizeRepoPath(change.path);
+      if (change.deleted) {
+        sections.push(`## ${path}（已删除）\n该文件已从当前工作区删除。`);
+        continue;
+      }
+
+      let content: string | undefined;
+      try {
+        const resolved = await this.options.worktreeManager.resolveFilePath(path);
+        if (resolved) content = this.options.worktreeManager.readFile(resolved);
+      } catch (error) {
+        console.warn(
+          `[MaintainerActor] 读取语义验收文件 ${path} 失败: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      content ??= fallbackByPath.get(path);
+      if (content === undefined) {
+        sections.push(`## ${path}\n当前文件内容无法读取。`);
+        continue;
+      }
+
+      const remaining = MAX_VERIFICATION_CONTEXT_CHARS - totalChars;
+      if (remaining <= 0) break;
+      const excerpt = content.slice(0, Math.min(MAX_VERIFICATION_FILE_CHARS, remaining));
+      sections.push(`## ${path}\n${excerpt}`);
+      totalChars += excerpt.length;
+    }
+
+    for (const fallback of fallbackContexts) {
+      const path = this.normalizeRepoPath(fallback.path);
+      if (sections.some(section => section.startsWith(`## ${path}`))) continue;
+      const remaining = MAX_VERIFICATION_CONTEXT_CHARS - totalChars;
+      if (remaining <= 0) break;
+      const excerpt = fallback.content.slice(0, Math.min(MAX_VERIFICATION_FILE_CHARS, remaining));
+      sections.push(`## ${path}（验收备用上下文）\n${excerpt}`);
+      totalChars += excerpt.length;
+    }
+
+    return sections.join('\n\n') || '当前工作区没有可读取的代码变更。';
+  }
+
+  private async collectValidationSummary(): Promise<string> {
+    try {
+      const result = await this.options.worktreeManager.validate();
+      return JSON.stringify(result);
+    } catch (error) {
+      return `静态验证调用失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  private buildDecisionRiskPrompt(decision: MaintainerDecision): string {
+    const sections = [
+      decision.risks?.length ? `风险与控制措施：\n- ${decision.risks.join('\n- ')}` : '',
+      decision.adversarialConcerns?.length
+        ? `独立红队关键意见：\n- ${decision.adversarialConcerns.join('\n- ')}`
+        : '',
+      decision.adversarialResponses?.length
+        ? `主决策逐项回应：\n- ${decision.adversarialResponses.join('\n- ')}`
+        : '',
+    ].filter(Boolean);
+    if (sections.length === 0) return '';
+    return [
+      '认知阶段已经记录以下风险闭环。实现时必须用当前代码核对，不要把主决策自述当作已完成事实：',
+      ...sections,
+    ].join('\n\n');
+  }
+
+  private isSemanticVerification(value: unknown): value is SemanticFixVerification {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const result = value as Partial<SemanticFixVerification>;
+    return (
+      result.verdictSource === 'llm' &&
+      typeof result.verdictId === 'string' &&
+      typeof result.passed === 'boolean' &&
+      typeof result.issueResolved === 'boolean' &&
+      typeof result.evidence === 'string' &&
+      Array.isArray(result.remainingIssues) &&
+      result.remainingIssues.every(item => typeof item === 'string') &&
+      typeof result.verificationSummary === 'string' &&
+      (result.nextAction === 'commit' ||
+        result.nextAction === 'revise' ||
+        result.nextAction === 'ask')
+    );
+  }
+
+  private isSemanticVerificationApproved(verification: SemanticFixVerification): boolean {
+    return (
+      this.hasLlmSemanticVerdict(verification) &&
+      verification.passed &&
+      verification.issueResolved &&
+      verification.nextAction === 'commit' &&
+      verification.evidence.trim().length > 0 &&
+      verification.verificationSummary.trim().length > 0 &&
+      verification.remainingIssues.length === 0
+    );
+  }
+
+  private hasLlmSemanticVerdict(verification: SemanticFixVerification): boolean {
+    return verification.verdictSource === 'llm' && verification.verdictId.trim().length > 0;
+  }
+
+  /** 调用大模型语义校准器；缺失、异常或非法结果一律关闭提交门禁。 */
+  private async verifyCurrentFix(params: {
+    finding: ReviewFinding;
+    decision: MaintainerDecision;
+    changes: WorktreeChangedFile[];
+    fallbackContexts?: Array<{ path: string; content: string }>;
+    previousFailure?: string;
+  }): Promise<SemanticFixVerification> {
+    const brain = this.options.brain;
+    if (typeof brain.verifyFix !== 'function') {
+      throw new Error('当前 MaintainerBrain 未提供 verifyFix()，无法取得大模型语义裁决，禁止提交');
+    }
+
+    const changedFiles = params.changes.map(change => this.normalizeRepoPath(change.path));
+    const deletedFiles = params.changes
+      .filter(change => change.deleted)
+      .map(change => this.normalizeRepoPath(change.path));
+    const validationSummary = await this.collectValidationSummary();
+    const codeContext = await this.buildVerificationCodeContext(
+      params.changes,
+      params.fallbackContexts
+    );
+
+    try {
+      const verification = await brain.verifyFix({
+        finding: params.finding,
+        fixDescription: params.decision.fixDescription,
+        verificationPlan: params.decision.verificationPlan,
+        risks: params.decision.risks,
+        adversarialConcerns: params.decision.adversarialConcerns,
+        adversarialResponses: params.decision.adversarialResponses,
+        changedFiles,
+        deletedFiles,
+        codeContext,
+        validationSummary,
+        previousFailure: params.previousFailure,
+      });
+      if (!this.isSemanticVerification(verification)) {
+        throw new Error('verifyFix() 未返回合法的大模型语义裁决，禁止提交');
+      }
+      if (verification.verdictSource !== 'llm' || verification.verdictId.trim().length === 0) {
+        throw new Error('verifyFix() 未提供可追溯的大模型定论，禁止使用非 LLM 或无标识结果提交');
+      }
+      return verification;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`大模型语义验收不可用，禁止提交：${message}`);
+    }
+  }
+
+  private buildSemanticFailureReason(verification: SemanticFixVerification): string {
+    return compactDiscussionReason(
+      [
+        `裁决来源：大模型（${verification.verdictId}）`,
+        `独立语义验收未通过：${verification.verificationSummary}`,
+        verification.evidence ? `验收证据：${verification.evidence}` : '',
+        verification.remainingIssues.length > 0
+          ? `剩余问题：${verification.remainingIssues.join('；')}`
+          : '',
+        `下一步：${verification.nextAction}`,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    );
+  }
+
+  private buildSemanticReflowPrompt(verification: SemanticFixVerification): string {
+    return [
+      '上一轮修改已经完成工具循环，但没有通过独立语义验收。请不要直接 finish；基于当前工作区重新检查根因并修复。',
+      `验收摘要：${verification.verificationSummary}`,
+      verification.evidence ? `验收证据：${verification.evidence}` : '',
+      verification.remainingIssues.length > 0
+        ? `验收指出的剩余问题：\n- ${verification.remainingIssues.join('\n- ')}`
+        : '',
+      '完成必要修改后必须重新运行相关验证，再调用 finish。仍无法证明问题已解决时应明确失败，不要声称已修复。',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
   private assertWriteScope(
     changes: WorktreeChangedFile[],
     allowedPaths: Set<string>,
@@ -213,8 +438,52 @@ export class MaintainerActor {
     appliedFiles.clear();
     deletedFiles.clear();
     for (const change of changes) {
-      if (change.deleted) deletedFiles.add(change.path);
-      else appliedFiles.add(change.path);
+      const path = this.normalizeRepoPath(change.path);
+      if (change.deleted) deletedFiles.add(path);
+      else appliedFiles.add(path);
+    }
+  }
+
+  private mergeLoopChangeSets(
+    loop: FixToolLoop | undefined,
+    appliedFiles: Set<string>,
+    deletedFiles: Set<string>
+  ): void {
+    if (!loop) return;
+    for (const filePath of loop.getAppliedFiles()) {
+      const path = this.normalizeRepoPath(filePath);
+      appliedFiles.add(path);
+      deletedFiles.delete(path);
+    }
+    for (const filePath of loop.getDeletedFiles()) {
+      const path = this.normalizeRepoPath(filePath);
+      deletedFiles.add(path);
+      appliedFiles.delete(path);
+    }
+  }
+
+  private async refreshChangedFilesAfterReflow(
+    appliedFiles: Set<string>,
+    deletedFiles: Set<string>,
+    reflowState?: HookReflowState
+  ): Promise<WorktreeChangedFile[]> {
+    this.mergeLoopChangeSets(reflowState?.loop, appliedFiles, deletedFiles);
+    const changes = await this.listChangedFiles(Array.from(appliedFiles), Array.from(deletedFiles));
+    this.syncChangedFileSets(changes, appliedFiles, deletedFiles);
+    return changes;
+  }
+
+  private async requireSemanticVerification(params: {
+    finding: ReviewFinding;
+    decision: MaintainerDecision;
+    changes: WorktreeChangedFile[];
+    fallbackContexts?: Array<{ path: string; content: string }>;
+    previousFailure?: string;
+    failurePrefix: string;
+  }): Promise<void> {
+    const verification = await this.verifyCurrentFix(params);
+    if (!this.isSemanticVerificationApproved(verification)) {
+      throw new Error(`${params.failurePrefix}：${this.buildSemanticFailureReason(verification)}`);
     }
   }
 
@@ -445,6 +714,12 @@ export class MaintainerActor {
       fileContent: string;
       scope?: IssueScope;
       deleteFile?: boolean;
+      fixDescription?: string;
+      affectedFiles?: string[];
+      verificationPlan?: string[];
+      risks?: string[];
+      adversarialConcerns?: string[];
+      adversarialResponses?: string[];
     }>,
     _originalComment: string
   ): Promise<BatchFixResult> {
@@ -456,6 +731,7 @@ export class MaintainerActor {
     const appliedFiles = new Set<string>();
     const deletedFiles = new Set<string>();
     const approvedChangedPaths = new Set<string>();
+    const allApprovedPaths = new Set<string>();
     const alreadyFixedItems: Array<{ file: string; line: number; reason: string }> = [];
     const itemResults: PendingBatchFixItemResult[] = [];
     let currentIndex = 0;
@@ -516,6 +792,25 @@ export class MaintainerActor {
       for (currentIndex = 0; currentIndex < fixableItems.length; currentIndex++) {
         const item = fixableItems[currentIndex];
         const { finding } = item;
+        const itemDecision: MaintainerDecision = {
+          action: 'fix',
+          reason: '批量修复中的认知决策',
+          scope: item.scope,
+          fixDescription: item.fixDescription,
+          affectedFiles: item.affectedFiles,
+          verificationPlan: item.verificationPlan,
+          risks: item.risks,
+          adversarialConcerns: item.adversarialConcerns,
+          adversarialResponses: item.adversarialResponses,
+        };
+        const itemApprovedPaths = await this.resolveApprovedPaths(
+          finding,
+          item.scope === 'cross-file' ? item.affectedFiles : []
+        );
+        for (const path of itemApprovedPaths) allApprovedPaths.add(path);
+        const itemApprovedPathText = Array.from(itemApprovedPaths).join(', ');
+        const fallbackContexts = [{ path: finding.file, content: item.fileContent }];
+
         if (item.deleteFile) {
           console.log(`[MaintainerActor] 批量修复中删除文件: ${finding.file}`);
           const resolved = await this.options.worktreeManager.resolveFilePath(finding.file);
@@ -532,16 +827,116 @@ export class MaintainerActor {
             return buildResult(false, reason);
           }
           await this.options.worktreeManager.removeFile(resolved);
-          const targetPaths = new Set([
-            this.normalizeRepoPath(finding.file),
-            this.normalizeRepoPath(resolved),
-          ]);
-          const changes = await this.listChangedFiles(Array.from(appliedFiles), [
+          let changes = await this.listChangedFiles(Array.from(appliedFiles), [
             ...Array.from(deletedFiles),
             finding.file,
           ]);
-          const allowedPaths = new Set([...approvedChangedPaths, ...targetPaths]);
+          const allowedPaths = new Set([...approvedChangedPaths, ...itemApprovedPaths]);
           this.assertWriteScope(changes, allowedPaths, `finding ${finding.file}:${finding.line}`);
+          let itemChanges = changes.filter(change => itemApprovedPaths.has(change.path));
+          let verification = await this.verifyCurrentFix({
+            finding,
+            decision: itemDecision,
+            changes: itemChanges,
+            fallbackContexts,
+          });
+          if (!this.isSemanticVerificationApproved(verification)) {
+            const firstFailure = this.buildSemanticFailureReason(verification);
+            const reflowLoop = new FixToolLoop({
+              llmClient: this.options.llmClient,
+              worktreeManager: this.options.worktreeManager,
+              finding: { ...finding, autoFixable: true },
+              mr,
+              memoryClient: this.options.memoryClient,
+              recallPlanner: this.options.recallPlanner,
+              extraSystemPrompt: [
+                '上一轮删除文件后没有通过独立语义验收。文件已经删除，不要恢复该文件；如剩余问题涉及已批准的关联文件，只修改认知阶段批准的路径。',
+                item.fixDescription ? `认知阶段选择的修复方向：${item.fixDescription}` : '',
+                this.buildDecisionRiskPrompt(itemDecision),
+                item.scope === 'cross-file'
+                  ? `该 finding 的批准路径为：${Array.from(itemApprovedPaths).join(', ')}`
+                  : `该 finding 是局部删除问题，只允许保留删除目标文件（批准路径：${Array.from(itemApprovedPaths).join(', ')})`,
+                this.buildSemanticReflowPrompt(verification),
+                baselineFailurePrompt,
+              ]
+                .filter(Boolean)
+                .join('\n\n'),
+              recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
+            });
+            const reflowResult = await reflowLoop.run();
+            this.trackFinalActingRound(reflowLoop);
+            if (!reflowResult.success && !reflowResult.alreadyFixed) {
+              const reason = `${firstFailure}\n回流修复失败：${reflowResult.reason}`;
+              itemResults.push({
+                file: finding.file,
+                line: finding.line,
+                status: 'failed',
+                reason,
+              });
+              addDeferredItems(currentIndex + 1, '前序 finding 未完成，本轮尚未执行');
+              await this.recordFixOutcome(mr.iid, finding, false, reason);
+              return buildResult(false, reason);
+            }
+
+            const reflowTouchedPaths = new Set(
+              [...reflowLoop.getAppliedFiles(), ...reflowLoop.getDeletedFiles()].map(path =>
+                this.normalizeRepoPath(path)
+              )
+            );
+            if (
+              !reflowResult.alreadyFixed &&
+              !Array.from(reflowTouchedPaths).some(path => itemApprovedPaths.has(path))
+            ) {
+              const reason = `${firstFailure}\n回流修复未修改认知阶段批准的文件`;
+              itemResults.push({
+                file: finding.file,
+                line: finding.line,
+                status: 'failed',
+                reason,
+              });
+              addDeferredItems(currentIndex + 1, '前序 finding 未完成，本轮尚未执行');
+              await this.recordFixOutcome(mr.iid, finding, false, reason);
+              return buildResult(false, reason);
+            }
+
+            changes = await this.listChangedFiles(
+              [
+                ...Array.from(appliedFiles),
+                ...changes.filter(change => !change.deleted).map(change => change.path),
+                ...reflowLoop.getAppliedFiles(),
+              ],
+              [
+                ...Array.from(deletedFiles),
+                ...changes.filter(change => change.deleted).map(change => change.path),
+                ...reflowLoop.getDeletedFiles(),
+              ]
+            );
+            this.assertWriteScope(
+              changes,
+              new Set([...approvedChangedPaths, ...itemApprovedPaths]),
+              `finding ${finding.file}:${finding.line}`
+            );
+            itemChanges = changes.filter(change => itemApprovedPaths.has(change.path));
+            verification = await this.verifyCurrentFix({
+              finding,
+              decision: itemDecision,
+              changes: itemChanges,
+              fallbackContexts,
+              previousFailure: firstFailure,
+            });
+            if (!this.isSemanticVerificationApproved(verification)) {
+              const reason = `${firstFailure}\n第二次独立语义验收仍未通过：${this.buildSemanticFailureReason(verification)}`;
+              itemResults.push({
+                file: finding.file,
+                line: finding.line,
+                status: 'failed',
+                reason,
+              });
+              addDeferredItems(currentIndex + 1, '前序 finding 未通过语义验收，本轮尚未执行');
+              await this.recordFixOutcome(mr.iid, finding, false, reason);
+              return buildResult(false, reason);
+            }
+          }
           this.syncChangedFileSets(changes, appliedFiles, deletedFiles);
           for (const change of changes) approvedChangedPaths.add(change.path);
           itemResults.push({
@@ -552,27 +947,39 @@ export class MaintainerActor {
           continue;
         }
 
-        const loop = new FixToolLoop({
-          llmClient: this.options.llmClient,
-          worktreeManager: this.options.worktreeManager,
-          finding,
-          mr,
-          memoryClient: this.options.memoryClient,
-          recallPlanner: this.options.recallPlanner,
-          extraSystemPrompt: [
-            `这是同一条 discussion 中的批量修复任务之一。当前只处理 ${finding.file}:${finding.line}；严禁引用、判断或复用同一 discussion 中其他 finding 的文件、函数和证据。`,
-            item.scope === 'cross-file'
-              ? '该 finding 被识别为跨文件问题；仅在 Reviewer 问题确实要求时修改必要调用点。'
-              : '该 finding 是局部问题，只允许修改目标文件。',
-            baselineFailurePrompt,
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
-          recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
-        });
+        const runBatchFixLoop = async (feedback?: string) => {
+          const loop = new FixToolLoop({
+            llmClient: this.options.llmClient,
+            worktreeManager: this.options.worktreeManager,
+            finding,
+            mr,
+            memoryClient: this.options.memoryClient,
+            recallPlanner: this.options.recallPlanner,
+            extraSystemPrompt: [
+              `这是同一条 discussion 中的批量修复任务之一。当前只处理 ${finding.file}:${finding.line}；严禁引用、判断或复用同一 discussion 中其他 finding 的文件、函数和证据。`,
+              item.fixDescription
+                ? `认知阶段选择的修复方向：${item.fixDescription}。该方向只是执行起点，必须结合当前代码验证其完整性。`
+                : '',
+              item.scope === 'cross-file'
+                ? `该 finding 被识别为跨文件问题；认知阶段批准的文件集合为：${itemApprovedPathText || '仅目标文件'}。只修改解决问题所必需且位于该集合内的文件。`
+                : `该 finding 是局部问题，只允许修改目标文件或认知阶段明确批准的路径（批准路径：${itemApprovedPathText}）。`,
+              item.verificationPlan?.length
+                ? `完成修改后必须满足以下语义验收计划：\n- ${item.verificationPlan.join('\n- ')}`
+                : '',
+              this.buildDecisionRiskPrompt(itemDecision),
+              baselineFailurePrompt,
+              feedback,
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+            recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
+          });
+          const result = await loop.run();
+          this.trackFinalActingRound(loop);
+          return { loop, result };
+        };
 
-        const result = await loop.run();
-        this.trackFinalActingRound(loop);
+        let { loop, result } = await runBatchFixLoop();
         console.log(
           `[MaintainerActor] finding ${finding.file}:${finding.line} 修复结果: success=${result.success}, reason=${result.reason}`
         );
@@ -609,23 +1016,28 @@ export class MaintainerActor {
 
         const loopAppliedFiles = loop.getAppliedFiles();
         const loopDeletedFiles = loop.getDeletedFiles();
-        const changes = await this.listChangedFiles(
+        let changes = await this.listChangedFiles(
           [...Array.from(appliedFiles), ...loopAppliedFiles],
           [...Array.from(deletedFiles), ...loopDeletedFiles]
         );
         const targetPaths = await this.resolveTargetPaths(finding.file);
         const changedPaths = new Set(changes.map(change => change.path));
         const targetChanged = Array.from(targetPaths).some(target => changedPaths.has(target));
-        const introducedChange = changes.some(change => !approvedChangedPaths.has(change.path));
-        if (item.scope !== 'cross-file') {
-          const allowedPaths = new Set([...approvedChangedPaths, ...targetPaths]);
-          this.assertWriteScope(changes, allowedPaths, `finding ${finding.file}:${finding.line}`);
-        }
-        if (
-          (item.scope === 'cross-file' && !introducedChange) ||
-          (!targetChanged && item.scope !== 'cross-file')
-        ) {
-          const reason = '修复循环未修改 finding 指向的目标文件';
+        const loopTouchedPaths = new Set(
+          [...loop.getAppliedFiles(), ...loop.getDeletedFiles()].map(path =>
+            this.normalizeRepoPath(path)
+          )
+        );
+        const allowedPaths = new Set([...approvedChangedPaths, ...itemApprovedPaths]);
+        this.assertWriteScope(changes, allowedPaths, `finding ${finding.file}:${finding.line}`);
+        const itemTouchedPaths = Array.from(loopTouchedPaths).filter(path =>
+          itemApprovedPaths.has(path)
+        );
+        if (itemTouchedPaths.length === 0 || (!targetChanged && item.scope !== 'cross-file')) {
+          const reason =
+            item.scope === 'cross-file'
+              ? '修复循环未修改认知阶段批准的文件'
+              : '修复循环未修改 finding 指向的目标文件';
           itemResults.push({
             file: finding.file,
             line: finding.line,
@@ -636,6 +1048,103 @@ export class MaintainerActor {
           await this.recordFixOutcome(mr.iid, finding, false, reason);
           return buildResult(false, reason);
         }
+
+        let itemChanges = changes.filter(change => itemApprovedPaths.has(change.path));
+        let semanticVerification = await this.verifyCurrentFix({
+          finding,
+          decision: itemDecision,
+          changes: itemChanges,
+          fallbackContexts,
+        });
+        if (!this.isSemanticVerificationApproved(semanticVerification)) {
+          const firstFailure = this.buildSemanticFailureReason(semanticVerification);
+          console.warn(
+            `[MaintainerActor] 批量 finding ${finding.file}:${finding.line} 语义验收未通过，回流一次: ${firstFailure}`
+          );
+          ({ loop, result } = await runBatchFixLoop(
+            this.buildSemanticReflowPrompt(semanticVerification)
+          ));
+          if (result.alreadyFixed) {
+            const reason = compactDiscussionReason(result.evidence || result.reason);
+            alreadyFixedItems.push({
+              file: finding.file,
+              line: finding.line,
+              reason,
+            });
+            itemResults.push({
+              file: finding.file,
+              line: finding.line,
+              status: 'already-fixed',
+              reason,
+            });
+            await this.recordFixOutcome(mr.iid, finding, true, `already-fixed: ${reason}`);
+            continue;
+          }
+          if (!result.success) {
+            const reason = `${firstFailure}\n回流修复失败：${result.reason}`;
+            itemResults.push({
+              file: finding.file,
+              line: finding.line,
+              status: 'failed',
+              reason,
+            });
+            addDeferredItems(currentIndex + 1, '前序 finding 未完成，本轮尚未执行');
+            await this.recordFixOutcome(mr.iid, finding, false, reason);
+            return buildResult(false, reason);
+          }
+
+          const reflowTouchedPaths = new Set(
+            [...loop.getAppliedFiles(), ...loop.getDeletedFiles()].map(path =>
+              this.normalizeRepoPath(path)
+            )
+          );
+          if (!Array.from(reflowTouchedPaths).some(path => itemApprovedPaths.has(path))) {
+            const reason = `${firstFailure}\n回流修复未修改认知阶段批准的文件`;
+            itemResults.push({
+              file: finding.file,
+              line: finding.line,
+              status: 'failed',
+              reason,
+            });
+            addDeferredItems(currentIndex + 1, '前序 finding 未完成，本轮尚未执行');
+            await this.recordFixOutcome(mr.iid, finding, false, reason);
+            return buildResult(false, reason);
+          }
+          changes = await this.listChangedFiles(
+            [
+              ...Array.from(appliedFiles),
+              ...changes.filter(change => !change.deleted).map(change => change.path),
+              ...loop.getAppliedFiles(),
+            ],
+            [
+              ...Array.from(deletedFiles),
+              ...changes.filter(change => change.deleted).map(change => change.path),
+              ...loop.getDeletedFiles(),
+            ]
+          );
+          this.assertWriteScope(changes, allowedPaths, `finding ${finding.file}:${finding.line}`);
+          itemChanges = changes.filter(change => itemApprovedPaths.has(change.path));
+          semanticVerification = await this.verifyCurrentFix({
+            finding,
+            decision: itemDecision,
+            changes: itemChanges,
+            fallbackContexts,
+            previousFailure: firstFailure,
+          });
+          if (!this.isSemanticVerificationApproved(semanticVerification)) {
+            const reason = `${firstFailure}\n第二次独立语义验收仍未通过：${this.buildSemanticFailureReason(semanticVerification)}`;
+            itemResults.push({
+              file: finding.file,
+              line: finding.line,
+              status: 'failed',
+              reason,
+            });
+            addDeferredItems(currentIndex + 1, '前序 finding 未通过语义验收，本轮尚未执行');
+            await this.recordFixOutcome(mr.iid, finding, false, reason);
+            return buildResult(false, reason);
+          }
+        }
+
         this.syncChangedFileSets(changes, appliedFiles, deletedFiles);
         for (const change of changes) approvedChangedPaths.add(change.path);
         itemResults.push({
@@ -683,12 +1192,43 @@ export class MaintainerActor {
           changeDescription,
           () => buildDefaultBatchMessage(Array.from(appliedFiles), Array.from(deletedFiles)),
           distilledFailure => this.reflowAfterHookFailure(mr, baseFinding, distilledFailure),
-          async () => {
-            const changes = await this.listChangedFiles(
-              Array.from(appliedFiles),
-              Array.from(deletedFiles)
+          async (afterHookReflow, reflowState) => {
+            const changes = await this.refreshChangedFilesAfterReflow(
+              appliedFiles,
+              deletedFiles,
+              reflowState
             );
-            this.assertWriteScope(changes, approvedChangedPaths, '批量修复提交前校验');
+            this.assertWriteScope(changes, allApprovedPaths, '批量修复提交前校验');
+            if (!afterHookReflow) return;
+
+            for (const itemResult of itemResults) {
+              if (itemResult.status !== 'pending-commit') continue;
+              const item = fixableItems.find(
+                candidate =>
+                  candidate.finding.file === itemResult.file &&
+                  candidate.finding.line === itemResult.line
+              );
+              if (!item) continue;
+              const itemApprovedPaths = await this.resolveApprovedPaths(
+                item.finding,
+                item.scope === 'cross-file' ? item.affectedFiles : []
+              );
+              const itemChanges = changes.filter(change => itemApprovedPaths.has(change.path));
+              await this.requireSemanticVerification({
+                finding: item.finding,
+                decision: {
+                  action: 'fix',
+                  reason: '批量修复中的认知决策',
+                  scope: item.scope,
+                  affectedFiles: item.affectedFiles,
+                  verificationPlan: item.verificationPlan,
+                },
+                changes: itemChanges,
+                fallbackContexts: [{ path: item.finding.file, content: item.fileContent }],
+                previousFailure: reflowState?.failure,
+                failurePrefix: `hook 回流后 finding ${item.finding.file}:${item.finding.line} 语义验收`,
+              });
+            }
           }
         );
       }
@@ -748,13 +1288,29 @@ export class MaintainerActor {
       autoFixable: true,
     };
     const fixGuidance = decision.fixDescription?.trim();
-    const extraSystemPrompt = fixGuidance
-      ? [
-          'MaintainerBrain 提供了以下补充修复方向。它只是实现提示，不能替代或覆盖 Reviewer 的原始 finding：',
-          fixGuidance,
-          '请始终以 Reviewer 原始问题、目标文件和建议为准，结合当前代码验证该方向是否完整。',
-        ].join('\n')
-      : undefined;
+    const approvedPaths = await this.resolveApprovedPaths(
+      finding,
+      decision.scope === 'cross-file' ? decision.affectedFiles : []
+    );
+    const approvedPathText = Array.from(approvedPaths).join(', ');
+    const extraSystemPrompt = [
+      fixGuidance
+        ? [
+            'MaintainerBrain 提供了以下补充修复方向。它只是实现提示，不能替代或覆盖 Reviewer 的原始 finding：',
+            fixGuidance,
+            '请始终以 Reviewer 原始问题、目标文件和建议为准，结合当前代码验证该方向是否完整。',
+          ].join('\n')
+        : '',
+      decision.scope === 'cross-file'
+        ? `该 finding 被识别为跨文件问题；认知阶段批准的文件集合为：${approvedPathText || '仅目标文件'}。只修改解决问题所必需且位于该集合内的文件。`
+        : `该 finding 是局部问题，只允许修改目标文件（批准路径：${approvedPathText}）。`,
+      decision.verificationPlan?.length
+        ? `完成修改后必须满足以下语义验收计划：\n- ${decision.verificationPlan.join('\n- ')}`
+        : '',
+      this.buildDecisionRiskPrompt(decision),
+    ]
+      .filter(Boolean)
+      .join('\n\n');
 
     console.log(`[MaintainerActor] 执行修复: ${finding.file}:${finding.line}`);
 
@@ -769,27 +1325,25 @@ export class MaintainerActor {
       const baselineFailure = await this.prepareRepairEnvironment();
       const baselineFailurePrompt = this.buildBaselineFailurePrompt(baselineFailure);
 
-      const loop = new FixToolLoop({
-        llmClient: this.options.llmClient,
-        worktreeManager: this.options.worktreeManager,
-        finding: syntheticFinding,
-        mr,
-        memoryClient: this.options.memoryClient,
-        recallPlanner: this.options.recallPlanner,
-        extraSystemPrompt: [
-          extraSystemPrompt,
-          decision.scope === 'cross-file'
-            ? '该 finding 被识别为跨文件问题；仅修改解决 Reviewer 问题所必需的文件。'
-            : '该 finding 是局部问题，只允许修改目标文件。',
-          baselineFailurePrompt,
-        ]
-          .filter(Boolean)
-          .join('\n\n'),
-        recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
-      });
+      const runFixLoop = async (feedback?: string) => {
+        const loop = new FixToolLoop({
+          llmClient: this.options.llmClient,
+          worktreeManager: this.options.worktreeManager,
+          finding: syntheticFinding,
+          mr,
+          memoryClient: this.options.memoryClient,
+          recallPlanner: this.options.recallPlanner,
+          extraSystemPrompt: [extraSystemPrompt, baselineFailurePrompt, feedback]
+            .filter(Boolean)
+            .join('\n\n'),
+          recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
+        });
+        const result = await loop.run();
+        this.trackFinalActingRound(loop);
+        return { loop, result };
+      };
 
-      const fixResult = await loop.run();
-      this.trackFinalActingRound(loop);
+      let { loop, result: fixResult } = await runFixLoop();
       console.log(
         `[MaintainerActor] 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`
       );
@@ -809,19 +1363,95 @@ export class MaintainerActor {
         return this.emptyActionResult(false, fixResult.reason);
       }
 
-      const changes = await this.listChangedFiles(loop.getAppliedFiles(), loop.getDeletedFiles());
+      let changes = await this.listChangedFiles(loop.getAppliedFiles(), loop.getDeletedFiles());
       if (changes.length === 0) {
         return this.emptyActionResult(false, '修复循环结束后 git 工作区没有实际变更');
       }
       const targetPaths = await this.resolveTargetPaths(finding.file);
-      if (decision.scope !== 'cross-file') {
-        this.assertWriteScope(changes, targetPaths, `finding ${finding.file}:${finding.line}`);
-        const targetChanged = changes.some(change => targetPaths.has(change.path));
-        if (!targetChanged) {
-          return this.emptyActionResult(false, '修复循环未修改 finding 指向的目标文件');
+      const validateChangedPaths = (currentChanges: WorktreeChangedFile[]): void => {
+        this.assertWriteScope(
+          currentChanges,
+          approvedPaths,
+          `finding ${finding.file}:${finding.line}`
+        );
+        const changedPaths = new Set(currentChanges.map(change => change.path));
+        const targetChanged = Array.from(targetPaths).some(target => changedPaths.has(target));
+        const approvedChanged = currentChanges.some(change => approvedPaths.has(change.path));
+        if ((decision.scope !== 'cross-file' && !targetChanged) || !approvedChanged) {
+          throw new Error(
+            decision.scope === 'cross-file'
+              ? '修复循环未修改认知阶段批准的文件'
+              : '修复循环未修改 finding 指向的目标文件'
+          );
+        }
+      };
+      validateChangedPaths(changes);
+
+      let semanticVerification = await this.verifyCurrentFix({
+        finding,
+        decision,
+        changes,
+      });
+      if (!this.isSemanticVerificationApproved(semanticVerification)) {
+        const firstFailure = this.buildSemanticFailureReason(semanticVerification);
+        console.warn(`[MaintainerActor] 单条修复语义验收未通过，回流一次: ${firstFailure}`);
+        ({ loop, result: fixResult } = await runFixLoop(
+          this.buildSemanticReflowPrompt(semanticVerification)
+        ));
+        console.log(
+          `[MaintainerActor] 语义验收回流结果: success=${fixResult.success}, reason=${fixResult.reason}`
+        );
+
+        if (fixResult.alreadyFixed) {
+          await this.recordFixOutcome(
+            mr.iid,
+            finding,
+            true,
+            `already-fixed after semantic reflow: ${fixResult.reason}`
+          );
+          decision.action = 'ignore';
+          decision.alreadyFixed = true;
+          decision.reason = fixResult.reason;
+          decision.replyBody = fixResult.evidence || fixResult.reason;
+          const delivery = await this.ignore(mr, discussion, decision.reason, decision, state);
+          return this.withDeliveryResult(true, delivery);
+        }
+        if (!fixResult.success) {
+          const reason = `${firstFailure}\n回流修复失败：${fixResult.reason}`;
+          await this.recordFixOutcome(mr.iid, finding, false, reason);
+          return this.emptyActionResult(false, reason);
+        }
+
+        changes = await this.listChangedFiles(loop.getAppliedFiles(), loop.getDeletedFiles());
+        if (changes.length === 0) {
+          const reason = `${firstFailure}\n回流修复未产生实际文件变更`;
+          await this.recordFixOutcome(mr.iid, finding, false, reason);
+          return this.emptyActionResult(false, reason);
+        }
+        validateChangedPaths(changes);
+        semanticVerification = await this.verifyCurrentFix({
+          finding,
+          decision,
+          changes,
+          previousFailure: firstFailure,
+        });
+        if (!this.isSemanticVerificationApproved(semanticVerification)) {
+          const reason = `${firstFailure}\n第二次独立语义验收仍未通过：${this.buildSemanticFailureReason(semanticVerification)}`;
+          await this.recordFixOutcome(mr.iid, finding, false, reason);
+          return this.emptyActionResult(false, reason);
         }
       }
-      const approvedChangedPaths = new Set(changes.map(change => change.path));
+
+      if (decision.scope !== 'cross-file') {
+        this.assertWriteScope(changes, approvedPaths, `finding ${finding.file}:${finding.line}`);
+      }
+
+      const trackedAppliedFiles = new Set(
+        changes.filter(change => !change.deleted).map(change => this.normalizeRepoPath(change.path))
+      );
+      const trackedDeletedFiles = new Set(
+        changes.filter(change => change.deleted).map(change => this.normalizeRepoPath(change.path))
+      );
 
       console.log(`[MaintainerActor] 阶段=commit-push 提交并推送修复到分支: ${mr.sourceBranch}`);
       await this.commitWithConventionRetry(
@@ -830,12 +1460,23 @@ export class MaintainerActor {
         () => buildDefaultFixMessage(finding),
         distilledFailure =>
           this.reflowAfterHookFailure(mr, syntheticFinding, distilledFailure, extraSystemPrompt),
-        async () => {
-          const currentChanges = await this.listChangedFiles(
-            loop.getAppliedFiles(),
-            loop.getDeletedFiles()
+        async (afterHookReflow, reflowState) => {
+          if (reflowState?.loop) loop = reflowState.loop;
+          changes = await this.refreshChangedFilesAfterReflow(
+            trackedAppliedFiles,
+            trackedDeletedFiles,
+            reflowState
           );
-          this.assertWriteScope(currentChanges, approvedChangedPaths, '单条修复提交前校验');
+          validateChangedPaths(changes);
+          if (afterHookReflow) {
+            await this.requireSemanticVerification({
+              finding,
+              decision,
+              changes,
+              previousFailure: reflowState?.failure,
+              failurePrefix: 'hook 回流后单条修复语义验收',
+            });
+          }
         }
       );
 
@@ -894,13 +1535,26 @@ export class MaintainerActor {
 
       console.log(`[MaintainerActor] 阶段=delete 删除文件: ${resolvedPath}`);
       await this.options.worktreeManager.removeFile(resolvedPath);
-      const changes = await this.listChangedFiles([], [finding.file]);
-      const targetPaths = new Set([
-        this.normalizeRepoPath(finding.file),
-        this.normalizeRepoPath(resolvedPath),
-      ]);
-      this.assertWriteScope(changes, targetPaths, `删除 finding ${finding.file}:${finding.line}`);
-      const approvedChangedPaths = new Set(changes.map(change => change.path));
+      let changes = await this.listChangedFiles([], [finding.file]);
+      const approvedPaths = await this.resolveApprovedPaths(finding, decision.affectedFiles);
+      this.assertWriteScope(changes, approvedPaths, `删除 finding ${finding.file}:${finding.line}`);
+      const verification = await this.verifyCurrentFix({
+        finding,
+        decision,
+        changes,
+        fallbackContexts: [{ path: finding.file, content: `文件 ${finding.file} 已删除。` }],
+      });
+      if (!this.isSemanticVerificationApproved(verification)) {
+        const reason = this.buildSemanticFailureReason(verification);
+        await this.recordFixOutcome(mr.iid, finding, false, reason);
+        return this.emptyActionResult(false, reason);
+      }
+      const trackedAppliedFiles = new Set(
+        changes.filter(change => !change.deleted).map(change => this.normalizeRepoPath(change.path))
+      );
+      const trackedDeletedFiles = new Set(
+        changes.filter(change => change.deleted).map(change => this.normalizeRepoPath(change.path))
+      );
 
       const changeDescription = `Reviewer 指出文件 ${finding.file} 不应上传，已从 MR 中删除。`;
       console.log(`[MaintainerActor] 阶段=commit-push 提交删除到分支: ${mr.sourceBranch}`);
@@ -909,9 +1563,23 @@ export class MaintainerActor {
         changeDescription,
         () => buildDefaultDeleteMessage(basename(finding.file)),
         distilledFailure => this.reflowAfterHookFailure(mr, finding, distilledFailure),
-        async () => {
-          const currentChanges = await this.listChangedFiles([], [finding.file]);
-          this.assertWriteScope(currentChanges, approvedChangedPaths, '删除修复提交前校验');
+        async (afterHookReflow, reflowState) => {
+          changes = await this.refreshChangedFilesAfterReflow(
+            trackedAppliedFiles,
+            trackedDeletedFiles,
+            reflowState
+          );
+          this.assertWriteScope(changes, approvedPaths, '删除修复提交前校验');
+          if (afterHookReflow) {
+            await this.requireSemanticVerification({
+              finding,
+              decision,
+              changes,
+              fallbackContexts: [{ path: finding.file, content: `文件 ${finding.file} 已删除。` }],
+              previousFailure: reflowState?.failure,
+              failurePrefix: 'hook 回流后删除文件语义验收',
+            });
+          }
         }
       );
 
@@ -1062,18 +1730,25 @@ export class MaintainerActor {
       const baselineFailure = await this.prepareRepairEnvironment();
       const baselineFailurePrompt = this.buildBaselineFailurePrompt(baselineFailure);
 
-      const loop = new FixToolLoop({
-        llmClient: this.options.llmClient,
-        worktreeManager: this.options.worktreeManager,
-        finding: syntheticFinding,
-        mr,
-        memoryClient: this.options.memoryClient,
-        recallPlanner: this.options.recallPlanner,
-        extraSystemPrompt: [extraSystemPrompt, baselineFailurePrompt].filter(Boolean).join('\n\n'),
-      });
+      const runCiFixLoop = async (feedback?: string) => {
+        const loop = new FixToolLoop({
+          llmClient: this.options.llmClient,
+          worktreeManager: this.options.worktreeManager,
+          finding: syntheticFinding,
+          mr,
+          memoryClient: this.options.memoryClient,
+          recallPlanner: this.options.recallPlanner,
+          extraSystemPrompt: [extraSystemPrompt, baselineFailurePrompt, feedback]
+            .filter(Boolean)
+            .join('\n\n'),
+          recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(syntheticFinding),
+        });
+        const result = await loop.run();
+        this.trackFinalActingRound(loop);
+        return { loop, result };
+      };
 
-      const fixResult = await loop.run();
-      this.trackFinalActingRound(loop);
+      let { loop, result: fixResult } = await runCiFixLoop();
       console.log(
         `[MaintainerActor] CI 修复结果: success=${fixResult.success}, reason=${fixResult.reason}`
       );
@@ -1082,12 +1757,68 @@ export class MaintainerActor {
         return { codeApplied: false, reason: fixResult.reason, appliedFiles: [] };
       }
 
-      const changes = await this.listChangedFiles(loop.getAppliedFiles(), loop.getDeletedFiles());
-      const appliedFiles = changes.map(change => change.path);
+      let changes = await this.listChangedFiles(loop.getAppliedFiles(), loop.getDeletedFiles());
       if (changes.length === 0) {
         return { codeApplied: false, reason: 'CI 修复未产生任何文件变更', appliedFiles: [] };
       }
-      const approvedChangedPaths = new Set(appliedFiles);
+      const approvedChangedPaths = new Set(changes.map(change => change.path));
+      const ciDecision: MaintainerDecision = {
+        action: 'fix',
+        reason: 'CI 失败修复中的语义决策',
+        fixDescription: '根据 CI 失败日志定位并修复根因',
+        scope: 'cross-file',
+        affectedFiles: Array.from(approvedChangedPaths),
+        verificationPlan: ['CI 日志对应的根因已消除', '相关本地验证通过'],
+      };
+      const ciFallbackContexts = [{ path: 'ci-failure.log', content: failureDigest }];
+      let semanticVerification = await this.verifyCurrentFix({
+        finding: syntheticFinding,
+        decision: ciDecision,
+        changes,
+        fallbackContexts: ciFallbackContexts,
+      });
+      if (!this.isSemanticVerificationApproved(semanticVerification)) {
+        const firstFailure = this.buildSemanticFailureReason(semanticVerification);
+        ({ loop, result: fixResult } = await runCiFixLoop(
+          this.buildSemanticReflowPrompt(semanticVerification)
+        ));
+        if (fixResult.alreadyFixed || !fixResult.success) {
+          const reason = fixResult.alreadyFixed
+            ? `${firstFailure}\nCI 语义回流判定当前状态无需继续修改，但未形成可提交的修复结果`
+            : `${firstFailure}\nCI 语义回流失败：${fixResult.reason}`;
+          return { codeApplied: false, reason, appliedFiles: [] };
+        }
+        changes = await this.listChangedFiles(loop.getAppliedFiles(), loop.getDeletedFiles());
+        if (changes.length === 0) {
+          return {
+            codeApplied: false,
+            reason: `${firstFailure}\nCI 语义回流未产生实际文件变更`,
+            appliedFiles: [],
+          };
+        }
+        this.assertWriteScope(changes, approvedChangedPaths, 'CI 语义回流提交前校验');
+        semanticVerification = await this.verifyCurrentFix({
+          finding: syntheticFinding,
+          decision: ciDecision,
+          changes,
+          fallbackContexts: ciFallbackContexts,
+          previousFailure: firstFailure,
+        });
+        if (!this.isSemanticVerificationApproved(semanticVerification)) {
+          return {
+            codeApplied: false,
+            reason: `${firstFailure}\n第二次独立语义验收仍未通过：${this.buildSemanticFailureReason(semanticVerification)}`,
+            appliedFiles: [],
+          };
+        }
+      }
+      const trackedAppliedFiles = new Set(
+        changes.filter(change => !change.deleted).map(change => this.normalizeRepoPath(change.path))
+      );
+      const trackedDeletedFiles = new Set(
+        changes.filter(change => change.deleted).map(change => this.normalizeRepoPath(change.path))
+      );
+      let appliedFiles = changes.map(change => change.path);
 
       console.log(`[MaintainerActor] 阶段=commit-push 提交 CI 修复到分支: ${mr.sourceBranch}`);
       await this.commitWithConventionRetry(
@@ -1101,12 +1832,24 @@ export class MaintainerActor {
             ...appliedFiles.map(f => `- ${f}`),
           ].join('\n'),
         distilledFailure => this.reflowAfterHookFailure(mr, syntheticFinding, distilledFailure),
-        async () => {
-          const currentChanges = await this.listChangedFiles(
-            loop.getAppliedFiles(),
-            loop.getDeletedFiles()
+        async (afterHookReflow, reflowState) => {
+          changes = await this.refreshChangedFilesAfterReflow(
+            trackedAppliedFiles,
+            trackedDeletedFiles,
+            reflowState
           );
-          this.assertWriteScope(currentChanges, approvedChangedPaths, 'CI 修复提交前校验');
+          this.assertWriteScope(changes, approvedChangedPaths, 'CI 修复提交前校验');
+          appliedFiles = changes.map(change => change.path);
+          if (afterHookReflow) {
+            await this.requireSemanticVerification({
+              finding: syntheticFinding,
+              decision: ciDecision,
+              changes,
+              fallbackContexts: ciFallbackContexts,
+              previousFailure: reflowState?.failure,
+              failurePrefix: 'hook 回流后 CI 修复语义验收',
+            });
+          }
         }
       );
 
@@ -1222,17 +1965,19 @@ export class MaintainerActor {
     branch: string,
     changeDescription: string,
     buildDefaultMessage: () => string,
-    reflow?: (distilledFailure: string) => Promise<boolean>,
-    verifyChanges?: () => Promise<void>
+    reflow?: (distilledFailure: string) => Promise<HookReflowResult>,
+    verifyChanges?: (afterHookReflow?: boolean, reflowState?: HookReflowState) => Promise<void>
   ): Promise<void> {
     const wm = this.options.worktreeManager;
     let message = await this.buildCommitMessage(changeDescription, buildDefaultMessage);
     let recoveredConvention: string | undefined;
     let commitMessageRecoveryAttempted = false;
     let hookReflowAttempted = false;
+    let afterHookReflow = false;
+    let reflowState: HookReflowState | undefined;
 
     for (let attempt = 0; attempt < 3; attempt++) {
-      await verifyChanges?.();
+      await verifyChanges?.(afterHookReflow, reflowState);
       try {
         await wm.commitAndPush(branch, message, { setUpstream: false });
         if (attempt === 0) this.incrMetric('commitFirstTryPasses');
@@ -1273,8 +2018,14 @@ export class MaintainerActor {
         ) {
           hookReflowAttempted = true;
           console.log(`[MaintainerActor] ${kind} 类 hook 失败回流修复循环`);
-          const changed = await reflow(distilled);
-          if (changed) continue;
+          const result = await reflow(distilled);
+          const normalized: HookReflowState =
+            typeof result === 'boolean' ? { changed: result } : result;
+          if (normalized.changed) {
+            reflowState = { ...normalized, failure: distilled };
+            afterHookReflow = true;
+            continue;
+          }
           console.warn(`[MaintainerActor] 回流未产生新文件变更，不再重试提交`);
         }
 
@@ -1323,7 +2074,7 @@ export class MaintainerActor {
     baseFinding: ReviewFinding,
     distilledFailure: string,
     extraSystemPrompt?: string
-  ): Promise<boolean> {
+  ): Promise<{ changed: boolean; loop: FixToolLoop; result: FixAttemptResult }> {
     this.incrMetric('hookFailureReflows');
     const reflowFinding: ReviewFinding = {
       ...baseFinding,
@@ -1353,7 +2104,12 @@ export class MaintainerActor {
     console.log(
       `[MaintainerActor] hook 失败回流结果: success=${result.success}, reason=${result.reason}`
     );
-    return loop.getAppliedFiles().length > 0 || loop.getDeletedFiles().length > 0;
+    return {
+      changed:
+        result.success && (loop.getAppliedFiles().length > 0 || loop.getDeletedFiles().length > 0),
+      loop,
+      result,
+    };
   }
 
   /** 按已记忆的项目规范生成提交信息；无规范时使用朴素默认 */

@@ -11,8 +11,20 @@ export type LocalJudgeVerdict =
   | { kind: 'reliable'; value: boolean; reason: string }
   | { kind: 'unreliable'; reason: string };
 
+export interface AdversarialReviewResult {
+  kind: 'reliable';
+  approve: boolean;
+  concerns: string[];
+  requiredChanges: string[];
+  reason: string;
+}
+
 export type PreFilterScopeVerdict =
-  | { kind: 'reliable'; scope: 'trivial' | 'local' | 'cross-file' | 'needs-clarification'; reason: string }
+  | {
+      kind: 'reliable';
+      scope: 'trivial' | 'local' | 'cross-file' | 'needs-clarification';
+      reason: string;
+    }
   | { kind: 'unreliable'; reason: string };
 
 export type PreFilterNonFindingVerdict =
@@ -47,6 +59,7 @@ export interface StuckCorrectionResult {
  * 已修复辅助的结果（可选的增强点）
  */
 export interface AlreadyFixedAssistanceResult {
+  kind: 'reliable';
   /** 问题是否可能已经在当前代码中不存在 */
   likelyAlreadyFixed: boolean;
   /** 判定依据 */
@@ -76,7 +89,7 @@ export interface MaintainerLocalJudge {
   reassessSemanticIdentity(
     currentFindingDescription: string,
     previousDecisionSummary: string,
-    fileContextHint?: string,
+    fileContextHint?: string
   ): Promise<LocalJudgeVerdict | SemanticReidentificationResult>;
 
   /**
@@ -88,7 +101,7 @@ export interface MaintainerLocalJudge {
   adviseOnStuckProgress(
     findingDescription: string,
     recentProgressSummary: string,
-    attemptedDirectionsSummary?: string,
+    attemptedDirectionsSummary?: string
   ): Promise<LocalJudgeVerdict | StuckCorrectionResult>;
 
   /**
@@ -99,8 +112,8 @@ export interface MaintainerLocalJudge {
    */
   assistAlreadyFixedCheck(
     findingDescription: string,
-    currentCodeContextHint?: string,
-  ): Promise<LocalJudgeVerdict | AlreadyFixedAssistanceResult>;
+    currentCodeContextHint?: string
+  ): Promise<AlreadyFixedAssistanceResult | { kind: 'unreliable'; reason: string }>;
 
   /**
    * Scope 初筛辅助（中优先级位置）
@@ -112,7 +125,7 @@ export interface MaintainerLocalJudge {
   preFilterScope(
     findingDescription: string,
     findingFile?: string,
-    findingLine?: number,
+    findingLine?: number
   ): Promise<PreFilterScopeVerdict>;
 
   /**
@@ -124,6 +137,21 @@ export interface MaintainerLocalJudge {
    */
   preFilterNonFindingDiscussion(
     discussionBody: string,
-    discussionNoteCount?: number,
+    discussionNoteCount?: number
   ): Promise<PreFilterNonFindingVerdict>;
+
+  /** 对候选修复方案进行独立的风险挑战，失败时调用方必须保守降级。 */
+  adversarialReview?(
+    findingDescription: string,
+    candidateOptions: string,
+    currentCodeContextHint?: string
+  ): Promise<AdversarialReviewResult | { kind: 'unreliable'; reason: string }>;
+
+  /** 独立复核最终修复决策是否真正回应了方案红队意见。 */
+  adversarialDecisionReview?(
+    findingDescription: string,
+    candidateOptions: string,
+    finalDecision: string,
+    currentCodeContextHint?: string
+  ): Promise<AdversarialReviewResult | { kind: 'unreliable'; reason: string }>;
 }

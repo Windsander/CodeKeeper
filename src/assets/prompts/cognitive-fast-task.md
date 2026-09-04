@@ -1,6 +1,8 @@
 ## 文件路径
 {{findingFile}}
 
+先判断问题是否已经修复或无需处理；只有确认仍需修改时才选择 `fix`。如果选择 `fix`，必须说明根因、最小影响文件集合和可验证的完成标准。
+
 {{fileOverview}}
 ## 相关代码
 ```
@@ -40,5 +42,10 @@
   "reasoning": "最终选择该方案的原因",
   "confidence": "high|medium|low",
   "alreadyFixed": "如果问题已被修复，填 true",
-  "replyBody": "ignore 且 alreadyFixed=true 时，向 Reviewer 说明已修复的具体证据"
+  "notActionable": "如果问题是误报、重复项或按约定无需修改，填 true",
+  "replyBody": "ignore 时，向 Reviewer 说明已修复或无需处理的具体证据",
+  "affectedFiles": ["fix 时最终需要修改的文件路径"],
+  "verificationPlan": ["fix 后必须执行的验证步骤"],
+  "risks": ["风险或控制措施"],
+  "adversarialConcerns": ["已识别的关键疑虑"]
 }

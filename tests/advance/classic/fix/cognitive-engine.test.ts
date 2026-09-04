@@ -8,6 +8,7 @@ import type { CognitiveContext } from '../../../../src/advance/classic/fix/cogni
 import type { IMemoryClient } from '../../../../src/advance/classic/memory/types.js';
 import type { RecallPlanner } from '../../../../src/advance/classic/memory/recall-planner.js';
 import type { WorktreeManager } from '../../../../src/advance/classic/worktree/worktree-manager.js';
+import type { MaintainerLocalJudge } from '../../../../src/advance/classic/fix/maintainer-local-judge.js';
 import { mockOf } from '../../../helpers/mock-of.js';
 
 function makeContext(): CognitiveContext {
@@ -36,11 +37,20 @@ function makeContext(): CognitiveContext {
   };
 }
 
-function makeFastLlmClient(input: Record<string, unknown>): LlmClient {
+function makeFastLlmClient(
+  input: Record<string, unknown>,
+  alreadyFixedInput: Record<string, unknown> = {
+    alreadyFixed: false,
+    reason: '问题仍存在',
+  }
+): LlmClient {
   return new LlmClient({
     apiKey: 'test',
     mock: {
-      toolResponses: [{ toolCalls: [{ id: '1', name: 'fast_decision', input }] }],
+      toolResponses: [
+        { toolCalls: [{ id: '0', name: 'already_fixed_check', input: alreadyFixedInput }] },
+        { toolCalls: [{ id: '1', name: 'fast_decision', input }] },
+      ],
     },
   });
 }
@@ -54,15 +64,6 @@ function makeAlreadyFixedLlmClient(alreadyFixed: boolean): LlmClient {
           toolCalls: [
             {
               id: '1',
-              name: 'inquiry_decision',
-              input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
-            },
-          ],
-        },
-        {
-          toolCalls: [
-            {
-              id: '2',
               name: 'already_fixed_check',
               input: {
                 alreadyFixed,
@@ -151,7 +152,7 @@ describe('CognitiveEngine', () => {
     expect(decision.action).toBe('fix');
   });
 
-  it('standard 模式经过 Inquiry + already_fixed_check + Options + Decide 四步', async () => {
+  it('fast 模式先执行 already-fixed 复查，已修复时不再进入修复决策', async () => {
     const llmClient = new LlmClient({
       apiKey: 'test',
       mock: {
@@ -160,6 +161,57 @@ describe('CognitiveEngine', () => {
             toolCalls: [
               {
                 id: '1',
+                name: 'already_fixed_check',
+                input: {
+                  alreadyFixed: true,
+                  reason: '当前代码已经包含要求的字段',
+                  evidence: '当前代码包含 error?: number',
+                  evidenceSnippet: 'error?: number',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const completeDecision = vi.spyOn(llmClient, 'completeDecision');
+    const baseContext = makeContext();
+    const context = {
+      ...baseContext,
+      finding: {
+        ...baseContext.finding,
+        message: '接口缺少 error 字段',
+        suggestion: '添加 error 字段',
+      },
+      fileContent: 'interface Result { error?: number; }',
+    };
+
+    const decision = await new CognitiveEngine({ llmClient }).decide(context, 'fast');
+
+    expect(decision.action).toBe('ignore');
+    expect(decision.alreadyFixed).toBe(true);
+    expect(completeDecision).toHaveBeenCalledTimes(1);
+    expect(completeDecision.mock.calls[0]?.[0][0]?.name).toBe('already_fixed_check');
+  });
+
+  it('standard 模式经过 already-fixed 复查 + Inquiry + Options + Decide 四步', async () => {
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'already_fixed_check',
+                input: { alreadyFixed: false, reason: '变量 b 仍存在且未使用' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
                 name: 'inquiry_decision',
                 input: {
                   needsMoreContext: true,
@@ -172,7 +224,7 @@ describe('CognitiveEngine', () => {
           {
             toolCalls: [
               {
-                id: '2',
+                id: '3',
                 name: 'already_fixed_check',
                 input: { alreadyFixed: false, reason: '变量 b 仍存在且未使用' },
               },
@@ -181,7 +233,7 @@ describe('CognitiveEngine', () => {
           {
             toolCalls: [
               {
-                id: '3',
+                id: '4',
                 name: 'options_decision',
                 input: {
                   options: [
@@ -195,7 +247,7 @@ describe('CognitiveEngine', () => {
           {
             toolCalls: [
               {
-                id: '4',
+                id: '5',
                 name: 'final_decision',
                 input: {
                   action: 'fix',
@@ -227,7 +279,7 @@ describe('CognitiveEngine', () => {
 
     expect(decision.action).toBe('fix');
     expect(decision.analysis).toBe('b 未使用');
-    expect(completeDecision.mock.calls[3]?.[1]).toContain('const b = 2;');
+    expect(completeDecision.mock.calls[4]?.[1]).toContain('const b = 2;');
   });
 
   it('fast 模式返回 alreadyFixed ignore 决策', async () => {
@@ -272,8 +324,11 @@ describe('CognitiveEngine', () => {
             toolCalls: [
               {
                 id: '1',
-                name: 'inquiry_decision',
-                input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
+                name: 'already_fixed_check',
+                input: {
+                  alreadyFixed: false,
+                  reason: 'error 字段缺失',
+                },
               },
             ],
           },
@@ -281,8 +336,8 @@ describe('CognitiveEngine', () => {
             toolCalls: [
               {
                 id: '2',
-                name: 'already_fixed_check',
-                input: { alreadyFixed: false, reason: 'error 字段缺失' },
+                name: 'inquiry_decision',
+                input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
               },
             ],
           },
@@ -330,6 +385,298 @@ describe('CognitiveEngine', () => {
     expect(decision.action).toBe('fix');
   });
 
+  it('最终决策未通过红队复核时允许修订一次，复核通过后才允许 fix', async () => {
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'already_fixed_check',
+                input: { alreadyFixed: false, reason: '问题仍存在' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'inquiry_decision',
+                input: { needsMoreContext: false, queries: [], reason: '当前上下文足够' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '3',
+                name: 'options_decision',
+                input: {
+                  options: [
+                    {
+                      description: '修复目标函数',
+                      pros: ['改动集中'],
+                      cons: ['需要确认调用点'],
+                      risk: 'medium',
+                      verificationSteps: ['运行目标模块测试'],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '4',
+                name: 'final_decision',
+                input: {
+                  action: 'fix',
+                  reason: '可以修复',
+                  fixDescription: '修复目标函数',
+                  analysis: '根因已定位',
+                  reasoning: '方案改动集中',
+                  confidence: 'high',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '5',
+                name: 'final_decision',
+                input: {
+                  action: 'fix',
+                  reason: '已逐项处理红队意见',
+                  fixDescription: '修复目标函数并检查调用点',
+                  analysis: '根因已定位且影响范围已核对',
+                  reasoning: '保留最小改动，同时完成调用点审计',
+                  confidence: 'high',
+                  verificationPlan: ['运行目标模块测试', '检查所有调用点'],
+                  adversarialResponses: [
+                    '可能遗漏调用点：已搜索并检查所有调用点',
+                    '必须确认调用点：已完成调用点审计并纳入验证',
+                    '验证计划未覆盖回归场景：已补充目标模块测试',
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const localJudge = mockOf<MaintainerLocalJudge>({
+      isAvailable: vi.fn().mockReturnValue(true),
+      adversarialReview: vi
+        .fn()
+        .mockResolvedValueOnce({
+          kind: 'reliable',
+          approve: false,
+          concerns: ['可能遗漏调用点'],
+          requiredChanges: ['必须确认调用点'],
+          reason: '候选方案尚未证明影响范围完整',
+        })
+        .mockResolvedValueOnce({
+          kind: 'reliable',
+          approve: false,
+          concerns: ['验证计划未覆盖回归场景'],
+          requiredChanges: [],
+          reason: '需要补充行为回归验证',
+        }),
+      adversarialDecisionReview: vi
+        .fn()
+        .mockResolvedValueOnce({
+          kind: 'reliable',
+          approve: false,
+          concerns: ['最终决策没有说明如何验证所有调用点'],
+          requiredChanges: ['补充调用点审计的可执行验证'],
+          reason: '主决策尚未闭环影响范围',
+        })
+        .mockResolvedValueOnce({
+          kind: 'reliable',
+          approve: true,
+          concerns: [],
+          requiredChanges: [],
+          reason: '修订后的决策已形成可执行闭环',
+        }),
+    });
+    const completeDecision = vi.spyOn(llmClient, 'completeDecision');
+
+    const decision = await new CognitiveEngine({ llmClient, localJudge }).decide(
+      makeContext(),
+      'deep'
+    );
+
+    expect(decision.action).toBe('fix');
+    expect(decision.verificationPlan).toEqual(['运行目标模块测试', '检查所有调用点']);
+    expect(decision.adversarialConcerns).toContain('最终决策没有说明如何验证所有调用点');
+    expect(decision.adversarialConcerns).toContain('验证计划未覆盖回归场景');
+    expect(decision.adversarialResponses).toEqual([
+      '可能遗漏调用点：已搜索并检查所有调用点',
+      '必须确认调用点：已完成调用点审计并纳入验证',
+      '验证计划未覆盖回归场景：已补充目标模块测试',
+    ]);
+    expect(localJudge.adversarialReview).toHaveBeenCalledTimes(2);
+    expect(localJudge.adversarialDecisionReview).toHaveBeenCalledTimes(2);
+    expect(completeDecision).toHaveBeenCalledTimes(5);
+    expect(completeDecision.mock.calls[4]?.[1]).toContain('上一版最终决策未通过独立红队复核');
+  });
+
+  it('红队意见经过一次修订仍未闭环时降级为 ask', async () => {
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'already_fixed_check',
+                input: { alreadyFixed: false, reason: '问题仍存在' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'inquiry_decision',
+                input: { needsMoreContext: false, queries: [], reason: '上下文足够' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '3',
+                name: 'options_decision',
+                input: { options: [{ description: '局部修改', pros: [], cons: [], risk: 'low' }] },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '4',
+                name: 'final_decision',
+                input: { action: 'fix', reason: '直接修改', verificationPlan: [] },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '5',
+                name: 'final_decision',
+                input: { action: 'fix', reason: '仍然认为可以修改', verificationPlan: [] },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const localJudge = mockOf<MaintainerLocalJudge>({
+      isAvailable: vi.fn().mockReturnValue(true),
+      adversarialReview: vi.fn().mockResolvedValue({
+        kind: 'reliable',
+        approve: false,
+        concerns: ['未证明根因已经解决'],
+        requiredChanges: [],
+        reason: '缺少根因证据',
+      }),
+      adversarialDecisionReview: vi.fn().mockResolvedValue({
+        kind: 'reliable',
+        approve: false,
+        concerns: ['最终决策仍未给出根因证据'],
+        requiredChanges: ['提供当前代码证据和可执行验证'],
+        reason: '最终决策仍未闭环',
+      }),
+    });
+
+    const decision = await new CognitiveEngine({ llmClient, localJudge }).decide(
+      makeContext(),
+      'standard'
+    );
+
+    expect(decision.action).toBe('ask');
+    expect(decision.reason).toContain('独立红队复核');
+    expect(localJudge.adversarialDecisionReview).toHaveBeenCalledTimes(2);
+  });
+
+  it('最终决策红队复核不可靠时直接 ask，不浪费一次主模型修订', async () => {
+    const llmClient = new LlmClient({
+      apiKey: 'test',
+      mock: {
+        toolResponses: [
+          {
+            toolCalls: [
+              {
+                id: '1',
+                name: 'already_fixed_check',
+                input: { alreadyFixed: false, reason: '问题仍存在' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
+                name: 'inquiry_decision',
+                input: { needsMoreContext: false, queries: [], reason: '上下文足够' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '3',
+                name: 'options_decision',
+                input: { options: [{ description: '局部修改', pros: [], cons: [], risk: 'low' }] },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '4',
+                name: 'final_decision',
+                input: { action: 'fix', reason: '可以修改', verificationPlan: ['运行目标测试'] },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const localJudge = mockOf<MaintainerLocalJudge>({
+      isAvailable: vi.fn().mockReturnValue(true),
+      adversarialReview: vi.fn().mockResolvedValue({
+        kind: 'reliable',
+        approve: true,
+        concerns: [],
+        requiredChanges: [],
+        reason: '候选方案可进入最终决策',
+      }),
+      adversarialDecisionReview: vi.fn().mockResolvedValue({
+        kind: 'unreliable',
+        reason: '红队模型暂时不可用',
+      }),
+    });
+    const completeDecision = vi.spyOn(llmClient, 'completeDecision');
+
+    const decision = await new CognitiveEngine({ llmClient, localJudge }).decide(
+      makeContext(),
+      'standard'
+    );
+
+    expect(decision.action).toBe('ask');
+    expect(decision.reason).toContain('未能完成可靠的独立红队复核');
+    expect(decision.adversarialConcerns).toContain('在执行修复前重新完成独立红队复核');
+    expect(completeDecision).toHaveBeenCalledTimes(4);
+  });
+
   it('standard 模式聚焦窗口不足时会读取完整文件复核 alreadyFixed', async () => {
     const llmClient = new LlmClient({
       apiKey: 'test',
@@ -339,15 +686,6 @@ describe('CognitiveEngine', () => {
             toolCalls: [
               {
                 id: '1',
-                name: 'inquiry_decision',
-                input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
-              },
-            ],
-          },
-          {
-            toolCalls: [
-              {
-                id: '2',
                 name: 'already_fixed_check',
                 input: {
                   alreadyFixed: false,
@@ -366,6 +704,7 @@ describe('CognitiveEngine', () => {
                   alreadyFixed: true,
                   reason: '完整文件中第 10 行已定义 error 字段',
                   evidence: '第 10 行已包含 error?: number',
+                  evidenceSnippet: 'error?: number',
                 },
               },
             ],
@@ -376,9 +715,7 @@ describe('CognitiveEngine', () => {
 
     const worktreeManager = mockOf<WorktreeManager>({
       resolveFilePath: vi.fn().mockResolvedValue('src/a.ts'),
-      readFile: vi
-        .fn()
-        .mockResolvedValue('完整文件内容\nconst error: number | undefined = undefined;\n'),
+      readFile: vi.fn().mockResolvedValue('interface Result { error?: number; }\n'),
     });
 
     const engine = new CognitiveEngine({ llmClient, worktreeManager });
@@ -398,15 +735,6 @@ describe('CognitiveEngine', () => {
             toolCalls: [
               {
                 id: '1',
-                name: 'inquiry_decision',
-                input: { needsMoreContext: false, queries: [], reason: '无需补充上下文' },
-              },
-            ],
-          },
-          {
-            toolCalls: [
-              {
-                id: '2',
                 name: 'already_fixed_check',
                 input: {
                   alreadyFixed: false,
@@ -419,7 +747,7 @@ describe('CognitiveEngine', () => {
           {
             toolCalls: [
               {
-                id: '3',
+                id: '2',
                 name: 'already_fixed_check',
                 input: {
                   alreadyFixed: true,
@@ -458,6 +786,15 @@ describe('CognitiveEngine', () => {
             toolCalls: [
               {
                 id: '1',
+                name: 'already_fixed_check',
+                input: { alreadyFixed: false, reason: '需要检查关联清理路径' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: '2',
                 name: 'inquiry_decision',
                 input: {
                   needsMoreContext: true,
@@ -470,7 +807,7 @@ describe('CognitiveEngine', () => {
           {
             toolCalls: [
               {
-                id: '2',
+                id: '3',
                 name: 'already_fixed_check',
                 input: {
                   alreadyFixed: true,

@@ -130,12 +130,11 @@ export class FixToolLoop {
     this.maxTruncationRetries = options.maxTruncationRetries ?? 3;
     this.maxNoToolCallRetries = options.maxNoToolCallRetries ?? 2;
     this.maxUnchangedFinishRetries = options.maxUnchangedFinishRetries ?? 2;
-    this.maxStepsWithoutProgress = options.maxStepsWithoutProgress ?? 5;
+    this.maxStepsWithoutProgress = options.maxStepsWithoutProgress ?? Number.POSITIVE_INFINITY;
     this.staleReminderStep =
       options.staleReminderStep ?? Math.max(1, this.maxStepsWithoutProgress - 2);
     this.extraSystemPrompt = options.extraSystemPrompt ?? '';
-    this.maxReadOnlySteps =
-      options.maxReadOnlySteps ?? Math.max(8, this.maxStepsWithoutProgress + 3);
+    this.maxReadOnlySteps = options.maxReadOnlySteps ?? Number.POSITIVE_INFINITY;
     this.readOnlyReminderStep =
       options.readOnlyReminderStep ?? Math.max(1, this.maxReadOnlySteps - 2);
     this.finalActingSteps = Math.max(1, options.finalActingSteps ?? 3);

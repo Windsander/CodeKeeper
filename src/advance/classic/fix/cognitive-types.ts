@@ -69,4 +69,14 @@ export interface CognitiveDecision extends MaintainerDecision {
   reasoning: string;
   /** 决策置信度 */
   confidence: 'high' | 'medium' | 'low';
+  /** 认知阶段推断出的可能受影响文件，供修复执行阶段做受控审计 */
+  affectedFiles?: string[];
+  /** 修复完成后必须检查的语义验证目标 */
+  verificationPlan?: string[];
+  /** 方案评审阶段识别出的剩余风险或控制措施 */
+  risks?: string[];
+  /** 对候选方案进行红队挑战后保留的关键意见 */
+  adversarialConcerns?: string[];
+  /** 最终决策对红队意见的逐项回应 */
+  adversarialResponses?: string[];
 }

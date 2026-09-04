@@ -49,6 +49,8 @@ const OPTIONS_DECISION_TOOL: ToolDefinition = {
             pros: { type: 'array', items: { type: 'string' } },
             cons: { type: 'array', items: { type: 'string' } },
             risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+            affectedFiles: { type: 'array', items: { type: 'string' } },
+            verificationSteps: { type: 'array', items: { type: 'string' } },
           },
           required: ['description', 'pros', 'cons', 'risk'],
           additionalProperties: false,
@@ -78,7 +80,12 @@ const FINAL_DECISION_TOOL: ToolDefinition = {
       reasoning: { type: 'string' },
       confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
       alreadyFixed: { type: 'boolean' },
+      notActionable: { type: 'boolean' },
       replyBody: { type: 'string' },
+      affectedFiles: { type: 'array', items: { type: 'string' } },
+      verificationPlan: { type: 'array', items: { type: 'string' } },
+      risks: { type: 'array', items: { type: 'string' } },
+      adversarialResponses: { type: 'array', items: { type: 'string' } },
     },
     required: ['action', 'reason'],
     additionalProperties: false,
@@ -95,6 +102,10 @@ const ALREADY_FIXED_CHECK_TOOL: ToolDefinition = {
       alreadyFixed: { type: 'boolean' },
       reason: { type: 'string' },
       evidence: { type: 'string' },
+      notActionable: {
+        type: 'boolean',
+        description: '问题是误报、重复项或按项目约定无需代码修改时设为 true',
+      },
       evidenceSnippet: {
         type: 'string',
         description:
@@ -196,6 +207,8 @@ export interface CognitiveEngineOptions {
   recallPlanner?: RecallPlanner;
   memoryClient?: IMemoryClient;
   worktreeManager?: WorktreeManager;
+  /** 可选的轻量判别器，作为 already-fixed 与方案红队的辅助信号 */
+  localJudge?: import('./fix/maintainer-local-judge.js').MaintainerLocalJudge;
   /** 可选的 prompt 加载器，默认使用全局 loader */
   promptLoader?: PromptLoader;
 }
@@ -204,6 +217,7 @@ interface InquiryResult {
   needsMoreContext: boolean;
   queries: Array<{ type: string; target: string }>;
   reason: string;
+  status?: 'actionable' | 'needs-context' | 'already-fixed' | 'not-actionable';
 }
 
 interface OptionItem {
@@ -211,13 +225,36 @@ interface OptionItem {
   pros: string[];
   cons: string[];
   risk: 'low' | 'medium' | 'high';
+  affectedFiles?: string[];
+  verificationSteps?: string[];
+}
+
+interface AdversarialReview {
+  approve: boolean;
+  concerns: string[];
+  requiredChanges: string[];
+  reason: string;
+}
+
+interface AdversarialReviewAttempt {
+  status: 'skipped' | 'reviewed' | 'failed';
+  review?: AdversarialReview;
+  reason?: string;
+}
+
+interface AlreadyFixedCheckResult {
+  alreadyFixed: boolean;
+  notActionable?: boolean;
+  reason: string;
+  evidence?: string;
+  needsMoreContext?: boolean;
 }
 
 /**
  * 认知引擎
  *
  * 把 Maintainer 的决策过程拆成可配置的多步认知循环：
- * - fast：观察 → 决策（1 次 LLM 调用）
+ * - fast：观察 → already-fixed 前置复查 → 决策（至少 2 次 LLM 调用）
  * - standard：观察 → 追问 → 生成候选方案 → 决策（2~3 次调用）
  * - deep：standard 全部步骤 + 执行后反思并记录到记忆
  */
@@ -235,8 +272,7 @@ export class CognitiveEngine {
     if (depth === 'fast') {
       return this.decideFast(context);
     }
-    // deep 模式在决策阶段与 standard 一致，反射由调用方在修复后触发
-    return this.decideStandard(context);
+    return this.decideStandard(context, depth);
   }
 
   /**
@@ -273,6 +309,11 @@ export class CognitiveEngine {
   }
 
   private async decideFast(context: CognitiveContext): Promise<CognitiveDecision> {
+    const alreadyFixed = await this.checkAlreadyFixed(context);
+    if (alreadyFixed.alreadyFixed || alreadyFixed.notActionable) {
+      return this.buildAlreadyFixedDecision(alreadyFixed);
+    }
+
     const prompt = this.buildFastPrompt(context);
     console.log(`[CognitiveEngine] decideFast prompt 长度=${prompt.length}`);
     const toolCall = await this.options.llmClient.completeDecision(
@@ -285,39 +326,148 @@ export class CognitiveEngine {
     return this.parseDecision(toolCall.input, context);
   }
 
-  private async decideStandard(context: CognitiveContext): Promise<CognitiveDecision> {
+  private async decideStandard(
+    context: CognitiveContext,
+    depth: CognitiveDepth
+  ): Promise<CognitiveDecision> {
     logMemorySnapshot('CognitiveEngine.decideStandard 开始');
-    const inquiry = await this.runInquiry(context);
+    const initialAlreadyFixed = await this.checkAlreadyFixed(context);
+    if (initialAlreadyFixed.alreadyFixed || initialAlreadyFixed.notActionable) {
+      return this.buildAlreadyFixedDecision(initialAlreadyFixed);
+    }
+
+    const inquiry = await this.runInquiry(context, initialAlreadyFixed);
     logMemorySnapshot('CognitiveEngine.decideStandard inquiry 后');
     const enrichedContext = await this.enrichContext(context, inquiry);
     logMemorySnapshot('CognitiveEngine.decideStandard enrichContext 后');
 
-    // 显式预检：issue 是否已经被修复，避免对已修复问题生成无效修复方案
-    const alreadyFixed = await this.checkAlreadyFixed(enrichedContext);
-    if (alreadyFixed.alreadyFixed) {
-      console.log(
-        `[CognitiveEngine] 检测到问题已修复: ${enrichedContext.finding.file}:${enrichedContext.finding.line}`
-      );
-      return {
-        action: 'ignore',
-        reason: alreadyFixed.reason,
-        alreadyFixed: true,
-        replyBody: alreadyFixed.evidence || alreadyFixed.reason,
-        analysis: alreadyFixed.reason,
-        consideredOptions: [],
-        reasoning: '当前代码已满足 Reviewer 的要求，无需修改',
-        confidence: 'high',
-      };
+    const alreadyFixed = this.hasAdditionalContext(context, enrichedContext)
+      ? await this.checkAlreadyFixed(enrichedContext)
+      : initialAlreadyFixed;
+    if (alreadyFixed.alreadyFixed || alreadyFixed.notActionable) {
+      return this.buildAlreadyFixedDecision(alreadyFixed);
     }
 
     const options = await this.generateOptions(enrichedContext);
     logMemorySnapshot('CognitiveEngine.decideStandard generateOptions 后');
-    const decision = await this.finalDecision(enrichedContext, options);
+    const adversarial = await this.reviewOptions(
+      enrichedContext,
+      options,
+      depth === 'deep' ? 2 : 1
+    );
+    let decision = await this.finalDecision(enrichedContext, options, adversarial);
+    const decisionReviews: AdversarialReview[] = [];
+    if (decision.action === 'fix') {
+      const firstDecisionReviewAttempt = await this.reviewFinalDecision(
+        enrichedContext,
+        options,
+        adversarial,
+        decision
+      );
+      if (firstDecisionReviewAttempt.status === 'failed') {
+        return this.buildAdversarialAskDecision(
+          [
+            adversarial,
+            this.buildAdversarialReviewFailure(
+              firstDecisionReviewAttempt.reason ?? '最终决策独立红队复核失败'
+            ),
+          ],
+          options,
+          decision,
+          '最终修复决策未能完成可靠的独立红队复核'
+        );
+      }
+      const firstDecisionReview = firstDecisionReviewAttempt.review;
+      if (firstDecisionReview) {
+        decisionReviews.push(firstDecisionReview);
+      }
+
+      if (firstDecisionReview && !firstDecisionReview.approve) {
+        try {
+          decision = await this.finalDecision(
+            enrichedContext,
+            options,
+            adversarial,
+            this.buildAdversarialDecisionFollowUp(firstDecisionReview, decision)
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[CognitiveEngine] 红队修订轮调用失败，转为澄清: ${message}`);
+          return this.buildAdversarialAskDecision(
+            [adversarial, ...decisionReviews],
+            options,
+            decision,
+            '最终修复决策未能完成红队要求的修订'
+          );
+        }
+
+        if (decision.action === 'fix') {
+          const revisedDecisionReviewAttempt = await this.reviewFinalDecision(
+            enrichedContext,
+            options,
+            adversarial,
+            decision,
+            decisionReviews
+          );
+          const revisedDecisionReview = revisedDecisionReviewAttempt.review;
+          if (revisedDecisionReview) {
+            decisionReviews.push(revisedDecisionReview);
+          }
+          if (!revisedDecisionReview || !revisedDecisionReview.approve) {
+            const reviewFailure = revisedDecisionReview
+              ? []
+              : [
+                  this.buildAdversarialReviewFailure(
+                    revisedDecisionReviewAttempt.reason ?? '最终决策修订后未能完成独立红队复核'
+                  ),
+                ];
+            return this.buildAdversarialAskDecision(
+              [adversarial, ...decisionReviews, ...reviewFailure],
+              options,
+              decision,
+              revisedDecisionReview
+                ? '最终修复决策经过一次修订后仍未通过独立红队复核'
+                : '最终修复决策修订后未能完成独立红队复核'
+            );
+          }
+        }
+      }
+    }
     logMemorySnapshot('CognitiveEngine.decideStandard finalDecision 后');
-    return decision;
+
+    const verificationPlan = this.normalizeStringList(
+      decision.verificationPlan?.length
+        ? decision.verificationPlan
+        : options.flatMap(option => option.verificationSteps ?? [])
+    ).slice(0, 8);
+    const adversarialReviews = [adversarial, ...decisionReviews];
+    const adversarialConcerns = this.collectAdversarialConcerns(adversarialReviews).slice(0, 30);
+    const risks = this.normalizeStringList([
+      ...(decision.risks ?? []),
+      ...options.flatMap(option =>
+        option.risk === 'high' ? [`高风险方案：${option.description}`] : []
+      ),
+      ...adversarialConcerns,
+    ]).slice(0, 20);
+    return {
+      ...decision,
+      adversarialConcerns,
+      adversarialResponses: this.normalizeStringList(decision.adversarialResponses).slice(0, 30),
+      risks,
+      verificationPlan,
+      affectedFiles: this.normalizeStringList(
+        decision.affectedFiles?.length
+          ? decision.affectedFiles
+          : Array.from(new Set(options.flatMap(option => option.affectedFiles ?? [])))
+      ).slice(0, 20),
+      analysis: decision.analysis || '已完成问题状态、方案与风险审查',
+    };
   }
 
-  private async runInquiry(context: CognitiveContext): Promise<InquiryResult> {
+  private async runInquiry(
+    context: CognitiveContext,
+    alreadyFixedAssessment?: AlreadyFixedCheckResult
+  ): Promise<InquiryResult> {
     const overviewText = context.fileOverview
       ? `文件总行数：${context.fileOverview.lineCount}\n主要符号：\n${context.fileOverview.symbols
           .slice(0, 20)
@@ -343,6 +493,9 @@ export class CognitiveEngine {
       relatedFindings,
       recalledMemories,
       fileOverview: overviewText,
+      alreadyFixedAssessment: alreadyFixedAssessment
+        ? `前置复查结论：问题尚未被确认已修复。理由：${alreadyFixedAssessment.reason}`
+        : '未执行前置复查',
     });
 
     console.log(`[CognitiveEngine] runInquiry prompt 长度=${prompt.length}`);
@@ -490,14 +643,10 @@ export class CognitiveEngine {
   /**
    * 显式检查 finding 描述的问题是否已经在当前代码中被修复
    */
-  async checkAlreadyFixed(context: CognitiveContext): Promise<{
-    alreadyFixed: boolean;
-    reason: string;
-    evidence?: string;
-  }> {
+  async checkAlreadyFixed(context: CognitiveContext): Promise<AlreadyFixedCheckResult> {
     // 第一层：用聚焦上下文做轻量判断。prompt 短、噪音少，覆盖大多数情况。
     const focusedResult = await this.runAlreadyFixedCheck(context, context.fileContent, '聚焦窗口');
-    if (focusedResult.alreadyFixed) {
+    if (focusedResult.alreadyFixed || focusedResult.notActionable) {
       console.log(
         `[CognitiveEngine] 聚焦窗口判定问题已修复: ${context.finding.file}:${context.finding.line}`
       );
@@ -529,12 +678,7 @@ export class CognitiveEngine {
     context: CognitiveContext,
     fileContent: string,
     sourceLabel: string
-  ): Promise<{
-    alreadyFixed: boolean;
-    reason: string;
-    evidence?: string;
-    needsMoreContext?: boolean;
-  }> {
+  ): Promise<AlreadyFixedCheckResult> {
     const prompt = this.promptLoader.load('cognitive-already-fixed-task', {
       findingFile: context.finding.file,
       findingLine: String(context.finding.line),
@@ -556,6 +700,7 @@ export class CognitiveEngine {
       );
       const input = toolCall.input as {
         alreadyFixed?: boolean;
+        notActionable?: boolean;
         reason?: string;
         evidence?: string;
         evidenceSnippet?: string;
@@ -577,12 +722,14 @@ export class CognitiveEngine {
         );
         return {
           alreadyFixed: false,
+          notActionable: false,
           reason: 'already-fixed 证据无法绑定到当前 finding 的代码上下文，拒绝复用该结论',
           needsMoreContext: sourceLabel === '聚焦窗口',
         };
       }
       return {
         alreadyFixed: input.alreadyFixed === true,
+        notActionable: input.notActionable === true,
         reason: input.reason ?? '未说明理由',
         evidence: input.evidence,
         needsMoreContext: input.needsMoreContext === true,
@@ -652,7 +799,9 @@ export class CognitiveEngine {
 
   private async finalDecision(
     context: CognitiveContext,
-    options: OptionItem[]
+    options: OptionItem[],
+    adversarial: AdversarialReview,
+    followUpInstruction = ''
   ): Promise<CognitiveDecision> {
     const overviewText = this.formatFileOverview(context.fileOverview);
     const extraContextsText = this.formatExtraFileContexts(context.extraFileContexts);
@@ -663,9 +812,15 @@ export class CognitiveEngine {
     const optionsText = options
       .map(
         (o, i) =>
-          `${i + 1}. ${o.description}\n   优点：${o.pros.join('，')}\n   缺点：${o.cons.join('，')}\n   风险：${o.risk}`
+          `${i + 1}. ${o.description}\n   优点：${o.pros.join('，')}\n   缺点：${o.cons.join('，')}\n   风险：${o.risk}\n   可能受影响文件：${o.affectedFiles?.join('，') || '未说明'}\n   验证步骤：${o.verificationSteps?.join('；') || '未说明'}`
       )
       .join('\n\n');
+    const adversarialReview = [
+      `是否通过：${adversarial.approve ? '是' : '否/需修订'}`,
+      `理由：${adversarial.reason || '未说明'}`,
+      `关键疑虑：${adversarial.concerns.join('；') || '无'}`,
+      `必须改变：${adversarial.requiredChanges.join('；') || '无'}`,
+    ].join('\n');
 
     const prompt = this.promptLoader.load('cognitive-final-task', {
       findingFile: context.finding.file,
@@ -677,6 +832,8 @@ export class CognitiveEngine {
       fileOverview: overviewText,
       extraFileContexts: extraContextsText,
       relatedMemories,
+      adversarialReview,
+      adversarialFollowUp: followUpInstruction,
     });
 
     console.log(`[CognitiveEngine] finalDecision prompt 长度=${prompt.length}`);
@@ -745,26 +902,47 @@ export class CognitiveEngine {
         reasoning?: string;
         confidence?: string;
         alreadyFixed?: boolean;
+        notActionable?: boolean;
         replyBody?: string;
+        affectedFiles?: unknown;
+        verificationPlan?: unknown;
+        risks?: unknown;
+        adversarialConcerns?: unknown;
+        adversarialResponses?: unknown;
       };
 
       const base = this.normalizeBaseDecision(parsed, context);
-      // 如果模型明确标记问题已修复，强制按 ignore 处理，避免对已修复代码发起无效修复
-      if (parsed.alreadyFixed === true && base.action === 'fix') {
+      // 如果模型明确标记问题已修复或无需处理，强制按 ignore 处理，避免无效修改
+      if (
+        (parsed.alreadyFixed === true || parsed.notActionable === true) &&
+        base.action === 'fix'
+      ) {
         console.log(
-          `[CognitiveEngine] 模型返回 alreadyFixed=true 但 action=fix，已归一化为 ignore: ${context.finding.file}:${context.finding.line}`
+          `[CognitiveEngine] 模型返回无需修改标记但 action=fix，已归一化为 ignore: ${context.finding.file}:${context.finding.line}`
         );
         return {
           action: 'ignore',
           reason: base.reason,
-          alreadyFixed: true,
-          replyBody: parsed.replyBody || base.replyBody || '当前代码已满足 Reviewer 的要求',
-          analysis: parsed.analysis ?? '问题已修复',
+          alreadyFixed: parsed.alreadyFixed === true,
+          notActionable: parsed.notActionable === true,
+          replyBody:
+            parsed.replyBody ||
+            base.replyBody ||
+            (parsed.alreadyFixed === true
+              ? '当前代码已满足 Reviewer 的要求'
+              : '当前 finding 无需修改'),
+          analysis:
+            parsed.analysis ?? (parsed.alreadyFixed === true ? '问题已修复' : '问题无需处理'),
           consideredOptions: Array.isArray(parsed.consideredOptions)
             ? parsed.consideredOptions
             : [],
           reasoning: parsed.reasoning ?? base.reason,
           confidence: this.normalizeConfidence(parsed.confidence),
+          affectedFiles: this.normalizeStringList(parsed.affectedFiles),
+          verificationPlan: this.normalizeStringList(parsed.verificationPlan),
+          risks: this.normalizeStringList(parsed.risks),
+          adversarialConcerns: this.normalizeStringList(parsed.adversarialConcerns),
+          adversarialResponses: this.normalizeStringList(parsed.adversarialResponses),
         };
       }
       return {
@@ -773,6 +951,11 @@ export class CognitiveEngine {
         consideredOptions: Array.isArray(parsed.consideredOptions) ? parsed.consideredOptions : [],
         reasoning: parsed.reasoning ?? base.reason,
         confidence: this.normalizeConfidence(parsed.confidence),
+        affectedFiles: this.normalizeStringList(parsed.affectedFiles),
+        verificationPlan: this.normalizeStringList(parsed.verificationPlan),
+        risks: this.normalizeStringList(parsed.risks),
+        adversarialConcerns: this.normalizeStringList(parsed.adversarialConcerns),
+        adversarialResponses: this.normalizeStringList(parsed.adversarialResponses),
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -798,7 +981,13 @@ export class CognitiveEngine {
       deleteFile?: boolean;
       scope?: string;
       alreadyFixed?: boolean;
+      notActionable?: boolean;
       replyBody?: string;
+      affectedFiles?: unknown;
+      verificationPlan?: unknown;
+      risks?: unknown;
+      adversarialConcerns?: unknown;
+      adversarialResponses?: unknown;
     },
     _context: CognitiveContext
   ): {
@@ -809,7 +998,13 @@ export class CognitiveEngine {
     deleteFile?: boolean;
     scope?: 'trivial' | 'local' | 'cross-file';
     alreadyFixed?: boolean;
+    notActionable?: boolean;
     replyBody?: string;
+    affectedFiles?: string[];
+    verificationPlan?: string[];
+    risks?: string[];
+    adversarialConcerns?: string[];
+    adversarialResponses?: string[];
   } {
     const reason = parsed.reason ?? '未说明理由';
     switch (parsed.action) {
@@ -820,6 +1015,13 @@ export class CognitiveEngine {
           fixDescription: parsed.fixDescription,
           deleteFile: parsed.deleteFile === true,
           scope: this.normalizeScope(parsed.scope),
+          alreadyFixed: parsed.alreadyFixed === true,
+          notActionable: parsed.notActionable === true,
+          affectedFiles: this.normalizeStringList(parsed.affectedFiles),
+          verificationPlan: this.normalizeStringList(parsed.verificationPlan),
+          risks: this.normalizeStringList(parsed.risks),
+          adversarialConcerns: this.normalizeStringList(parsed.adversarialConcerns),
+          adversarialResponses: this.normalizeStringList(parsed.adversarialResponses),
         };
       case 'ask':
         return {
@@ -832,7 +1034,13 @@ export class CognitiveEngine {
           action: 'ignore',
           reason,
           alreadyFixed: parsed.alreadyFixed === true,
+          notActionable: parsed.notActionable === true,
           replyBody: parsed.replyBody,
+          affectedFiles: this.normalizeStringList(parsed.affectedFiles),
+          verificationPlan: this.normalizeStringList(parsed.verificationPlan),
+          risks: this.normalizeStringList(parsed.risks),
+          adversarialConcerns: this.normalizeStringList(parsed.adversarialConcerns),
+          adversarialResponses: this.normalizeStringList(parsed.adversarialResponses),
         };
       default:
         return {
@@ -851,6 +1059,18 @@ export class CognitiveEngine {
   private normalizeConfidence(confidence?: string): 'high' | 'medium' | 'low' {
     if (confidence === 'high' || confidence === 'low') return confidence;
     return 'medium';
+  }
+
+  private normalizeStringList(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return Array.from(
+      new Set(
+        value
+          .filter((item): item is string => typeof item === 'string')
+          .map(item => item.trim())
+          .filter(Boolean)
+      )
+    );
   }
 
   private parseInquiry(input: Record<string, unknown>): InquiryResult {
@@ -874,10 +1094,280 @@ export class CognitiveEngine {
 
   private parseOptions(input: Record<string, unknown>): OptionItem[] {
     try {
-      const parsed = input as { options?: OptionItem[] };
-      return (parsed.options ?? []).filter(o => typeof o.description === 'string');
+      const parsed = input as { options?: unknown };
+      if (!Array.isArray(parsed.options)) return [];
+      return parsed.options
+        .filter((option): option is Record<string, unknown> => {
+          return Boolean(option) && typeof option === 'object' && !Array.isArray(option);
+        })
+        .map(option => ({
+          description: typeof option.description === 'string' ? option.description.trim() : '',
+          pros: this.normalizeStringList(option.pros),
+          cons: this.normalizeStringList(option.cons),
+          risk: ((): OptionItem['risk'] => {
+            const risk = option.risk;
+            if (risk === 'high' || risk === 'medium' || risk === 'low') return risk;
+            return 'medium';
+          })(),
+          affectedFiles: this.normalizeStringList(option.affectedFiles),
+          verificationSteps: this.normalizeStringList(option.verificationSteps),
+        }))
+        .filter(option => option.description.length > 0);
     } catch {
       return [];
     }
+  }
+
+  private buildAlreadyFixedDecision(result: {
+    alreadyFixed: boolean;
+    notActionable?: boolean;
+    reason: string;
+    evidence?: string;
+  }): CognitiveDecision {
+    const alreadyFixed = result.alreadyFixed === true;
+    const notActionable = result.notActionable === true;
+    return {
+      action: 'ignore',
+      reason: result.reason,
+      alreadyFixed,
+      notActionable,
+      replyBody: result.evidence || result.reason,
+      analysis: alreadyFixed ? '问题已在当前代码中修复' : '该 finding 当前不需要代码修改',
+      consideredOptions: [],
+      reasoning: alreadyFixed
+        ? '当前代码已经满足 Reviewer 所指出的问题，无需重复修改'
+        : '当前 finding 不需要代码修改，避免为误报或无需处理的问题引入变更',
+      confidence: 'high',
+      risks: notActionable ? ['未执行代码修改；如 Reviewer 仍认为需要处理，应补充可执行证据'] : [],
+    };
+  }
+
+  private hasAdditionalContext(base: CognitiveContext, enriched: CognitiveContext): boolean {
+    return (
+      enriched.recalledMemories.length > base.recalledMemories.length ||
+      (enriched.extraFileContexts?.length ?? 0) > (base.extraFileContexts?.length ?? 0)
+    );
+  }
+
+  private getAdversarialItems(adversarial: AdversarialReview): string[] {
+    const concerns = this.normalizeStringList([
+      ...adversarial.concerns,
+      ...adversarial.requiredChanges,
+    ]);
+    if (concerns.length > 0) return concerns;
+    return adversarial.approve ? [] : this.normalizeStringList([adversarial.reason]);
+  }
+
+  private collectAdversarialConcerns(reviews: AdversarialReview[]): string[] {
+    return this.normalizeStringList(
+      reviews.flatMap(review => [
+        ...review.concerns,
+        ...review.requiredChanges,
+        review.approve ? '' : review.reason,
+      ])
+    );
+  }
+
+  private buildAdversarialReviewFailure(reason: string): AdversarialReview {
+    return {
+      approve: false,
+      concerns: [],
+      requiredChanges: ['在执行修复前重新完成独立红队复核'],
+      reason: `独立红队复核未能可靠完成：${reason}`,
+    };
+  }
+
+  private buildAdversarialDecisionFollowUp(
+    adversarial: AdversarialReview,
+    decision: CognitiveDecision
+  ): string {
+    const concerns = this.getAdversarialItems(adversarial);
+    return [
+      '上一版最终决策未通过独立红队复核。请重新审视并形成新的最终决策，而不是沿用原结论。',
+      `上一版理由：${decision.reason}`,
+      decision.adversarialResponses?.length
+        ? `上一版主决策回应：\n- ${decision.adversarialResponses.join('\n- ')}`
+        : '上一版没有给出可审计的红队回应。',
+      concerns.length > 0
+        ? `必须逐项回应以下意见：\n- ${concerns.join('\n- ')}`
+        : '红队未批准该方案，请明确说明阻断风险及其处理方式。',
+      '如果仍无法证明根因、影响范围和验证标准已经闭环，应选择 ask；如果坚持 fix，必须在 adversarialResponses 中逐项说明处理方式，并给出 verificationPlan。',
+    ].join('\n\n');
+  }
+
+  private buildAdversarialAskDecision(
+    reviews: AdversarialReview[],
+    options: OptionItem[],
+    decision?: CognitiveDecision,
+    reason = '最终修复决策仍有未闭环的关键风险'
+  ): CognitiveDecision {
+    const concerns = this.collectAdversarialConcerns(reviews);
+    return {
+      action: 'ask',
+      reason,
+      question: `红队评审指出以下风险，当前还不能安全自动修复：${concerns.join('；') || reason}。请补充约束、确认处理方向，或在独立复核恢复后重试。`,
+      analysis:
+        '方案与最终决策的独立复核未形成可批准结论，关键风险仍未被当前代码证据与验证计划闭环',
+      consideredOptions: options.map(option => option.description),
+      reasoning: '当前流程未能形成经独立复核确认的风险闭环，因此不能直接进入代码修改',
+      confidence: 'low',
+      risks: concerns,
+      adversarialConcerns: concerns,
+      adversarialResponses: this.normalizeStringList(decision?.adversarialResponses),
+    };
+  }
+
+  private formatCandidateOptions(options: OptionItem[]): string {
+    return options
+      .map(
+        (option, index) =>
+          `${index + 1}. ${option.description}\n优点：${option.pros.join('，') || '无'}\n缺点：${option.cons.join('，') || '无'}\n风险：${option.risk}\n可能受影响文件：${option.affectedFiles?.join('，') || '未说明'}\n验证步骤：${option.verificationSteps?.join('；') || '未说明'}`
+      )
+      .join('\n\n');
+  }
+
+  private formatAdversarialReview(review: AdversarialReview): string {
+    return [
+      `是否通过：${review.approve ? '是' : '否/需修订'}`,
+      `理由：${review.reason || '未说明'}`,
+      `关键疑虑：${review.concerns.join('；') || '无'}`,
+      `必须改变：${review.requiredChanges.join('；') || '无'}`,
+    ].join('\n');
+  }
+
+  private buildAdversarialCodeHint(context: CognitiveContext): string {
+    return [context.fileContent, this.formatExtraFileContexts(context.extraFileContexts)]
+      .filter(Boolean)
+      .join('\n\n')
+      .slice(0, 30_000);
+  }
+
+  private async reviewFinalDecision(
+    context: CognitiveContext,
+    options: OptionItem[],
+    optionReview: AdversarialReview,
+    decision: CognitiveDecision,
+    priorDecisionReviews: AdversarialReview[] = []
+  ): Promise<AdversarialReviewAttempt> {
+    const judge = this.options.localJudge;
+    if (!judge || typeof judge.adversarialDecisionReview !== 'function') {
+      return { status: 'skipped' };
+    }
+    if (!judge.isAvailable()) {
+      return { status: 'failed', reason: '最终决策红队服务当前不可用' };
+    }
+
+    const reviewHistory = [
+      `方案红队评审：\n${this.formatAdversarialReview(optionReview)}`,
+      ...priorDecisionReviews.map(
+        (review, index) =>
+          `第 ${index + 1} 轮最终决策红队复核：\n${this.formatAdversarialReview(review)}`
+      ),
+    ].join('\n\n');
+    const finalDecision = JSON.stringify(
+      {
+        action: decision.action,
+        reason: decision.reason,
+        fixDescription: decision.fixDescription,
+        scope: decision.scope,
+        analysis: decision.analysis,
+        reasoning: decision.reasoning,
+        affectedFiles: decision.affectedFiles,
+        verificationPlan: decision.verificationPlan,
+        risks: decision.risks,
+        adversarialResponses: decision.adversarialResponses,
+      },
+      null,
+      2
+    );
+
+    try {
+      const result = await judge.adversarialDecisionReview(
+        `${context.finding.file}:${context.finding.line}\n${context.finding.message}\n${context.finding.suggestion ?? ''}`,
+        `${this.formatCandidateOptions(options)}\n\n${reviewHistory}`,
+        finalDecision,
+        this.buildAdversarialCodeHint(context)
+      );
+      if ('kind' in result && result.kind === 'reliable') {
+        return {
+          status: 'reviewed',
+          review: {
+            approve: result.approve,
+            concerns: this.normalizeStringList(result.concerns),
+            requiredChanges: this.normalizeStringList(result.requiredChanges),
+            reason: result.reason || '最终决策红队复核完成',
+          },
+        };
+      }
+      console.warn(`[CognitiveEngine] 最终决策红队复核不可用: ${result.reason}`);
+      return { status: 'failed', reason: result.reason };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[CognitiveEngine] 最终决策红队复核失败: ${message}`);
+      return { status: 'failed', reason: message };
+    }
+  }
+
+  private async reviewOptions(
+    context: CognitiveContext,
+    options: OptionItem[],
+    rounds: number
+  ): Promise<AdversarialReview> {
+    const judge = this.options.localJudge;
+    if (!judge || typeof judge.adversarialReview !== 'function' || !judge.isAvailable()) {
+      return {
+        approve: true,
+        concerns: [],
+        requiredChanges: [],
+        reason: '方案红队辅助不可用，由最终决策模型直接结合方案与代码判断',
+      };
+    }
+
+    const candidateOptions = this.formatCandidateOptions(options);
+    const codeHint = this.buildAdversarialCodeHint(context);
+
+    let previousConcerns: string[] = [];
+    const reviews: AdversarialReview[] = [];
+    for (let round = 0; round < rounds; round++) {
+      const prior = previousConcerns.length
+        ? `\n\n上一轮红队意见（请从不同角度继续检查，不要机械重复）：\n${previousConcerns.map(item => `- ${item}`).join('\n')}`
+        : '';
+      try {
+        const result = await judge.adversarialReview(
+          `${context.finding.file}:${context.finding.line}\n${context.finding.message}\n${context.finding.suggestion ?? ''}${prior}`,
+          candidateOptions,
+          codeHint
+        );
+        if ('kind' in result && result.kind === 'reliable') {
+          const review: AdversarialReview = {
+            approve: result.approve,
+            concerns: this.normalizeStringList(result.concerns),
+            requiredChanges: this.normalizeStringList(result.requiredChanges),
+            reason: result.reason || '红队评审完成',
+          };
+          reviews.push(review);
+          previousConcerns = this.collectAdversarialConcerns(reviews);
+        } else {
+          console.warn(`[CognitiveEngine] 第 ${round + 1} 轮方案红队评审不可用: ${result.reason}`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[CognitiveEngine] 第 ${round + 1} 轮方案红队评审失败: ${message}`);
+      }
+    }
+    if (reviews.length === 0) {
+      return {
+        approve: true,
+        concerns: [],
+        requiredChanges: [],
+        reason: '方案红队辅助未返回可靠结果，由最终决策模型结合代码判断',
+      };
+    }
+    return {
+      approve: reviews.every(review => review.approve),
+      concerns: this.normalizeStringList(reviews.flatMap(review => review.concerns)),
+      requiredChanges: this.normalizeStringList(reviews.flatMap(review => review.requiredChanges)),
+      reason: this.normalizeStringList(reviews.map(review => review.reason)).join('；'),
+    };
   }
 }
