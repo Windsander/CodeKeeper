@@ -277,14 +277,28 @@ function acquireStateLock(lockPath: string): void {
 export interface MaintainerFindingDecision {
   action: 'fix' | 'ask' | 'ignore';
   alreadyFixed?: boolean;
+  /** finding 是误报、重复项或按项目约定无需改动时标记为 true。 */
+  notActionable?: boolean;
   reason: string;
   replyBody?: string;
   /** ask 时的问题 */
   question?: string;
   /** fix 时是否标记为删除文件 */
   deleteFile?: boolean;
+  /** 认知阶段选择的修复方向，供批量执行和后续重试恢复。 */
+  fixDescription?: string;
   /** finding 的改动范围，用于重试时继续执行写入边界校验。 */
   scope?: 'trivial' | 'local' | 'cross-file' | 'needs-clarification';
+  /** 认知阶段批准的可能受影响文件，用于重试时恢复受控写入审计。 */
+  affectedFiles?: string[];
+  /** 修复完成后的语义验证目标。 */
+  verificationPlan?: string[];
+  /** 认知阶段识别出的风险与控制措施。 */
+  risks?: string[];
+  /** 方案红队评审提出的关键意见。 */
+  adversarialConcerns?: string[];
+  /** 最终决策对红队意见的逐项回应。 */
+  adversarialResponses?: string[];
   /** fix 失败时的累计重试次数 */
   failedAttempts: number;
   /** fix 是否已经成功 */

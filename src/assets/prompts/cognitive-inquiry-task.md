@@ -1,5 +1,7 @@
 请根据当前问题判断还需要补充哪些上下文信息。
 
+先区分当前 finding 是可行动、需要更多上下文、已经修复，还是无需处理。不要因为 Reviewer 提供了建议就默认必须修改；如果问题可能是误报、重复项或按项目约定无需修改，应在后续检查中明确标记。
+
 ## 当前问题
 - 文件：{{findingFile}}:{{findingLine}}
 - 描述：{{findingMessage}}
@@ -8,6 +10,7 @@
 ## 已掌握上下文
 {{relatedFindings}}
 {{recalledMemories}}
+{{alreadyFixedAssessment}}
 
 ## 文件概览
 {{fileOverview}}

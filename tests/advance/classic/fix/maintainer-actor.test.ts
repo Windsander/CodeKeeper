@@ -22,6 +22,16 @@ import type { MrLifecycleMetrics } from '../../../../src/advance/classic/runners
 function createMockBrain(overrides: Partial<MaintainerBrain> = {}) {
   return {
     decideEnvironmentPrep: vi.fn().mockResolvedValue({ reason: '无需环境准备' }),
+    verifyFix: vi.fn().mockResolvedValue({
+      verdictSource: 'llm',
+      verdictId: 'mock-verify-fix',
+      passed: true,
+      issueResolved: true,
+      evidence: '测试替身提供了当前代码证据',
+      remainingIssues: [],
+      verificationSummary: '测试替身模拟大模型语义验收通过',
+      nextAction: 'commit',
+    }),
     ...overrides,
   } as unknown as MaintainerBrain;
 }
@@ -1156,6 +1166,16 @@ describe('提交管道（F3/L3）', () => {
       recheckAlreadyFixed: vi
         .fn()
         .mockResolvedValue({ alreadyFixed: false, reason: '校验错误仍存在' }),
+      verifyFix: vi.fn().mockResolvedValue({
+        verdictSource: 'llm',
+        verdictId: 'mock-verify-fix-lint-reflow',
+        passed: true,
+        issueResolved: true,
+        evidence: '当前代码已消除未使用变量',
+        remainingIssues: [],
+        verificationSummary: 'finding 已解决',
+        nextAction: 'commit',
+      }),
     });
     const llmClient = createMockLlmClient([
       // 第一轮修复：改文件 + finish
@@ -1177,6 +1197,7 @@ describe('提交管道（F3/L3）', () => {
       },
       { toolCalls: [{ id: '4', name: 'finish', input: { success: true, reason: 'lint done' } }] },
     ]);
+    const completeWithTools = vi.spyOn(llmClient, 'completeWithTools');
     const actor = new MaintainerActor({
       provider: createMockProvider(),
       llmClient,
@@ -1187,12 +1208,111 @@ describe('提交管道（F3/L3）', () => {
 
     const result = await actor.executeBatchFix(
       mockMR,
-      [{ finding: mockFinding, fileContent: 'const unused = 1;' }],
+      [
+        {
+          finding: mockFinding,
+          fileContent: 'const unused = 1;',
+          fixDescription: '删除未使用变量并核对引用',
+          risks: ['调用方可能仍引用该变量'],
+          adversarialConcerns: ['必须确认删除不会改变副作用'],
+          adversarialResponses: ['已核对初始化表达式没有副作用'],
+        },
+      ],
       'Reviewer 要求删除未使用变量'
     );
 
     expect(result.success).toBe(true);
     expect(commitAndPush).toHaveBeenCalledTimes(2);
+    expect(brain.verifyFix).toHaveBeenCalledTimes(2);
+    expect(brain.verifyFix.mock.calls[0]?.[0]).toMatchObject({
+      risks: ['调用方可能仍引用该变量'],
+      adversarialConcerns: ['必须确认删除不会改变副作用'],
+      adversarialResponses: ['已核对初始化表达式没有副作用'],
+    });
+    expect(brain.verifyFix.mock.calls[1]?.[0].previousFailure).toContain('no-unused-vars');
+    expect(completeWithTools.mock.calls[0]?.[2]?.system).toContain('删除未使用变量并核对引用');
+    expect(completeWithTools.mock.calls[0]?.[2]?.system).toContain('调用方可能仍引用该变量');
+    expect(completeWithTools.mock.calls[0]?.[2]?.system).toContain('必须确认删除不会改变副作用');
+  });
+
+  it('verifyFix 缺失时 fail-closed，绝不提交删除修复', async () => {
+    const commitAndPush = vi.fn().mockResolvedValue(undefined);
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain();
+    delete (brain as unknown as { verifyFix?: unknown }).verifyFix;
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient: createMockLlmClient([]),
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      deleteFile: true,
+      reason: '文件不应进入 MR',
+      analysis: 'Reviewer 明确要求删除文件',
+      consideredOptions: ['删除文件'],
+      reasoning: '删除是唯一符合 finding 的处理方式',
+      confidence: 'high',
+    };
+
+    const result = await actor.applyDecision(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(false);
+    expect(result.error).toContain('未提供 verifyFix()');
+    expect(commitAndPush).not.toHaveBeenCalled();
+  });
+
+  it('非大模型来源的通过结论也不能打开提交门禁', async () => {
+    const commitAndPush = vi.fn().mockResolvedValue(undefined);
+    const worktreeManager = createMockWorktreeManager({ commitAndPush });
+    const brain = createMockBrain({
+      verifyFix: vi.fn().mockResolvedValue({
+        verdictSource: 'unavailable',
+        verdictId: 'system-check',
+        passed: true,
+        issueResolved: true,
+        evidence: '静态检查通过',
+        remainingIssues: [],
+        verificationSummary: '系统检查通过',
+        nextAction: 'commit',
+      }),
+    });
+    const actor = new MaintainerActor({
+      provider: createMockProvider(),
+      llmClient: createMockLlmClient([]),
+      worktreeManager,
+      brain,
+      maintainerName: 'Maintainer',
+    });
+    const decision: CognitiveDecision = {
+      action: 'fix',
+      deleteFile: true,
+      reason: '文件不应进入 MR',
+      analysis: 'Reviewer 明确要求删除文件',
+      consideredOptions: ['删除文件'],
+      reasoning: '删除是唯一符合 finding 的处理方式',
+      confidence: 'high',
+    };
+
+    const result = await actor.applyDecision(
+      mockMR,
+      mockDiscussion,
+      mockFinding,
+      decision,
+      createState()
+    );
+
+    expect(result.codeApplied).toBe(false);
+    expect(result.error).toContain('未返回合法的大模型语义裁决');
+    expect(commitAndPush).not.toHaveBeenCalled();
   });
 
   it('permission 类失败不回流不重试，错误为 ≤10 行蒸馏诊断而非原文', async () => {

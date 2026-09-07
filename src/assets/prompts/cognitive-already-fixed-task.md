@@ -31,6 +31,7 @@
    - `alreadyFixed=false`
    - `needsMoreContext=true`
    - `reason` 中简要说明「缺少哪部分上下文导致无法判断」。
+6. 如果 finding 是误报、重复项、仅供记录的建议，或按项目约定不需要代码修改，返回 `notActionable=true`。这不是 `alreadyFixed=true`，必须在 `reason` 中说明为什么无需行动，并保持 `alreadyFixed=false`。
 
 ## 示例
 

@@ -7,6 +7,8 @@
  */
 
 import { LlmClient } from '../../llm/client.js';
+import { LlmMaintainerLocalJudge } from '../fix/maintainer-llm-judge.js';
+import type { MaintainerLocalJudge } from '../fix/maintainer-local-judge.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';
@@ -505,8 +507,12 @@ const CONTINUE_AFTER_CI: CiHandlingResult = {
 };
 
 export class MaintainerRunner extends BaseRoleRunner {
+  /** 本地判别辅助（目前为保守桩，未来可替换为本地轻量模型实现） */
+  private localJudge: MaintainerLocalJudge;
+
   constructor(options: MaintainerRunnerOptions) {
     super({ llmClient: options.llmClient });
+    this.localJudge = new LlmMaintainerLocalJudge(this.llmClient);
   }
 
   protected getRole(): 'maintainer' {
@@ -567,6 +573,7 @@ export class MaintainerRunner extends BaseRoleRunner {
       projectContext,
       cognitiveDepth,
       worktreeManager,
+      localJudge: this.localJudge,
     };
 
     const state = loadState(project);
@@ -2011,11 +2018,18 @@ export class MaintainerRunner extends BaseRoleRunner {
       threadState.decisions[key] = {
         action: decision.action,
         alreadyFixed: decision.alreadyFixed,
+        notActionable: decision.notActionable,
         reason: decision.reason,
         replyBody: decision.replyBody,
         question: decision.question,
         deleteFile: decision.deleteFile,
+        fixDescription: decision.fixDescription,
         scope: decision.scope,
+        affectedFiles: decision.affectedFiles,
+        verificationPlan: decision.verificationPlan,
+        risks: decision.risks,
+        adversarialConcerns: decision.adversarialConcerns,
+        adversarialResponses: decision.adversarialResponses,
         failedAttempts:
           decision.action === 'fix' && !codeApplied
             ? (staleFinding ? 0 : (existing?.failedAttempts ?? 0)) + 1
@@ -2108,6 +2122,12 @@ export class MaintainerRunner extends BaseRoleRunner {
       fileContent: string;
       scope?: import('../fix/maintainer-brain.js').MaintainerDecision['scope'];
       deleteFile?: boolean;
+      fixDescription?: string;
+      affectedFiles?: string[];
+      verificationPlan?: string[];
+      risks?: string[];
+      adversarialConcerns?: string[];
+      adversarialResponses?: string[];
     }> = [];
 
     // 只有「人工」新回复才触发逐条重评估；Agent 自动重扫不清空决策、不重跑 LLM。
@@ -2205,11 +2225,18 @@ export class MaintainerRunner extends BaseRoleRunner {
       threadState.decisions[key] = {
         action: decision.action,
         alreadyFixed: decision.alreadyFixed,
+        notActionable: decision.notActionable,
         reason: decision.reason,
         replyBody: decision.replyBody,
         question: decision.question,
         deleteFile: decision.deleteFile,
+        fixDescription: decision.fixDescription,
         scope: decision.scope,
+        affectedFiles: decision.affectedFiles,
+        verificationPlan: decision.verificationPlan,
+        risks: decision.risks,
+        adversarialConcerns: decision.adversarialConcerns,
+        adversarialResponses: decision.adversarialResponses,
         failedAttempts:
           staleFinding || existing?.action !== 'fix' ? 0 : (existing.failedAttempts ?? 0),
         fixSucceeded: staleFinding ? undefined : existing?.fixSucceeded,
@@ -2253,6 +2280,12 @@ export class MaintainerRunner extends BaseRoleRunner {
             fileContent: focusedContextToString(focusedContent),
             scope: decision.scope,
             deleteFile: decision.deleteFile,
+            fixDescription: decision.fixDescription,
+            affectedFiles: decision.affectedFiles,
+            verificationPlan: decision.verificationPlan,
+            risks: decision.risks,
+            adversarialConcerns: decision.adversarialConcerns,
+            adversarialResponses: decision.adversarialResponses,
           });
           continue;
         }
@@ -2274,6 +2307,12 @@ export class MaintainerRunner extends BaseRoleRunner {
         fileContent: focusedContextToString(focusedContent),
         scope: decision.scope,
         deleteFile: decision.deleteFile,
+        fixDescription: decision.fixDescription,
+        affectedFiles: decision.affectedFiles,
+        verificationPlan: decision.verificationPlan,
+        risks: decision.risks,
+        adversarialConcerns: decision.adversarialConcerns,
+        adversarialResponses: decision.adversarialResponses,
       });
     }
 
@@ -2289,6 +2328,12 @@ export class MaintainerRunner extends BaseRoleRunner {
           fileContent: item.fileContent,
           scope: item.scope,
           deleteFile: item.deleteFile,
+          fixDescription: item.fixDescription,
+          affectedFiles: item.affectedFiles,
+          verificationPlan: item.verificationPlan,
+          risks: item.risks,
+          adversarialConcerns: item.adversarialConcerns,
+          adversarialResponses: item.adversarialResponses,
         })),
         firstNote.body
       );
@@ -2855,7 +2900,21 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
 
     try {
-      return await brain.recheckAlreadyFixed(finding);
+      const baseResult = await brain.recheckAlreadyFixed(finding);
+
+      const assist = await this.localJudge.assistAlreadyFixedCheck(
+        `${finding.message}\n${finding.suggestion}`,
+        focusedContextToString(focusedContent)
+      );
+      if (assist.kind === 'reliable' && assist.likelyAlreadyFixed) {
+        return {
+          alreadyFixed: true,
+          reason: assist.reason,
+          evidence: assist.evidence,
+        };
+      }
+
+      return baseResult;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(
@@ -3000,6 +3059,12 @@ export class MaintainerRunner extends BaseRoleRunner {
         fileContent: string;
         scope?: import('../fix/maintainer-brain.js').MaintainerDecision['scope'];
         deleteFile?: boolean;
+        fixDescription?: string;
+        affectedFiles?: string[];
+        verificationPlan?: string[];
+        risks?: string[];
+        adversarialConcerns?: string[];
+        adversarialResponses?: string[];
       }>;
     },
     suppressAsk = false
@@ -3046,6 +3111,12 @@ export class MaintainerRunner extends BaseRoleRunner {
             fileContent: '',
             scope: decision.scope,
             deleteFile: decision.deleteFile,
+            fixDescription: decision.fixDescription,
+            affectedFiles: decision.affectedFiles,
+            verificationPlan: decision.verificationPlan,
+            risks: decision.risks,
+            adversarialConcerns: decision.adversarialConcerns,
+            adversarialResponses: decision.adversarialResponses,
           });
         }
         break;
