@@ -19,7 +19,7 @@ vi.mock('vis-network', () => ({
 }));
 
 vi.mock('vis-data', () => ({
-  DataSet: vi.fn().mockImplementation((items) => ({
+  DataSet: vi.fn().mockImplementation(items => ({
     add: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
@@ -35,7 +35,14 @@ vi.mock('../../../../src/electron/renderer/hooks/useMemoryGraph', () => ({
     graph: {
       nodes: [{ id: 'system', label: 'System', group: 'system' }],
       edges: [],
-      stats: { totalNodes: 1, totalEdges: 0, totalMemories: 0, projectCount: 1, activeDays: 0, dailyGrowth: [] },
+      stats: {
+        totalNodes: 1,
+        totalEdges: 0,
+        totalMemories: 0,
+        projectCount: 1,
+        activeDays: 0,
+        dailyGrowth: [],
+      },
     },
     loading: false,
     error: null,

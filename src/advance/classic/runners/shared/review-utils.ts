@@ -45,7 +45,7 @@ export function groupFindingsBySeverity(
 export function formatSummary(summary: string): string[] {
   let formatted = summary.replace(/(\d+)\)\s*/g, '$1. ');
   formatted = formatted.replace(/([^\n])(\d+\.\s)/g, '$1\n$2');
-  return formatted.split('\n').map((line) => `> ${line}`);
+  return formatted.split('\n').map(line => `> ${line}`);
 }
 
 /**
@@ -140,7 +140,11 @@ export function formatFindingDiscussionBody(finding: ReviewFinding, agentName?: 
  *
  * 仅用于 reviewer 角色，汇总所有 findings。
  */
-export function formatReviewComment(mr: MergeRequest, result: ReviewResult, agentName?: string): string {
+export function formatReviewComment(
+  mr: MergeRequest,
+  result: ReviewResult,
+  agentName?: string
+): string {
   const severityOrder: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
   const groups = groupFindingsBySeverity(result.findings);
   const total = result.findings.length;
@@ -183,7 +187,11 @@ export function formatReviewComment(mr: MergeRequest, result: ReviewResult, agen
  *
  * 当 MR 有新 commit 或发现新问题时，在原 summary 下追加一条补充说明。
  */
-export function formatSupplementaryReviewComment(mr: MergeRequest, newFindings: ReviewFinding[], agentName?: string): string {
+export function formatSupplementaryReviewComment(
+  mr: MergeRequest,
+  newFindings: ReviewFinding[],
+  agentName?: string
+): string {
   const severityOrder: ReviewFinding['severity'][] = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
   const groups = groupFindingsBySeverity(newFindings);
   const total = newFindings.length;

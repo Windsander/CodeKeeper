@@ -62,7 +62,7 @@ export function Dashboard() {
         archiveRoot?: string;
         lastScannedAt: number | null;
       };
-      mutate((prev) => {
+      mutate(prev => {
         const summary: ProjectSummary = {
           id: newProject.id,
           name: newProject.name,
@@ -93,7 +93,7 @@ export function Dashboard() {
   const unregister = async (projectId: string) => {
     try {
       await window.electronAPI.invoke('project.unregister', { projectId });
-      mutate((prev) => prev?.filter((p) => p.id !== projectId) ?? null);
+      mutate(prev => prev?.filter(p => p.id !== projectId) ?? null);
       refresh(true);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -115,9 +115,11 @@ export function Dashboard() {
               className="input"
               placeholder="点击右侧按钮选择项目目录"
               value={rootPath}
-              onChange={(e) => setRootPath(e.target.value)}
+              onChange={e => setRootPath(e.target.value)}
             />
-            <button className="btn btn-primary" onClick={pickRootPath}>选择...</button>
+            <button className="btn btn-primary" onClick={pickRootPath}>
+              选择...
+            </button>
           </div>
         </div>
 
@@ -128,9 +130,11 @@ export function Dashboard() {
               className="input"
               placeholder="点击右侧按钮选择归档目录"
               value={archiveRoot}
-              onChange={(e) => setArchiveRoot(e.target.value)}
+              onChange={e => setArchiveRoot(e.target.value)}
             />
-            <button className="btn btn-primary" onClick={pickArchiveRoot}>选择...</button>
+            <button className="btn btn-primary" onClick={pickArchiveRoot}>
+              选择...
+            </button>
           </div>
         </div>
 
@@ -144,21 +148,21 @@ export function Dashboard() {
         {registerError && <div className="error-message">{registerError}</div>}
       </div>
 
-      {(!projects || projects.length === 0) ? (
+      {!projects || projects.length === 0 ? (
         <div className="empty-state">
           <h3>暂无注册项目</h3>
           <p>在上方选择项目路径和归档位置，即可开始监控。</p>
         </div>
       ) : (
         <div className="project-grid">
-          {projects.map((p) => (
+          {projects.map(p => (
             <div
               key={p.id}
               className="project-card"
               onClick={() => navigate(`/project/${p.id}`)}
               role="button"
               tabIndex={0}
-              onKeyDown={(e) => {
+              onKeyDown={e => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   navigate(`/project/${p.id}`);
                 }
@@ -168,7 +172,7 @@ export function Dashboard() {
               <div className="project-actions">
                 <button
                   className="btn btn-danger btn-sm"
-                  onClick={(e) => {
+                  onClick={e => {
                     e.stopPropagation();
                     unregister(p.id);
                   }}

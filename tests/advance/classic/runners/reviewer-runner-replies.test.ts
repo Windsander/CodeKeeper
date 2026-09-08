@@ -5,7 +5,11 @@ import {
   REVIEWER_ROLE_LABEL,
 } from '../../../../src/advance/classic/runners/shared/review-utils.js';
 import type { MrAgentState } from '../../../../src/advance/classic/runners/shared/state-utils.js';
-import type { Discussion, MergeRequest, ReviewFinding } from '../../../../src/advance/classic/provider/types.js';
+import type {
+  Discussion,
+  MergeRequest,
+  ReviewFinding,
+} from '../../../../src/advance/classic/provider/types.js';
 import type { ReviewerBrain } from '../../../../src/advance/classic/review/reviewer-brain.js';
 import type { GitLabProvider } from '../../../../src/advance/classic/provider/gitlab-provider.js';
 
@@ -46,7 +50,9 @@ function makeState(stateKey: string, currentReviewedAt: number): MrAgentState {
 describe('ReviewerRunner.handleThreadReplies 基线时间', () => {
   it('应使用上一轮 reviewedAt 作为基线，而不是当前运行已更新的 reviewedAt', async () => {
     const runner = new ReviewerRunner({
-      llmClient: { complete: vi.fn() } as unknown as import('../../../../src/advance/llm/client.js').LlmClient,
+      llmClient: {
+        complete: vi.fn(),
+      } as unknown as import('../../../../src/advance/llm/client.js').LlmClient,
     });
 
     const mr = makeMr();
@@ -129,7 +135,9 @@ describe('ReviewerRunner.handleThreadReplies 基线时间', () => {
 
   it('当新回复时间早于上一轮 reviewedAt 时，不应重复回复', async () => {
     const runner = new ReviewerRunner({
-      llmClient: { complete: vi.fn() } as unknown as import('../../../../src/advance/llm/client.js').LlmClient,
+      llmClient: {
+        complete: vi.fn(),
+      } as unknown as import('../../../../src/advance/llm/client.js').LlmClient,
     });
 
     const mr = makeMr();
@@ -199,7 +207,9 @@ describe('ReviewerRunner.handleThreadReplies 基线时间', () => {
 
   it('已发布回复被远端删除后按持久化正文补发', async () => {
     const runner = new ReviewerRunner({
-      llmClient: { complete: vi.fn() } as unknown as import('../../../../src/advance/llm/client.js').LlmClient,
+      llmClient: {
+        complete: vi.fn(),
+      } as unknown as import('../../../../src/advance/llm/client.js').LlmClient,
     });
     const mr = makeMr();
     const repliedAt = Date.parse('2026-07-03T06:02:00.000Z');
@@ -270,7 +280,9 @@ describe('ReviewerRunner.handleThreadReplies 基线时间', () => {
 
   it('自动化 bot 的新 note 不触发 Reviewer 回复', async () => {
     const runner = new ReviewerRunner({
-      llmClient: { complete: vi.fn() } as unknown as import('../../../../src/advance/llm/client.js').LlmClient,
+      llmClient: {
+        complete: vi.fn(),
+      } as unknown as import('../../../../src/advance/llm/client.js').LlmClient,
     });
     const baseline = Date.parse('2026-07-03T06:00:00.000Z');
     const state = makeState('feature:test:main', baseline);

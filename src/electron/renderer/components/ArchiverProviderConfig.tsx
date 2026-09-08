@@ -222,8 +222,8 @@ export function ArchiverProviderConfig({ project, onSaved }: ArchiverProviderCon
 
   if (loading) {
     return (
-      <div className='archiver-v2-panel'>
-        <div className='loading'>加载项目知识配置...</div>
+      <div className="archiver-v2-panel">
+        <div className="loading">加载项目知识配置...</div>
       </div>
     );
   }
@@ -235,22 +235,22 @@ export function ArchiverProviderConfig({ project, onSaved }: ArchiverProviderCon
   ];
 
   return (
-    <div className='archiver-v2-panel'>
-      {error && <div className='error-message'>{error}</div>}
-      {saved && <div className='success-message'>项目知识配置已保存。</div>}
+    <div className="archiver-v2-panel">
+      {error && <div className="error-message">{error}</div>}
+      {saved && <div className="success-message">项目知识配置已保存。</div>}
 
-      <section className='archiver-v2-section'>
-        <div className='archiver-v2-section-heading'>
+      <section className="archiver-v2-section">
+        <div className="archiver-v2-section-heading">
           <div>
             <h3>Archiver 身份</h3>
             <p>该名称会作为 Archiver Role 写入 EverOS 的 Agent 身份。</p>
           </div>
         </div>
-        <div className='form-group archiver-v2-name-field'>
-          <label htmlFor='archiver-name'>Archiver 名称</label>
+        <div className="form-group archiver-v2-name-field">
+          <label htmlFor="archiver-name">Archiver 名称</label>
           <input
-            id='archiver-name'
-            className='input'
+            id="archiver-name"
+            className="input"
             value={config.archiverName}
             onChange={event =>
               setConfig(previous => ({
@@ -262,20 +262,20 @@ export function ArchiverProviderConfig({ project, onSaved }: ArchiverProviderCon
           />
         </div>
         {nameChanged && (
-          <div className='archiver-v2-warning'>
+          <div className="archiver-v2-warning">
             修改名称会创建新的 EverOS Agent 身份，旧记忆不会自动迁移。
           </div>
         )}
       </section>
 
-      <section className='archiver-v2-section'>
-        <div className='archiver-v2-section-heading'>
+      <section className="archiver-v2-section">
+        <div className="archiver-v2-section-heading">
           <div>
             <h3>自动归档</h3>
             <p>只需选择更新频率；Provider 的安装、启动和回退由系统自动处理。</p>
           </div>
         </div>
-        <div className='archiver-v2-schedule-row'>
+        <div className="archiver-v2-schedule-row">
           <div>
             <strong>更新频率</strong>
             <span>系统会自动选择可用知识源，并持续整理代码与文档知识。</span>
@@ -284,15 +284,15 @@ export function ArchiverProviderConfig({ project, onSaved }: ArchiverProviderCon
             value={scheduleMode}
             options={scheduleOptions}
             onChange={changeSchedule}
-            className='archiver-v2-dropdown'
+            className="archiver-v2-dropdown"
           />
         </div>
         {scheduleMode === 'custom' && (
-          <div className='form-group archiver-v2-cron-field'>
-            <label htmlFor='archiver-cron'>cron 表达式</label>
+          <div className="form-group archiver-v2-cron-field">
+            <label htmlFor="archiver-cron">cron 表达式</label>
             <input
-              id='archiver-cron'
-              className='input'
+              id="archiver-cron"
+              className="input"
               value={config.automation.cron}
               onChange={event =>
                 setConfig(previous => ({
@@ -300,48 +300,48 @@ export function ArchiverProviderConfig({ project, onSaved }: ArchiverProviderCon
                   automation: { ...previous.automation, cron: event.target.value },
                 }))
               }
-              placeholder='0 2 * * *'
+              placeholder="0 2 * * *"
             />
           </div>
         )}
       </section>
 
-      <section className='archiver-v2-section'>
-        <div className='archiver-v2-section-heading'>
+      <section className="archiver-v2-section">
+        <div className="archiver-v2-section-heading">
           <div>
             <h3>自动知识方案</h3>
             <p>无需选择 Provider。系统按内置优先级探测环境，自动完成主源、回退和文档知识提炼。</p>
           </div>
         </div>
-        <div className='archiver-v2-auto-summary'>
+        <div className="archiver-v2-auto-summary">
           <strong>
             {selectedProvider
               ? `当前主知识源：${selectedProvider.displayName}`
               : '系统自动遴选知识源'}
           </strong>
           <span>
-            默认优先结构探索 Provider；不可用时自动回退，并始终保留内置文档知识提炼。交互式
-            Skill 只自动准备资源，由 Agent 工作流执行。
+            默认优先结构探索 Provider；不可用时自动回退，并始终保留内置文档知识提炼。交互式 Skill
+            只自动准备资源，由 Agent 工作流执行。
           </span>
         </div>
       </section>
 
-      <section className='archiver-v2-section'>
-        <div className='archiver-v2-section-heading'>
+      <section className="archiver-v2-section">
+        <div className="archiver-v2-section-heading">
           <div>
             <h3>Provider 诊断</h3>
             <p>仅展示系统自动探测结果，不显示启动命令、参数、环境变量或路径。</p>
           </div>
           <button
-            type='button'
-            className='btn btn-secondary btn-sm'
+            type="button"
+            className="btn btn-secondary btn-sm"
             onClick={() => void probeProviders()}
             disabled={probing}
           >
             {probing ? '检测中...' : '重新检测'}
           </button>
         </div>
-        <div className='archiver-v2-diagnostics'>
+        <div className="archiver-v2-diagnostics">
           {providers.map(provider => {
             const probe = probes[provider.id];
             const runStatus = latestStatuses.get(provider.id);
@@ -354,8 +354,8 @@ export function ArchiverProviderConfig({ project, onSaved }: ArchiverProviderCon
                     ? 'badge-warning'
                     : 'badge-info';
             return (
-              <article className='archiver-v2-diagnostic-card' key={provider.id}>
-                <div className='archiver-v2-diagnostic-header'>
+              <article className="archiver-v2-diagnostic-card" key={provider.id}>
+                <div className="archiver-v2-diagnostic-header">
                   <div>
                     <strong>{provider.displayName}</strong>
                     <span>{providerKindLabel(provider.kind)}</span>
@@ -365,18 +365,18 @@ export function ArchiverProviderConfig({ project, onSaved }: ArchiverProviderCon
                   </span>
                 </div>
                 <p>{provider.description}</p>
-                <div className='archiver-v2-diagnostic-meta'>
+                <div className="archiver-v2-diagnostic-meta">
                   <span>版本：{probe?.version ?? '—'}</span>
                   <span>最近状态：{statusLabel(runStatus)}</span>
                   {runStatus?.finishedAt && <span>{formatTime(runStatus.finishedAt)}</span>}
                 </div>
                 {probe?.message && (
-                  <span className='archiver-v2-diagnostic-message'>{probe.message}</span>
+                  <span className="archiver-v2-diagnostic-message">{probe.message}</span>
                 )}
                 {provider.homepage && (
                   <button
-                    type='button'
-                    className='archiver-v2-homepage'
+                    type="button"
+                    className="archiver-v2-homepage"
                     onClick={() => void openExternal(provider.homepage)}
                   >
                     查看 Provider 主页
@@ -386,23 +386,23 @@ export function ArchiverProviderConfig({ project, onSaved }: ArchiverProviderCon
             );
           })}
           {providers.length === 0 && (
-            <div className='archiver-v2-empty'>
+            <div className="archiver-v2-empty">
               Provider 目录暂不可用，系统仍会使用内置知识阶段。
             </div>
           )}
         </div>
       </section>
 
-      <div className='archiver-v2-actions'>
+      <div className="archiver-v2-actions">
         <button
-          type='button'
-          className='btn btn-primary'
+          type="button"
+          className="btn btn-primary"
           onClick={() => void save()}
           disabled={saving}
         >
           {saving ? '保存中...' : '保存配置'}
         </button>
-        {saved && <span className='badge badge-success'>已保存</span>}
+        {saved && <span className="badge badge-success">已保存</span>}
       </div>
     </div>
   );

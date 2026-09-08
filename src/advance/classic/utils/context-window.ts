@@ -80,7 +80,7 @@ export async function summarizeThreadNotes(
     return { recentNotesText: '', summarizedCount: 0, summarized: false };
   }
 
-  const normalizedNotes = notes.map((n) => ({
+  const normalizedNotes = notes.map(n => ({
     ...n,
     body: truncateBody(n.body, maxCharsPerItem),
   }));
@@ -114,7 +114,11 @@ export async function summarizeThreadNotes(
   };
 }
 
-async function summarizeNotes(llmClient: LlmClient, notes: ThreadNote[], promptLoader?: PromptLoader): Promise<string> {
+async function summarizeNotes(
+  llmClient: LlmClient,
+  notes: ThreadNote[],
+  promptLoader?: PromptLoader
+): Promise<string> {
   if (notes.length === 0) return '';
 
   const notesText = notes.map((n, idx) => formatNote(n, idx + 1)).join('\n\n');

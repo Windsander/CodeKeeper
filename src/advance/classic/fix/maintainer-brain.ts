@@ -434,7 +434,7 @@ export class MaintainerBrain {
     ) {
       const verdict = await this.options.localJudge.preFilterNonFindingDiscussion(
         params.body,
-        undefined,
+        undefined
       );
       if ('kind' in verdict && verdict.kind === 'reliable') {
         if (verdict.isProbablyNonFinding) {

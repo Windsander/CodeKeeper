@@ -8,9 +8,7 @@ import type { MetadataStore } from '../../store/metadata-store';
 /**
  * 允许局部更新的字段类型（排除不可变字段）
  */
-export type MrStatePatch = Partial<
-  Omit<MrReviewState, 'id' | 'projectId' | 'mrIid' | 'createdAt'>
->;
+export type MrStatePatch = Partial<Omit<MrReviewState, 'id' | 'projectId' | 'mrIid' | 'createdAt'>>;
 
 /**
  * MR 状态存储封装类
@@ -40,7 +38,9 @@ export class MrStateStore {
    * 按 updatedAt 降序排列
    */
   listByProject(projectId: string): MrReviewState[] {
-    return this.store.listMrStatesByProject(projectId).filter((s): s is MrReviewState => s !== undefined);
+    return this.store
+      .listMrStatesByProject(projectId)
+      .filter((s): s is MrReviewState => s !== undefined);
   }
 
   /**

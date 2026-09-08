@@ -11,7 +11,7 @@ async function waitCondition(condition: () => boolean, timeoutMs: number): Promi
     if (Date.now() - start > timeoutMs) {
       throw new Error(`等待条件超时（${timeoutMs}ms）`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
 }
 
@@ -42,18 +42,20 @@ describe('FileWatcher', () => {
     watcher.start({
       projectRoot: dir,
       config,
-      onEvent: (e) => events.push(e),
-      onReady: () => { ready = true; },
+      onEvent: e => events.push(e),
+      onReady: () => {
+        ready = true;
+      },
     });
 
     await waitCondition(() => ready, 3000);
     writeFileSync(join(dir, 'readme.md'), '# hello');
     await waitCondition(
-      () => events.some((e) => e.type === 'add' && e.filePath.endsWith('readme.md')),
+      () => events.some(e => e.type === 'add' && e.filePath.endsWith('readme.md')),
       3000
     );
 
-    expect(events.some((e) => e.type === 'add' && e.filePath.endsWith('readme.md'))).toBe(true);
+    expect(events.some(e => e.type === 'add' && e.filePath.endsWith('readme.md'))).toBe(true);
   }, 10000);
 
   it('能监听到文件修改事件', async () => {
@@ -72,18 +74,20 @@ describe('FileWatcher', () => {
     watcher.start({
       projectRoot: dir,
       config,
-      onEvent: (e) => events.push(e),
-      onReady: () => { ready = true; },
+      onEvent: e => events.push(e),
+      onReady: () => {
+        ready = true;
+      },
     });
 
     await waitCondition(() => ready, 3000);
     writeFileSync(join(dir, 'note.md'), 'updated');
     await waitCondition(
-      () => events.some((e) => e.type === 'change' && e.filePath.endsWith('note.md')),
+      () => events.some(e => e.type === 'change' && e.filePath.endsWith('note.md')),
       3000
     );
 
-    expect(events.some((e) => e.type === 'change' && e.filePath.endsWith('note.md'))).toBe(true);
+    expect(events.some(e => e.type === 'change' && e.filePath.endsWith('note.md'))).toBe(true);
   }, 10000);
 
   it('能监听到文件删除事件', async () => {
@@ -103,17 +107,19 @@ describe('FileWatcher', () => {
     watcher.start({
       projectRoot: dir,
       config,
-      onEvent: (e) => events.push(e),
-      onReady: () => { ready = true; },
+      onEvent: e => events.push(e),
+      onReady: () => {
+        ready = true;
+      },
     });
 
     await waitCondition(() => ready, 3000);
     rmSync(filePath, { force: true });
     await waitCondition(
-      () => events.some((e) => e.type === 'unlink' && e.filePath.endsWith('temp.md')),
+      () => events.some(e => e.type === 'unlink' && e.filePath.endsWith('temp.md')),
       3000
     );
 
-    expect(events.some((e) => e.type === 'unlink' && e.filePath.endsWith('temp.md'))).toBe(true);
+    expect(events.some(e => e.type === 'unlink' && e.filePath.endsWith('temp.md'))).toBe(true);
   }, 10000);
 });

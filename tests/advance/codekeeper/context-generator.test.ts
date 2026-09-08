@@ -21,8 +21,20 @@ describe('generateContext', () => {
 
   it('应生成 context.md', () => {
     const entries = [
-      { filePath: join(tmp, 'a.md'), category: 'memory', docType: 'spec', summary: 'A 设计', tags: ['a'] },
-      { filePath: join(tmp, 'b.md'), category: 'sync', docType: 'weekly', summary: 'B 周报', tags: ['b'] },
+      {
+        filePath: join(tmp, 'a.md'),
+        category: 'memory',
+        docType: 'spec',
+        summary: 'A 设计',
+        tags: ['a'],
+      },
+      {
+        filePath: join(tmp, 'b.md'),
+        category: 'sync',
+        docType: 'weekly',
+        summary: 'B 周报',
+        tags: ['b'],
+      },
     ];
     generateContext(ctxOptions(tmp, '测试项目', entries));
     const content = readFileSync(join(tmp, '.codekeeper', 'context.md'), 'utf-8');

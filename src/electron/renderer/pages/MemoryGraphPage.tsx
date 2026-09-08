@@ -12,20 +12,14 @@ export function MemoryGraphPage() {
 
   return (
     <div className="memory-graph-page">
-      <PageHeader
-        icon={<MemoryGraphIcon />}
-        title="记忆图谱"
-        onRefresh={() => refresh()}
-      />
+      <PageHeader icon={<MemoryGraphIcon />} title="记忆图谱" onRefresh={() => refresh()} />
 
       {error && <div className="memory-graph-alert">加载失败: {error}</div>}
       {loading && <div className="memory-graph-loading">Loading…</div>}
 
       <div className="memory-graph-viewport">
         {!loading && !error && stats.projectCount === 0 && (
-          <div className="memory-graph-empty">
-            暂无项目，请先注册项目后再查看记忆图谱。
-          </div>
+          <div className="memory-graph-empty">暂无项目，请先注册项目后再查看记忆图谱。</div>
         )}
         {!loading && !error && stats.projectCount > 0 && <MemoryGraphView graph={graph} />}
         {!loading && !error && stats.projectCount > 0 && stats.totalMemories === 0 && (

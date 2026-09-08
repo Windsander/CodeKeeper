@@ -36,11 +36,11 @@ export function useIpc<T>(method: string, params?: unknown, options?: { pollInte
       if (!silent) setLoading(true);
       setError(null);
       return invoke<T>(method, params)
-        .then((result) => {
+        .then(result => {
           cache.set(cacheKey, result);
           setData(result);
         })
-        .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+        .catch(err => setError(err instanceof Error ? err.message : String(err)))
         .finally(() => {
           if (!silent) setLoading(false);
         });
@@ -102,11 +102,9 @@ export function useIpc<T>(method: string, params?: unknown, options?: { pollInte
 
   const mutate = useCallback(
     (value: T | ((prev: T | null) => T | null)) => {
-      setData((prev) => {
+      setData(prev => {
         const next =
-          typeof value === 'function'
-            ? (value as (prev: T | null) => T | null)(prev)
-            : value;
+          typeof value === 'function' ? (value as (prev: T | null) => T | null)(prev) : value;
         if (next !== null) {
           cache.set(cacheKey, next);
         }

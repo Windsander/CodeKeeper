@@ -7,7 +7,8 @@ interface CircularProgressProps {
 export function CircularProgress({ value, size = 16, strokeWidth = 2 }: CircularProgressProps) {
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const offset = value != null ? circumference - (value / 100) * circumference : circumference * 0.75;
+  const offset =
+    value != null ? circumference - (value / 100) * circumference : circumference * 0.75;
 
   return (
     <svg width={size} height={size} className="circular-progress">

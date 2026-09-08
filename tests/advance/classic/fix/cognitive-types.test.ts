@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import type { CognitiveDecision, CognitiveContext } from '../../../../src/advance/classic/fix/cognitive-types.js';
+import type {
+  CognitiveDecision,
+  CognitiveContext,
+} from '../../../../src/advance/classic/fix/cognitive-types.js';
 
 describe('cognitive-types', () => {
   it('CognitiveDecision 包含 reasoning 字段', () => {

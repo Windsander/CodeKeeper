@@ -1,8 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createRoleRunner } from '../../../../src/advance/classic/runners/role-runner.js';
-import { ReviewerRunner, buildReviewerSessionId } from '../../../../src/advance/classic/runners/reviewer-runner.js';
-import { MaintainerRunner, buildMaintainerMrSessionId } from '../../../../src/advance/classic/runners/maintainer-runner.js';
-import { ArchiverRunner, buildArchiverSessionId } from '../../../../src/advance/classic/runners/archiver-runner.js';
+import {
+  ReviewerRunner,
+  buildReviewerSessionId,
+} from '../../../../src/advance/classic/runners/reviewer-runner.js';
+import {
+  MaintainerRunner,
+  buildMaintainerMrSessionId,
+} from '../../../../src/advance/classic/runners/maintainer-runner.js';
+import {
+  ArchiverRunner,
+  buildArchiverSessionId,
+} from '../../../../src/advance/classic/runners/archiver-runner.js';
 import { CodeGraphClient } from '../../../../src/advance/archiver/codegraph-client.js';
 
 const mockLlmClient = {
@@ -11,11 +20,15 @@ const mockLlmClient = {
 
 describe('createRoleRunner', () => {
   it('reviewer 返回 ReviewerRunner', () => {
-    expect(createRoleRunner('reviewer', { llmClient: mockLlmClient })).toBeInstanceOf(ReviewerRunner);
+    expect(createRoleRunner('reviewer', { llmClient: mockLlmClient })).toBeInstanceOf(
+      ReviewerRunner
+    );
   });
 
   it('maintainer 返回 MaintainerRunner', () => {
-    expect(createRoleRunner('maintainer', { llmClient: mockLlmClient })).toBeInstanceOf(MaintainerRunner);
+    expect(createRoleRunner('maintainer', { llmClient: mockLlmClient })).toBeInstanceOf(
+      MaintainerRunner
+    );
   });
 
   it('archiver 返回 ArchiverRunner', () => {

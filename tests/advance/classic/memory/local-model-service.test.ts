@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { LocalModelServiceManager } from '../../../../src/advance/classic/memory/local-model-service.js';
 import { ModelServer } from '../../../../src/advance/classic/memory/model-server.js';
 
-vi.mock('node:fs', async (importOriginal) => ({
+vi.mock('node:fs', async importOriginal => ({
   ...(await importOriginal()),
   existsSync: vi.fn().mockReturnValue(true),
 }));

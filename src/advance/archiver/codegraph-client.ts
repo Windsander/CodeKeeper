@@ -138,7 +138,8 @@ export class CodeGraphClient implements ArchiverProviderCoordinator {
       });
       const payload = (await response.json()) as CodeGraphRpcResponse;
       if (!response.ok || payload.ok !== true) {
-        const detail = typeof payload.error === 'string' ? payload.error : `HTTP ${response.status}`;
+        const detail =
+          typeof payload.error === 'string' ? payload.error : `HTTP ${response.status}`;
         throw new Error(`CodeGraph Server 请求失败：${detail}`);
       }
       return payload.result as T;

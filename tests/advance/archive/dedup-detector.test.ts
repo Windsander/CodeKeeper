@@ -7,10 +7,9 @@ describe('DedupDetector', () => {
   it('应通过哈希快速判定重复', async () => {
     const client = new LlmClient({ apiKey: 'x', mock: { response: '' } });
     const detector = new DedupDetector(client);
-    const result = await detector.detect(
-      { filePath: '/a.md', contentHash: 'same', content: 'x' },
-      [{ filePath: '/b.md', contentHash: 'same', content: 'x' }]
-    );
+    const result = await detector.detect({ filePath: '/a.md', contentHash: 'same', content: 'x' }, [
+      { filePath: '/b.md', contentHash: 'same', content: 'x' },
+    ]);
     expect(result.relation).toBe('duplicate');
     expect(result.reason).toContain('哈希');
   });
@@ -38,7 +37,10 @@ describe('DedupDetector', () => {
   });
 
   it('parseDedupResponse 对代码块包裹的处理', async () => {
-    const response = '```json\n' + JSON.stringify({ relation: 'related', reason: '主题相近', confidence: 0.8 }) + '\n```';
+    const response =
+      '```json\n' +
+      JSON.stringify({ relation: 'related', reason: '主题相近', confidence: 0.8 }) +
+      '\n```';
     const client = new LlmClient({ apiKey: 'x', mock: { response } });
     const detector = new DedupDetector(client);
     const result = await detector.detect(

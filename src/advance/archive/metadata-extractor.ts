@@ -74,7 +74,10 @@ function readHeader(filePath: string, maxBytes: number): string {
   }
 }
 
-function openFile(filePath: string): { read: (b: Buffer, o: number, l: number, p: number) => { bytesRead: number }; close: () => void } | null {
+function openFile(filePath: string): {
+  read: (b: Buffer, o: number, l: number, p: number) => { bytesRead: number };
+  close: () => void;
+} | null {
   try {
     const fd = openSync(filePath, 'r');
     return {
@@ -92,8 +95,8 @@ function openFile(filePath: string): { read: (b: Buffer, o: number, l: number, p
 function tokenizePath(filePath: string): string[] {
   const parts = filePath.split(/[/\\_-]+/);
   return parts
-    .map((p) => p.toLowerCase().replace(/\.[^.]+$/, ''))
-    .filter((p) => p.length > 1 && !/^[0-9]+$/.test(p));
+    .map(p => p.toLowerCase().replace(/\.[^.]+$/, ''))
+    .filter(p => p.length > 1 && !/^[0-9]+$/.test(p));
 }
 
 function extractDateHints(fileName: string, _tokens: string[]): string[] {
@@ -123,10 +126,18 @@ function classifyByPath(filePath: string, fileName: string, _tokens: string[]): 
   if (lowerPath.includes('weekly') || lowerName.includes('weekly')) {
     return { category: 'weekly', docType: 'weekly', confidence: 0.9 };
   }
-  if (lowerPath.includes('/docs/design') || lowerPath.includes('\\docs\\design') || lowerPath.includes('/design/')) {
+  if (
+    lowerPath.includes('/docs/design') ||
+    lowerPath.includes('\\docs\\design') ||
+    lowerPath.includes('/design/')
+  ) {
     return { category: 'design', docType: 'design', confidence: 0.85 };
   }
-  if (lowerPath.includes('/docs/spec') || lowerPath.includes('\\docs\\spec') || lowerName.includes('spec')) {
+  if (
+    lowerPath.includes('/docs/spec') ||
+    lowerPath.includes('\\docs\\spec') ||
+    lowerName.includes('spec')
+  ) {
     return { category: 'design', docType: 'spec', confidence: 0.8 };
   }
   if (lowerPath.includes('memory')) {

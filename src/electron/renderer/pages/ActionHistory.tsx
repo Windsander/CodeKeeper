@@ -34,7 +34,7 @@ export function ActionHistory() {
             className="input"
             placeholder="项目 ID（留空查询全部）"
             value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
+            onChange={e => setProjectId(e.target.value)}
           />
         </div>
       </div>
@@ -57,13 +57,15 @@ export function ActionHistory() {
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
+              {items.map(item => (
                 <tr key={item.historyId}>
                   <td>{item.id}</td>
                   <td>{item.type}</td>
                   <td>{item.sourcePath}</td>
                   <td>
-                    <span className={`badge ${item.status === 'applied' ? 'badge-success' : 'badge-info'}`}>
+                    <span
+                      className={`badge ${item.status === 'applied' ? 'badge-success' : 'badge-info'}`}
+                    >
                       {item.status}
                     </span>
                   </td>

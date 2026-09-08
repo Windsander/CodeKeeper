@@ -9,7 +9,8 @@ export class SecretSanitizer {
     { name: 'AWS Access Key', regex: /AKIA[0-9A-Z]{16}/g, mask: '<REDACTED_AWS_KEY>' },
     {
       name: 'Private Key Header',
-      regex: /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
+      regex:
+        /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
       mask: '<REDACTED_PRIVATE_KEY>',
     },
   ];

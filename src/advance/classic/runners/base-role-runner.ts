@@ -2,11 +2,7 @@ import { schedule, validate as validateCron } from 'node-cron';
 import { existsSync } from 'node:fs';
 import { LlmClient } from '../../llm/client.js';
 import type { Project, GitlabConfig, RoleConfig, Role } from '../../types.js';
-import {
-  getArchiveRoot,
-  getRoleConfigSchedule,
-  isRoleConfigEnabled,
-} from '../../types.js';
+import { getArchiveRoot, getRoleConfigSchedule, isRoleConfigEnabled } from '../../types.js';
 import { loadSoulContent, type SoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
 import {
@@ -104,7 +100,9 @@ export abstract class BaseRoleRunner implements IRoleRunner {
    */
   private async runOnce(project: Project): Promise<void> {
     if (this.runningProjects.has(project.id)) {
-      console.log(`[${this.getRoleName()}] 项目 ${project.name} 的上一次循环尚未完成，跳过本次调度`);
+      console.log(
+        `[${this.getRoleName()}] 项目 ${project.name} 的上一次循环尚未完成，跳过本次调度`
+      );
       return;
     }
     this.runningProjects.add(project.id);

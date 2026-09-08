@@ -3,7 +3,13 @@
  * 主进程与渲染进程共享此文件，避免 IPC 两端类型漂移。
  */
 
-export type ModelServiceState = 'idle' | 'starting' | 'downloading' | 'loading' | 'running' | 'error';
+export type ModelServiceState =
+  | 'idle'
+  | 'starting'
+  | 'downloading'
+  | 'loading'
+  | 'running'
+  | 'error';
 
 export interface ModelServiceStatus {
   state: ModelServiceState;

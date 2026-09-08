@@ -20,8 +20,7 @@ export function buildDiffPosition(
   shaInfo: MrShaInfo
 ): GitLabDiffPosition | null {
   const diff = diffs.find(
-    (d) => d.newPath === finding.file ||
-    (d.deletedFile && d.oldPath === finding.file)
+    d => d.newPath === finding.file || (d.deletedFile && d.oldPath === finding.file)
   );
   if (!diff) {
     return null;

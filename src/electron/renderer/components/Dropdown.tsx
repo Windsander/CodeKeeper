@@ -19,10 +19,17 @@ interface DropdownProps {
  *
  * 替代原生 <select>，提供一致的圆角、阴影与字体样式。
  */
-export function Dropdown({ value, options, onChange, placeholder = '请选择...', disabled = false, className = '' }: DropdownProps) {
+export function Dropdown({
+  value,
+  options,
+  onChange,
+  placeholder = '请选择...',
+  disabled = false,
+  className = '',
+}: DropdownProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const selectedLabel = options.find((o) => o.value === value)?.label ?? placeholder;
+  const selectedLabel = options.find(o => o.value === value)?.label ?? placeholder;
 
   useEffect(() => {
     if (!open) return;
@@ -45,19 +52,28 @@ export function Dropdown({ value, options, onChange, placeholder = '请选择...
       <button
         type="button"
         className={`dropdown-trigger ${open ? 'open' : ''}`}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => setOpen(prev => !prev)}
         disabled={disabled}
       >
         <span className="dropdown-trigger-text">{selectedLabel}</span>
         <span className="dropdown-trigger-arrow">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M6 9l6 6 6-6" />
           </svg>
         </span>
       </button>
       {open && (
         <div className="dropdown-menu">
-          {options.map((option) => (
+          {options.map(option => (
             <div
               key={option.value}
               className={`dropdown-item ${option.value === value ? 'selected' : ''}`}

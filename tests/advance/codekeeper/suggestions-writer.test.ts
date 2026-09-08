@@ -18,7 +18,16 @@ describe('writeSuggestions', () => {
 
   it('应写入 suggestions.md 动作日志', () => {
     const actions: ArchiveAction[] = [
-      { id: 'a1', sourcePath: '/x.md', type: 'copy', reason: '复制到 docs', targetPath: '/docs/x.md', risk: 'medium', confidence: 0.7, createdAt: 1 },
+      {
+        id: 'a1',
+        sourcePath: '/x.md',
+        type: 'copy',
+        reason: '复制到 docs',
+        targetPath: '/docs/x.md',
+        risk: 'medium',
+        confidence: 0.7,
+        createdAt: 1,
+      },
     ];
     const archiveRoot = join(tmp, '.codekeeper');
     writeSuggestions({ projectRoot: tmp, archiveRoot, actions });
@@ -40,9 +49,36 @@ describe('writeSuggestions', () => {
 
   it('应按风险等级分组并按时间降序', () => {
     const actions: ArchiveAction[] = [
-      { id: 'h1', sourcePath: '/h1.md', type: 'copy', reason: '高 1', targetPath: '/a/h1.md', risk: 'high', confidence: 0.8, createdAt: 100 },
-      { id: 'h2', sourcePath: '/h2.md', type: 'copy', reason: '高 2', targetPath: '/a/h2.md', risk: 'high', confidence: 0.95, createdAt: 200 },
-      { id: 'm1', sourcePath: '/m1.md', type: 'copy', reason: '中 1', targetPath: '/a/m1.md', risk: 'medium', confidence: 0.7, createdAt: 50 },
+      {
+        id: 'h1',
+        sourcePath: '/h1.md',
+        type: 'copy',
+        reason: '高 1',
+        targetPath: '/a/h1.md',
+        risk: 'high',
+        confidence: 0.8,
+        createdAt: 100,
+      },
+      {
+        id: 'h2',
+        sourcePath: '/h2.md',
+        type: 'copy',
+        reason: '高 2',
+        targetPath: '/a/h2.md',
+        risk: 'high',
+        confidence: 0.95,
+        createdAt: 200,
+      },
+      {
+        id: 'm1',
+        sourcePath: '/m1.md',
+        type: 'copy',
+        reason: '中 1',
+        targetPath: '/a/m1.md',
+        risk: 'medium',
+        confidence: 0.7,
+        createdAt: 50,
+      },
     ];
     const archiveRoot = join(tmp, '.codekeeper');
     writeSuggestions({ projectRoot: tmp, archiveRoot, actions });

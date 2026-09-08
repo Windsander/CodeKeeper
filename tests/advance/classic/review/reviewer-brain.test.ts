@@ -145,8 +145,13 @@ describe('ReviewerBrain', () => {
   });
 
   it('没有 recallPlanner 时 review 不查记忆', async () => {
-    const complete = vi.fn().mockResolvedValue(JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] }));
-    const llmClient = { complete, completeJson: complete } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
+    const complete = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ findings: [], summary: 'ok', autoFixable: [] }));
+    const llmClient = {
+      complete,
+      completeJson: complete,
+    } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
     const memoryClient = {
       recallForReview: vi.fn().mockResolvedValue([]),
     } as unknown as NonNullable<
@@ -233,9 +238,11 @@ describe('ReviewerBrain', () => {
       name: 'recall_decision',
       input: { needsRecall: false, queries: [], reason: '已有足够上下文' },
     });
-    const completeJson = vi.fn().mockResolvedValue(
-      JSON.stringify({ shouldReply: true, replyBody: '请参考上述说明。', reason: '用户追问' })
-    );
+    const completeJson = vi
+      .fn()
+      .mockResolvedValue(
+        JSON.stringify({ shouldReply: true, replyBody: '请参考上述说明。', reason: '用户追问' })
+      );
 
     const llmClient = {
       complete: vi.fn().mockResolvedValueOnce(summaryResponse).mockResolvedValue(''),

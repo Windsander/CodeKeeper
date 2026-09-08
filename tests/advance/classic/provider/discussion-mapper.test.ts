@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { buildDiffPosition, getFindingKey } from '../../../../src/advance/classic/provider/discussion-mapper.js';
+import {
+  buildDiffPosition,
+  getFindingKey,
+} from '../../../../src/advance/classic/provider/discussion-mapper.js';
 import type { ReviewFinding, MrDiff } from '../../../../src/advance/classic/provider/types.js';
 
 const shaInfo = {

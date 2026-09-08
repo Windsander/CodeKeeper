@@ -40,36 +40,48 @@ describe('matchesFilter', () => {
 
   it('同字段多值按 OR 过滤', () => {
     const mr = makeMr({ author: 'alice' });
-    expect(matchesFilter(mr, { conditions: [{ field: 'author', values: ['alice', 'bob'] }] })).toBe(true);
-    expect(matchesFilter(mr, { conditions: [{ field: 'author', values: ['bob', 'carol'] }] })).toBe(false);
+    expect(matchesFilter(mr, { conditions: [{ field: 'author', values: ['alice', 'bob'] }] })).toBe(
+      true
+    );
+    expect(matchesFilter(mr, { conditions: [{ field: 'author', values: ['bob', 'carol'] }] })).toBe(
+      false
+    );
   });
 
   it('多字段按 AND 过滤', () => {
     const mr = makeMr({ author: 'alice', labels: ['bug'] });
-    expect(matchesFilter(mr, {
-      conditions: [
-        { field: 'author', values: ['alice'] },
-        { field: 'label', values: ['bug'] },
-      ],
-    })).toBe(true);
-    expect(matchesFilter(mr, {
-      conditions: [
-        { field: 'author', values: ['alice'] },
-        { field: 'label', values: ['feature'] },
-      ],
-    })).toBe(false);
+    expect(
+      matchesFilter(mr, {
+        conditions: [
+          { field: 'author', values: ['alice'] },
+          { field: 'label', values: ['bug'] },
+        ],
+      })
+    ).toBe(true);
+    expect(
+      matchesFilter(mr, {
+        conditions: [
+          { field: 'author', values: ['alice'] },
+          { field: 'label', values: ['feature'] },
+        ],
+      })
+    ).toBe(false);
   });
 
   it('reviewer 字段本地过滤', () => {
     const mr = makeMr({ reviewers: ['alice', 'carol'] });
-    expect(matchesFilter(mr, { conditions: [{ field: 'reviewer', values: ['alice'] }] })).toBe(true);
+    expect(matchesFilter(mr, { conditions: [{ field: 'reviewer', values: ['alice'] }] })).toBe(
+      true
+    );
     expect(matchesFilter(mr, { conditions: [{ field: 'reviewer', values: ['bob'] }] })).toBe(false);
   });
 
   it('label 字段本地过滤', () => {
     const mr = makeMr({ labels: ['bug', 'backend'] });
     expect(matchesFilter(mr, { conditions: [{ field: 'label', values: ['bug'] }] })).toBe(true);
-    expect(matchesFilter(mr, { conditions: [{ field: 'label', values: ['frontend'] }] })).toBe(false);
+    expect(matchesFilter(mr, { conditions: [{ field: 'label', values: ['frontend'] }] })).toBe(
+      false
+    );
   });
 
   it('draft 字段本地过滤', () => {
@@ -80,11 +92,13 @@ describe('matchesFilter', () => {
 
   it('空值条件被忽略', () => {
     const mr = makeMr({ author: 'alice' });
-    expect(matchesFilter(mr, {
-      conditions: [
-        { field: 'author', values: [''] },
-        { field: 'label', values: [''] },
-      ],
-    })).toBe(true);
+    expect(
+      matchesFilter(mr, {
+        conditions: [
+          { field: 'author', values: [''] },
+          { field: 'label', values: [''] },
+        ],
+      })
+    ).toBe(true);
   });
 });

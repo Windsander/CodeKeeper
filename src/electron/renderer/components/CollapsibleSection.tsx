@@ -42,12 +42,14 @@ export function CollapsibleSection({
     if (isControlled) {
       onToggle?.();
     } else {
-      setInternalExpanded((prev) => !prev);
+      setInternalExpanded(prev => !prev);
     }
   };
 
   return (
-    <div className={`config-section ${expanded ? 'expanded' : 'collapsed'} ${disabled ? 'disabled' : ''}`}>
+    <div
+      className={`config-section ${expanded ? 'expanded' : 'collapsed'} ${disabled ? 'disabled' : ''}`}
+    >
       <button
         type="button"
         className={`config-section-header ${collapsible ? 'collapsible' : 'locked'}`}

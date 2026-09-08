@@ -9,10 +9,7 @@ const DEFAULT_MAX_LENGTH = 3000;
  * 默认读取归档目录中的 context.md，截取前 N 个字符作为 prompt 上下文。
  * 若文件不存在或为空，返回空字符串。
  */
-export function loadProjectContext(
-  archiveRoot: string,
-  maxLength = DEFAULT_MAX_LENGTH
-): string {
+export function loadProjectContext(archiveRoot: string, maxLength = DEFAULT_MAX_LENGTH): string {
   const path = join(archiveRoot, 'context.md');
   if (!existsSync(path)) {
     return '';

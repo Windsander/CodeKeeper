@@ -30,9 +30,9 @@ describe('FileOverviewBuilder', () => {
 
     const overview = await buildFileOverview(tempFile);
     expect(overview.lineCount).toBe(13);
-    expect(overview.symbols.map((s) => s.name)).toContain('Config');
-    expect(overview.symbols.map((s) => s.name)).toContain('Worker');
-    expect(overview.symbols.map((s) => s.name)).toContain('handler');
+    expect(overview.symbols.map(s => s.name)).toContain('Config');
+    expect(overview.symbols.map(s => s.name)).toContain('Worker');
+    expect(overview.symbols.map(s => s.name)).toContain('handler');
   });
 
   it('大文件只扫描指定行数', async () => {
@@ -42,6 +42,6 @@ describe('FileOverviewBuilder', () => {
 
     const overview = await buildFileOverview(tempFile, { maxScanLines: 2000 });
     expect(overview.lineCount).toBe(5000);
-    expect(overview.symbols.map((s) => s.name)).not.toContain('bigFn');
+    expect(overview.symbols.map(s => s.name)).not.toContain('bigFn');
   });
 });

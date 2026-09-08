@@ -61,7 +61,7 @@ diff --git a/src/b.ts b/src/b.ts
 `;
     const patches = parsePatch(diff);
     expect(patches[0].hunks[0].lines).toHaveLength(4);
-    const added = patches[0].hunks[0].lines.find((l) => l.type === 'add');
+    const added = patches[0].hunks[0].lines.find(l => l.type === 'add');
     expect(added?.content).toBe('two.point five');
   });
 

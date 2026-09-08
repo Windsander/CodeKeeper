@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { everosMemoryGet, extractOwnersFromGetResult } from '../../../../src/advance/classic/memory/everos-api.js';
+import {
+  everosMemoryGet,
+  extractOwnersFromGetResult,
+} from '../../../../src/advance/classic/memory/everos-api.js';
 
 describe('everosMemoryGet', () => {
   it('按 user_id 请求 episode 类型', async () => {

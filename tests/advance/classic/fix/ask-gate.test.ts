@@ -5,7 +5,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isSelfAnswerableQuestion, isRepoContentReply } from '../../../../src/advance/classic/fix/ask-gate.js';
+import {
+  isSelfAnswerableQuestion,
+  isRepoContentReply,
+} from '../../../../src/advance/classic/fix/ask-gate.js';
 
 describe('isSelfAnswerableQuestion', () => {
   it('真实现场：索要仓库内文件内容被拦截', () => {
@@ -42,7 +45,6 @@ describe('isSelfAnswerableQuestion', () => {
     expect(isSelfAnswerableQuestion('')).toBe(false);
   });
 });
-
 
 describe('isRepoContentReply（G7 漏判候选信号）', () => {
   it('含代码围栏的回复判定为仓库内容', () => {

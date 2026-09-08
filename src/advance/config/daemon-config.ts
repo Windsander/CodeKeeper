@@ -64,14 +64,14 @@ export function saveDaemonConfig(config: DaemonPersistedConfig): void {
     merged.everos = { ...existing.everos, ...config.everos };
   }
   // 删除 undefined 字段
-  (Object.keys(merged) as Array<keyof DaemonPersistedConfig>).forEach((key) => {
+  (Object.keys(merged) as Array<keyof DaemonPersistedConfig>).forEach(key => {
     if (merged[key] === undefined) {
       delete merged[key];
     }
   });
   const everosConfig = merged.everos;
   if (everosConfig) {
-    (Object.keys(everosConfig) as Array<keyof EverOSConfig>).forEach((key) => {
+    (Object.keys(everosConfig) as Array<keyof EverOSConfig>).forEach(key => {
       if (everosConfig[key] === undefined) {
         delete everosConfig[key];
       }

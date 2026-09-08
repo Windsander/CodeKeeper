@@ -1,12 +1,30 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { ServiceStatusPanel } from '../../../../src/electron/renderer/components/ServiceStatusPanel';
-import type { DaemonStatus, LocalModelStatus, RemoteModelStatus } from '../../../../src/electron/shared/service-status';
+import type {
+  DaemonStatus,
+  LocalModelStatus,
+  RemoteModelStatus,
+} from '../../../../src/electron/shared/service-status';
 
 describe('ServiceStatusPanel', () => {
   const defaultRemoteModel: RemoteModelStatus = {
-    llm: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
-    multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
+    llm: {
+      state: 'unconfigured',
+      modelLabel: '未配置',
+      fullModel: '',
+      baseUrl: null,
+      error: null,
+      lastCheckedAt: 0,
+    },
+    multimodal: {
+      state: 'unconfigured',
+      modelLabel: '未配置',
+      fullModel: '',
+      baseUrl: null,
+      error: null,
+      lastCheckedAt: 0,
+    },
   };
 
   const defaultCodeGraph: DaemonStatus['codeGraph'] = {
@@ -159,13 +177,21 @@ describe('ServiceStatusPanel', () => {
     const everosNode = screen.getByTestId('status-node-everos');
     const everosError = within(everosNode).getByText(/a{200}/);
     expect(everosError).toBeTruthy();
-    expect(everosNode.querySelector('.service-status-error')?.classList.contains('service-status-error--expanded')).toBe(true);
+    expect(
+      everosNode
+        .querySelector('.service-status-error')
+        ?.classList.contains('service-status-error--expanded')
+    ).toBe(true);
 
     // 点击 Embedding 错误行展开
     fireEvent.click(screen.getByText('Embedding'));
     const embeddingNode = screen.getByTestId('status-node-embedding');
     expect(within(embeddingNode).getByText('embedding 启动失败')).toBeTruthy();
-    expect(embeddingNode.querySelector('.service-status-error')?.classList.contains('service-status-error--expanded')).toBe(true);
+    expect(
+      embeddingNode
+        .querySelector('.service-status-error')
+        ?.classList.contains('service-status-error--expanded')
+    ).toBe(true);
   });
 
   it('running 节点显示 URL', () => {
@@ -179,16 +205,26 @@ describe('ServiceStatusPanel', () => {
       rerank: { state: 'idle', url: null, error: null, progress: null },
     };
     const remoteModel: RemoteModelStatus = {
-      llm: { state: 'running', modelLabel: 'Claude', fullModel: 'claude-3-5-sonnet', baseUrl: 'https://api.anthropic.com/v1', error: null, lastCheckedAt: Date.now() },
-      multimodal: { state: 'running', modelLabel: 'GPT-4o', fullModel: 'gpt-4o', baseUrl: 'https://api.openai.com/v1', error: null, lastCheckedAt: Date.now() },
+      llm: {
+        state: 'running',
+        modelLabel: 'Claude',
+        fullModel: 'claude-3-5-sonnet',
+        baseUrl: 'https://api.anthropic.com/v1',
+        error: null,
+        lastCheckedAt: Date.now(),
+      },
+      multimodal: {
+        state: 'running',
+        modelLabel: 'GPT-4o',
+        fullModel: 'gpt-4o',
+        baseUrl: 'https://api.openai.com/v1',
+        error: null,
+        lastCheckedAt: Date.now(),
+      },
     };
 
     render(
-      <ServiceStatusPanel
-        daemon={daemon}
-        localModel={localModel}
-        remoteModel={remoteModel}
-      />
+      <ServiceStatusPanel daemon={daemon} localModel={localModel} remoteModel={remoteModel} />
     );
 
     expect(screen.getByText('http://127.0.0.1:8000')).toBeTruthy();
@@ -197,5 +233,4 @@ describe('ServiceStatusPanel', () => {
     expect(screen.getByText('https://api.anthropic.com/v1')).toBeTruthy();
     expect(screen.getByText('https://api.openai.com/v1')).toBeTruthy();
   });
-
 });

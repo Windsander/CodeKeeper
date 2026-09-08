@@ -56,7 +56,9 @@ export function windowClose(): Promise<void> {
   return getAPI().windowClose();
 }
 
-export function onWindowStateChange(callback: (state: { isMaximized: boolean }) => void): () => void {
+export function onWindowStateChange(
+  callback: (state: { isMaximized: boolean }) => void
+): () => void {
   return getAPI().onWindowStateChange(callback);
 }
 

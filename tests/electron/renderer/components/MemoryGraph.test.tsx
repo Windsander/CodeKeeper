@@ -21,7 +21,7 @@ vi.mock('vis-network', () => ({
 }));
 
 vi.mock('vis-data', () => ({
-  DataSet: vi.fn().mockImplementation((items) => ({
+  DataSet: vi.fn().mockImplementation(items => ({
     add: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
@@ -32,7 +32,18 @@ vi.mock('vis-data', () => ({
   })),
 }));
 
-const emptyGraph = { nodes: [], edges: [], stats: { totalNodes: 0, totalEdges: 0, totalMemories: 0, projectCount: 0, activeDays: 0, dailyGrowth: [] } };
+const emptyGraph = {
+  nodes: [],
+  edges: [],
+  stats: {
+    totalNodes: 0,
+    totalEdges: 0,
+    totalMemories: 0,
+    projectCount: 0,
+    activeDays: 0,
+    dailyGrowth: [],
+  },
+};
 
 beforeEach(() => {
   delete document.documentElement.dataset.theme;

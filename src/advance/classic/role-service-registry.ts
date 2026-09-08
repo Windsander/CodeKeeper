@@ -14,7 +14,7 @@ export class RoleServiceRegistry {
   constructor(
     context: HandlerContext,
     private runnerPath: string,
-    private options: RoleServiceOptions = {},
+    private options: RoleServiceOptions = {}
   ) {
     this.context = context;
   }
@@ -47,7 +47,7 @@ export class RoleServiceRegistry {
       if (Date.now() - start > timeoutMs) {
         throw new Error('等待 EverOS MCP URL 超时，无法启动角色服务');
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
 

@@ -64,10 +64,7 @@ export class BatchFixPlanner {
       .join('\n\n');
 
     const fileSections = Object.entries(input.fileContents)
-      .map(
-        ([path, content]) =>
-          `## 文件：${path}\n\`\`\`\n${content}\n\`\`\``
-      )
+      .map(([path, content]) => `## 文件：${path}\n\`\`\`\n${content}\n\`\`\``)
       .join('\n\n');
 
     return this.promptLoader.load('batch-fix-plan', {
@@ -86,11 +83,14 @@ export class BatchFixPlanner {
       };
 
       const patches = (parsed.patches ?? [])
-        .filter((p): p is { filePath: string; patch: string } =>
-          typeof p.filePath === 'string' && p.filePath.length > 0 &&
-          typeof p.patch === 'string' && p.patch.length > 0
+        .filter(
+          (p): p is { filePath: string; patch: string } =>
+            typeof p.filePath === 'string' &&
+            p.filePath.length > 0 &&
+            typeof p.patch === 'string' &&
+            p.patch.length > 0
         )
-        .map((p) => ({
+        .map(p => ({
           filePath: p.filePath.replace(/\\/g, '/'),
           patch: p.patch,
         }));

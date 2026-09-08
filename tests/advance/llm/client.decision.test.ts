@@ -57,7 +57,9 @@ describe('LlmClient.completeDecision', () => {
   it('无 tool calls 但 content 是合法 JSON 时兜底解析为唯一工具', async () => {
     const client = new LlmClient({
       apiKey: 'test',
-      mock: { response: '{"needsRecall":true,"queries":[{"type":"review","query":"x"}],"reason":"需要"}' },
+      mock: {
+        response: '{"needsRecall":true,"queries":[{"type":"review","query":"x"}],"reason":"需要"}',
+      },
     });
     const result = await client.completeDecision([recallTool], 'p');
     expect(result.name).toBe('recall_decision');

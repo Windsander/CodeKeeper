@@ -17,7 +17,9 @@ function makeFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   };
 }
 
-function makeContext(snippet = 'code'): import('../../../../src/advance/classic/fix/focused-context-builder.js').FocusedContext {
+function makeContext(
+  snippet = 'code'
+): import('../../../../src/advance/classic/fix/focused-context-builder.js').FocusedContext {
   return {
     imports: '',
     snippet,
@@ -100,7 +102,10 @@ describe('IssueScopeClassifier', () => {
     } as unknown as import('../../../../src/advance/llm/client.js').LlmClient;
 
     const classifier = new IssueScopeClassifier({ llmClient, enableLlmConfirm: true });
-    const result = await classifier.classify(makeFinding({ message: 'some local refactor' }), makeContext());
+    const result = await classifier.classify(
+      makeFinding({ message: 'some local refactor' }),
+      makeContext()
+    );
     expect(result.scope).toBe('cross-file');
   });
 

@@ -67,7 +67,7 @@ export class CrossFilePlanner {
         .filter((p): p is { filePath: string; description: string } =>
           Boolean(p.filePath && p.description)
         )
-        .map((p) => ({
+        .map(p => ({
           filePath: p.filePath,
           description: p.description,
         }));

@@ -1,12 +1,30 @@
 /**
  * 默认分类列表
  */
-export const DEFAULT_CATEGORIES = ['memory', 'sync', 'skill', 'review', 'design', 'weekly', 'other'];
+export const DEFAULT_CATEGORIES = [
+  'memory',
+  'sync',
+  'skill',
+  'review',
+  'design',
+  'weekly',
+  'other',
+];
 
 /**
  * 默认文档类型列表
  */
-export const DEFAULT_DOC_TYPES = ['design', 'spec', 'weekly', 'review', 'note', 'code', 'config', 'snippet', 'other'];
+export const DEFAULT_DOC_TYPES = [
+  'design',
+  'spec',
+  'weekly',
+  'review',
+  'note',
+  'code',
+  'config',
+  'snippet',
+  'other',
+];
 
 export interface ClassifyPromptOptions {
   categories?: string[];
@@ -37,8 +55,12 @@ export function buildClassifyPrompt(
   contentPreview: string,
   options: ClassifyPromptOptions = {}
 ): string {
-  const categoryList = options.categories?.length ? options.categories.join(', ') : DEFAULT_CATEGORIES.join(', ');
-  const docTypeList = options.docTypes?.length ? options.docTypes.join(', ') : DEFAULT_DOC_TYPES.join(', ');
+  const categoryList = options.categories?.length
+    ? options.categories.join(', ')
+    : DEFAULT_CATEGORIES.join(', ');
+  const docTypeList = options.docTypes?.length
+    ? options.docTypes.join(', ')
+    : DEFAULT_DOC_TYPES.join(', ');
 
   const contentSection = contentPreview
     ? `\n内容前 1500 字符（供参考）：\n${contentPreview.slice(0, 1500)}`
@@ -134,7 +156,8 @@ export function parseClassifyResponse(text: string): ParsedClassifyResponse | nu
       ? parsed.sections
           .filter(
             (s: unknown) =>
-              s && typeof (s as Record<string, unknown>).heading === 'string' &&
+              s &&
+              typeof (s as Record<string, unknown>).heading === 'string' &&
               typeof (s as Record<string, unknown>).summary === 'string'
           )
           .map((s: Record<string, unknown>) => ({

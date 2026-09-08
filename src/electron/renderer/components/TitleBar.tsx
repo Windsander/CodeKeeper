@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
-import { windowMinimize, windowMaximize, windowClose, onWindowStateChange } from '../api/electron-api';
+import {
+  windowMinimize,
+  windowMaximize,
+  windowClose,
+  onWindowStateChange,
+} from '../api/electron-api';
 
 export function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onWindowStateChange((state) => {
+    const unsubscribe = onWindowStateChange(state => {
       setIsMaximized(state.isMaximized);
     });
     return unsubscribe;

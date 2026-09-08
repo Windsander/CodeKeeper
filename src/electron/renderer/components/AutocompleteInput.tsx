@@ -27,9 +27,7 @@ export function AutocompleteInput({
   const filtered = useMemo(() => {
     const raw = value.trim().toLowerCase();
     if (!raw) return options.slice(0, 10);
-    return options
-      .filter((o) => o.toLowerCase().includes(raw))
-      .slice(0, 10);
+    return options.filter(o => o.toLowerCase().includes(raw)).slice(0, 10);
   }, [value, options]);
 
   useEffect(() => {
@@ -52,11 +50,11 @@ export function AutocompleteInput({
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
-        setHighlighted((prev) => (prev + 1) % filtered.length);
+        setHighlighted(prev => (prev + 1) % filtered.length);
         break;
       case 'ArrowUp':
         e.preventDefault();
-        setHighlighted((prev) => (prev - 1 + filtered.length) % filtered.length);
+        setHighlighted(prev => (prev - 1 + filtered.length) % filtered.length);
         break;
       case 'Enter':
         e.preventDefault();
@@ -82,16 +80,14 @@ export function AutocompleteInput({
         className="input autocomplete-input"
         value={value}
         placeholder={placeholder}
-        onChange={(e) => {
+        onChange={e => {
           onChange(e.target.value);
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
         onKeyDown={handleKeyDown}
       />
-      {loading && open && (
-        <div className="autocomplete-hint">加载中...</div>
-      )}
+      {loading && open && <div className="autocomplete-hint">加载中...</div>}
       {open && !loading && filtered.length > 0 && (
         <div className="autocomplete-menu">
           {filtered.map((option, index) => (

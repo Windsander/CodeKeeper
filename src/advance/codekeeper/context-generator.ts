@@ -71,7 +71,9 @@ export function generateContext(options: ContextGeneratorOptions): void {
           ? relative(options.archiveRoot, item.archivePath).replace(/\\/g, '/')
           : relative(options.projectRoot, item.filePath).replace(/\\/g, '/');
         const statusBadge = item.status ? ` (${statusLabel(item.status)})` : '';
-        lines.push(`- **${item.docType}** [${linkPath}](${encodePath(linkPath)})${statusBadge} — ${item.summary}`);
+        lines.push(
+          `- **${item.docType}** [${linkPath}](${encodePath(linkPath)})${statusBadge} — ${item.summary}`
+        );
         if (item.tags.length > 0) {
           lines.push(`  - 标签：${item.tags.join(', ')}`);
         }
@@ -93,7 +95,10 @@ export function generateContext(options: ContextGeneratorOptions): void {
 }
 
 function anchor(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9一-龥-]/g, '');
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9一-龥-]/g, '');
 }
 
 function encodePath(filePath: string): string {

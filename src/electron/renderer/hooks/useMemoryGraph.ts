@@ -18,7 +18,11 @@ const EMPTY_GRAPH: MemoryGraph = {
  * 拉取并轮询记忆图谱数据
  */
 export function useMemoryGraph() {
-  const { data, loading, error, refresh } = useIpc<MemoryGraph>('memory.graph', {}, { pollInterval: 5000 });
+  const { data, loading, error, refresh } = useIpc<MemoryGraph>(
+    'memory.graph',
+    {},
+    { pollInterval: 5000 }
+  );
 
   return {
     graph: data ?? EMPTY_GRAPH,

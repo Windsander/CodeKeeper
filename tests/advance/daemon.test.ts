@@ -28,8 +28,12 @@ vi.mock('../../src/advance/classic/memory/local-model-service.js', () => ({
   LocalModelServiceManager: class {
     async start(): Promise<void> {}
     stop(): void {}
-    getEmbeddingUrl(): string { return 'http://127.0.0.1:7001'; }
-    getRerankUrl(): string { return 'http://127.0.0.1:7002'; }
+    getEmbeddingUrl(): string {
+      return 'http://127.0.0.1:7001';
+    }
+    getRerankUrl(): string {
+      return 'http://127.0.0.1:7002';
+    }
     getStatus() {
       return {
         embedding: { state: 'running', url: 'http://127.0.0.1:7001', error: null, progress: null },
@@ -65,7 +69,7 @@ async function waitCondition(condition: () => boolean, timeoutMs: number): Promi
     if (Date.now() - start > timeoutMs) {
       throw new Error(`等待条件超时（${timeoutMs}ms）`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
 }
 
@@ -109,15 +113,15 @@ describe('Daemon', () => {
     await daemon.start();
     await waitCondition(() => daemon.isRunning(), 1000);
     // 等待 watcher 就绪后再写入文件（daemon 内部延迟 3s 启动 watcher）
-    await new Promise((resolve) => setTimeout(resolve, 4000));
+    await new Promise(resolve => setTimeout(resolve, 4000));
     writeFileSync(join(projectDir, 'note.md'), 'hello');
     await waitCondition(
-      () => store.listPendingEvents().some((e) => e.filePath.endsWith('note.md')),
-      3000,
+      () => store.listPendingEvents().some(e => e.filePath.endsWith('note.md')),
+      3000
     );
     await daemon.stop();
 
     const events = store.listPendingEvents();
-    expect(events.some((e) => e.filePath.endsWith('note.md'))).toBe(true);
+    expect(events.some(e => e.filePath.endsWith('note.md'))).toBe(true);
   }, 10000);
 });

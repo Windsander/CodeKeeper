@@ -38,22 +38,30 @@ const GROUP_LABELS: Record<string, string> = {
 export function MemoryNodePanel({ node, graph, onClose, onNodeClick }: MemoryNodePanelProps) {
   const connections = useMemo(() => {
     return graph.edges
-      .filter((e) => e.from === node.id || e.to === node.id)
-      .map((e) => {
+      .filter(e => e.from === node.id || e.to === node.id)
+      .map(e => {
         const otherId = e.from === node.id ? e.to : e.from;
-        const other = graph.nodes.find((n) => n.id === otherId);
-        return { edge: e, other: other ?? { id: otherId, label: otherId, group: 'system' as const } };
+        const other = graph.nodes.find(n => n.id === otherId);
+        return {
+          edge: e,
+          other: other ?? { id: otherId, label: otherId, group: 'system' as const },
+        };
       });
   }, [node, graph]);
 
   return (
     <div className="memory-node-panel open">
-      <button className="memory-node-panel-close" onClick={onClose}>×</button>
+      <button className="memory-node-panel-close" onClick={onClose}>
+        ×
+      </button>
       <div className="memory-node-panel-content">
         <div className="memory-node-panel-header">
           <span
             className="memory-node-panel-type"
-            style={{ backgroundColor: `${GROUP_COLORS[node.group]}22`, color: GROUP_COLORS[node.group] }}
+            style={{
+              backgroundColor: `${GROUP_COLORS[node.group]}22`,
+              color: GROUP_COLORS[node.group],
+            }}
           >
             {GROUP_LABELS[node.group] ?? node.group}
           </span>
@@ -113,7 +121,9 @@ export function MemoryNodePanel({ node, graph, onClose, onNodeClick }: MemoryNod
                     style={{ backgroundColor: GROUP_COLORS[other.group] ?? '#8b949e' }}
                   />
                   <span className="memory-node-panel-connection-name">{other.label}</span>
-                  {edge.label && <span className="memory-node-panel-connection-label">{edge.label}</span>}
+                  {edge.label && (
+                    <span className="memory-node-panel-connection-label">{edge.label}</span>
+                  )}
                 </button>
               ))}
             </div>

@@ -67,16 +67,13 @@ describe('LlmClient tool-use 响应体上限', () => {
         }, 0);
       },
     });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response(stream, { status: 200 }))
-    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, { status: 200 })));
 
     const client = new LlmClient({ apiKey: 'test', provider: 'openai', minRequestInterval: 0 });
 
-    await expect(client.completeWithTools([{ role: 'user', content: 'hi' }], tools)).rejects.toThrow(
-      '上限'
-    );
+    await expect(
+      client.completeWithTools([{ role: 'user', content: 'hi' }], tools)
+    ).rejects.toThrow('上限');
   });
 
   it('正常大小响应不受影响，正确解析 tool calls', async () => {
@@ -86,17 +83,18 @@ describe('LlmClient tool-use 响应体上限', () => {
           message: {
             content: '',
             tool_calls: [
-              { id: '1', type: 'function', function: { name: 'read_file', arguments: '{"relPath":"a.ts"}' } },
+              {
+                id: '1',
+                type: 'function',
+                function: { name: 'read_file', arguments: '{"relPath":"a.ts"}' },
+              },
             ],
           },
           finish_reason: 'tool_use',
         },
       ],
     });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response(body, { status: 200 }))
-    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
 
     const client = new LlmClient({ apiKey: 'test', provider: 'openai', minRequestInterval: 0 });
     const result = await client.completeWithTools([{ role: 'user', content: 'hi' }], tools);

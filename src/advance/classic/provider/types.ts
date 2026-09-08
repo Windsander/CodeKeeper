@@ -265,7 +265,9 @@ export interface IGitProvider {
   getReviewerCommentSnapshot(iid: number): Promise<ReviewerCommentSnapshot>;
 
   /** 获取指定 MR 的 CI 状态 */
-  getCIStatus(iid: number): Promise<'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'unknown'>;
+  getCIStatus(
+    iid: number
+  ): Promise<'pending' | 'running' | 'success' | 'failed' | 'skipped' | 'unknown'>;
 
   /** 获取指定 MR 的概览（生命周期终态感知） */
   getMROverview(iid: number): Promise<MrOverview>;

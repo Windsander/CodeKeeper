@@ -10,7 +10,7 @@ interface MemoryProgressViewProps {
  * Progress View 页签：统计、增长图、时间线（EverOS 风格）
  */
 export function MemoryProgressView({ stats, graph }: MemoryProgressViewProps) {
-  const maxGrowth = Math.max(1, ...stats.dailyGrowth.map((d) => d.count));
+  const maxGrowth = Math.max(1, ...stats.dailyGrowth.map(d => d.count));
 
   const timeline = useMemo(() => {
     const groups = new Map<string, typeof graph.nodes>();
@@ -37,7 +37,9 @@ export function MemoryProgressView({ stats, graph }: MemoryProgressViewProps) {
           <div className="memory-progress-stat-card">
             <div className="memory-progress-stat-label">Total Memories</div>
             <div className="memory-progress-stat-value">{stats.totalMemories}</div>
-            <div className="memory-progress-stat-trend">+{stats.dailyGrowth.slice(-1)[0]?.count ?? 0} today</div>
+            <div className="memory-progress-stat-trend">
+              +{stats.dailyGrowth.slice(-1)[0]?.count ?? 0} today
+            </div>
           </div>
           <div className="memory-progress-stat-card">
             <div className="memory-progress-stat-label">Connections</div>
@@ -59,7 +61,7 @@ export function MemoryProgressView({ stats, graph }: MemoryProgressViewProps) {
         <div className="memory-progress-card">
           <div className="memory-progress-card-title">Memory Growth (Last 14 Days)</div>
           <div className="memory-progress-growth">
-            {stats.dailyGrowth.map((d) => (
+            {stats.dailyGrowth.map(d => (
               <div key={d.date} className="memory-progress-bar-wrap">
                 <div className="memory-progress-bar-track">
                   <div
@@ -86,10 +88,14 @@ export function MemoryProgressView({ stats, graph }: MemoryProgressViewProps) {
                   <span className="memory-progress-day-badge">{day.count} memories</span>
                 </div>
                 <div className="memory-progress-day-items">
-                  {day.nodes.map((node) => (
+                  {day.nodes.map(node => (
                     <div key={node.id} className="memory-progress-item">
                       <div className="memory-progress-item-title">{node.label}</div>
-                      {node.details && <div className="memory-progress-item-desc">{node.details.slice(0, 120)}</div>}
+                      {node.details && (
+                        <div className="memory-progress-item-desc">
+                          {node.details.slice(0, 120)}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

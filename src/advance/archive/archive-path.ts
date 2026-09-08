@@ -28,7 +28,13 @@ export function computeArchivePath(params: ComputeArchivePathParams): string {
     const ext = extname(safeName);
     const nameWithoutExt = basename(safeName, ext);
     while (existingPaths.has(archivePath.toLowerCase())) {
-      archivePath = join(archiveRoot, safeCategory, safeDocType, yearMonth, `${nameWithoutExt}_${counter}${ext}`);
+      archivePath = join(
+        archiveRoot,
+        safeCategory,
+        safeDocType,
+        yearMonth,
+        `${nameWithoutExt}_${counter}${ext}`
+      );
       counter++;
     }
   }
@@ -47,12 +53,13 @@ export function toFlaggedArchivePath(archivePath: string): string {
 }
 
 export function sanitizePathSegment(segment: string): string {
-  return segment
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .replace(/-+/g, '-')
-    || 'unknown';
+  return (
+    segment
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .replace(/-+/g, '-') || 'unknown'
+  );
 }
 
 export function sanitizeFileName(name: string): string {

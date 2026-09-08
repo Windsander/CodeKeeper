@@ -4,7 +4,17 @@ import { DataSet } from 'vis-data';
 import { useTheme } from '../contexts/ThemeContext.js';
 import type { MemoryGraph, MemoryGraphEdge, MemoryGraphNode } from '../../shared/types.js';
 
-const GROUP_KEYS = ['system', 'project', 'topic', 'episode', 'agent_case', 'agent_skill', 'profile', 'agent', 'user'] as const;
+const GROUP_KEYS = [
+  'system',
+  'project',
+  'topic',
+  'episode',
+  'agent_case',
+  'agent_skill',
+  'profile',
+  'agent',
+  'user',
+] as const;
 type GroupKey = (typeof GROUP_KEYS)[number];
 
 const GROUP_LABELS: Record<string, string> = {
@@ -44,8 +54,8 @@ function edgeKey(e: MemoryGraphEdge): string {
 
 function graphsEqual(a: MemoryGraph, b: MemoryGraph): boolean {
   if (a.nodes.length !== b.nodes.length || a.edges.length !== b.edges.length) return false;
-  const aNodeIds = a.nodes.map((n) => n.id).sort();
-  const bNodeIds = b.nodes.map((n) => n.id).sort();
+  const aNodeIds = a.nodes.map(n => n.id).sort();
+  const bNodeIds = b.nodes.map(n => n.id).sort();
   for (let i = 0; i < aNodeIds.length; i++) {
     if (aNodeIds[i] !== bNodeIds[i]) return false;
   }
@@ -76,8 +86,12 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     graphRef.current = graph;
     return graph;
   }, [graph]);
-  const [activeGroups, setActiveGroups] = useState<Set<string>>(() => new Set(Object.keys(GROUP_LABELS)));
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(null);
+  const [activeGroups, setActiveGroups] = useState<Set<string>>(
+    () => new Set(Object.keys(GROUP_LABELS))
+  );
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; node?: MemoryGraphNode } | null>(
+    null
+  );
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -89,14 +103,16 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     const edgeHighlight = style.getPropertyValue('--graph-edge-highlight').trim() || '#2563eb';
 
     const nodes = new DataSet(
-      stableGraph.nodes.map((n) => ({
+      stableGraph.nodes.map(n => ({
         ...n,
         color: colors[n.group as GroupKey],
         hidden: !activeGroups.has(n.group),
       }))
     );
     nodesRef.current = nodes;
-    const edges = new DataSet(stableGraph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` })));
+    const edges = new DataSet(
+      stableGraph.edges.map((e, idx) => ({ ...e, id: e.id ?? `edge-${idx}` }))
+    );
 
     const network = new Network(
       containerRef.current,
@@ -105,7 +121,11 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
         nodes: {
           shape: 'dot',
           size: 18,
-          font: { color: textPrimary, size: 13, face: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif' },
+          font: {
+            color: textPrimary,
+            size: 13,
+            face: '-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif',
+          },
           borderWidth: 2,
           shadow: { enabled: true, color: 'rgba(0,0,0,0.5)', size: 10, x: 0, y: 0 },
         },
@@ -129,16 +149,16 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       }
     );
 
-    network.on('click', (params) => {
+    network.on('click', params => {
       if (params.nodes.length > 0 && onNodeSelect) {
         const nodeId = params.nodes[0] as string;
-        const node = stableGraph.nodes.find((n) => n.id === nodeId);
+        const node = stableGraph.nodes.find(n => n.id === nodeId);
         if (node) onNodeSelect(node);
       }
     });
 
-    network.on('hoverNode', (params) => {
-      const node = stableGraph.nodes.find((n) => n.id === params.node);
+    network.on('hoverNode', params => {
+      const node = stableGraph.nodes.find(n => n.id === params.node);
       if (!node) return;
       const domCoords = network.canvasToDOM(network.getPositions([params.node])[params.node]);
       const rect = containerRef.current!.getBoundingClientRect();
@@ -185,7 +205,7 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
   }, [theme]);
 
   const toggleGroup = (group: string) => {
-    setActiveGroups((prev) => {
+    setActiveGroups(prev => {
       const next = new Set(prev);
       if (next.has(group)) next.delete(group);
       else next.add(group);
@@ -193,8 +213,10 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
     });
   };
 
-  const zoomIn = () => networkRef.current?.moveTo({ scale: (networkRef.current.getScale() ?? 1) * 1.2 });
-  const zoomOut = () => networkRef.current?.moveTo({ scale: (networkRef.current.getScale() ?? 1) / 1.2 });
+  const zoomIn = () =>
+    networkRef.current?.moveTo({ scale: (networkRef.current.getScale() ?? 1) * 1.2 });
+  const zoomOut = () =>
+    networkRef.current?.moveTo({ scale: (networkRef.current.getScale() ?? 1) / 1.2 });
   const fit = () => networkRef.current?.fit({ animation: true });
 
   const colors = readGraphColors();
@@ -224,26 +246,35 @@ export function MemoryGraph({ graph, onNodeSelect }: MemoryGraphProps) {
       <div className="memory-graph-legend">
         {Object.entries(GROUP_LABELS).map(([group, label]) => (
           <div key={group} className="memory-graph-legend-item">
-            <span className="memory-graph-legend-dot" style={{ backgroundColor: colors[group as GroupKey] }} />
+            <span
+              className="memory-graph-legend-dot"
+              style={{ backgroundColor: colors[group as GroupKey] }}
+            />
             {label}
           </div>
         ))}
       </div>
 
       <div className="memory-graph-zoom">
-        <button className="memory-graph-zoom-btn" onClick={zoomIn} title="放大">+</button>
-        <button className="memory-graph-zoom-btn" onClick={zoomOut} title="缩小">−</button>
-        <button className="memory-graph-zoom-btn" onClick={fit} title="适配">⊡</button>
+        <button className="memory-graph-zoom-btn" onClick={zoomIn} title="放大">
+          +
+        </button>
+        <button className="memory-graph-zoom-btn" onClick={zoomOut} title="缩小">
+          −
+        </button>
+        <button className="memory-graph-zoom-btn" onClick={fit} title="适配">
+          ⊡
+        </button>
       </div>
 
       {tooltip?.node && (
-        <div
-          className="memory-graph-tooltip"
-          style={{ left: tooltip.x, top: tooltip.y }}
-        >
+        <div className="memory-graph-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
           <span
             className="memory-graph-tooltip-type"
-            style={{ backgroundColor: colors[tooltip.node.group as GroupKey], color: 'var(--graph-bg)' }}
+            style={{
+              backgroundColor: colors[tooltip.node.group as GroupKey],
+              color: 'var(--graph-bg)',
+            }}
           >
             {GROUP_LABELS[tooltip.node.group]}
           </span>

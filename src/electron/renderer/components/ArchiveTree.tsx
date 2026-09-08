@@ -22,7 +22,7 @@ function TreeNode({ node, depth = 0 }: { node: FileTreeNode; depth?: number }) {
       </div>
       {isDir && node.children && node.children.length > 0 && (
         <div className="file-tree-children">
-          {node.children.map((child) => (
+          {node.children.map(child => (
             <TreeNode key={child.path} node={child} depth={depth + 1} />
           ))}
         </div>

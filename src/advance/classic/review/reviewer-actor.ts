@@ -53,7 +53,11 @@ export class ReviewerActor {
    * 发表评审 summary 评论，并按配置创建严重 finding 的 discussion threads
    * 返回 summary 评论的 note ID
    */
-  async postReview(mr: MergeRequest, result: ReviewResult, options?: PostReviewOptions): Promise<number> {
+  async postReview(
+    mr: MergeRequest,
+    result: ReviewResult,
+    options?: PostReviewOptions
+  ): Promise<number> {
     const comment =
       this.getPendingDeliveryBody(options, 'summary') ??
       formatReviewComment(mr, result, this.options.reviewerName);
@@ -103,7 +107,13 @@ export class ReviewerActor {
     findings: ReviewFinding[],
     options?: PostReviewOptions
   ): Promise<void> {
-    if (!options?.diffs || !options.shaInfo || !options.stateKey || !options.state || !this.options.project) {
+    if (
+      !options?.diffs ||
+      !options.shaInfo ||
+      !options.stateKey ||
+      !options.state ||
+      !this.options.project
+    ) {
       console.log('[ReviewerActor] 缺少创建 discussion threads 的必要上下文，跳过');
       return;
     }
@@ -111,18 +121,22 @@ export class ReviewerActor {
     const { diffs, shaInfo, stateKey, state } = options;
     const posted = state.discussions[stateKey] ?? [];
     const severities = new Set<ReviewFinding['severity']>(this.threadRiskLevels);
-    const candidates = findings.filter((f) => severities.has(f.severity));
+    const candidates = findings.filter(f => severities.has(f.severity));
 
-    console.log(`[ReviewerActor] MR !${mr.iid} 存在 ${candidates.length} 个 CRITICAL/HIGH finding，已发布 ${posted.length} 个`);
+    console.log(
+      `[ReviewerActor] MR !${mr.iid} 存在 ${candidates.length} 个 CRITICAL/HIGH finding，已发布 ${posted.length} 个`
+    );
 
     for (const finding of findings) {
       if (!severities.has(finding.severity)) continue;
       const key = getFindingKey(finding);
-      if (posted.some((p) => p.findingKey === key)) continue;
+      if (posted.some(p => p.findingKey === key)) continue;
 
       const position = buildDiffPosition(finding, diffs, shaInfo);
       if (!position) {
-        console.warn(`[ReviewerActor] 无法为 finding ${finding.file}:${finding.line} 构造 diff position`);
+        console.warn(
+          `[ReviewerActor] 无法为 finding ${finding.file}:${finding.line} 构造 diff position`
+        );
         continue;
       }
 
@@ -137,10 +151,14 @@ export class ReviewerActor {
           severity: finding.severity,
           resolved: false,
         });
-        console.log(`[ReviewerActor] 已为 finding ${finding.file}:${finding.line} 创建 discussion ${discussionId}`);
+        console.log(
+          `[ReviewerActor] 已为 finding ${finding.file}:${finding.line} 创建 discussion ${discussionId}`
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.error(`[ReviewerActor] 创建 finding thread 失败 ${finding.file}:${finding.line}: ${message}`);
+        console.error(
+          `[ReviewerActor] 创建 finding thread 失败 ${finding.file}:${finding.line}: ${message}`
+        );
       }
     }
 

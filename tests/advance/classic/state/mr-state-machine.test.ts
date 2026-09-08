@@ -2,8 +2,14 @@
  * MR 状态机与状态存储测试
  */
 import { describe, it, expect, vi } from 'vitest';
-import { canTransition, type MrState } from '../../../../src/advance/classic/state/mr-state-machine';
-import { MrStateStore, type MrStatePatch } from '../../../../src/advance/classic/state/mr-state-store';
+import {
+  canTransition,
+  type MrState,
+} from '../../../../src/advance/classic/state/mr-state-machine';
+import {
+  MrStateStore,
+  type MrStatePatch,
+} from '../../../../src/advance/classic/state/mr-state-store';
 import type { MrReviewState } from '../../../../src/advance/types';
 
 describe('canTransition', () => {

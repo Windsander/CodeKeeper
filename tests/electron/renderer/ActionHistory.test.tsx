@@ -8,7 +8,18 @@ describe('ActionHistory', () => {
   beforeEach(() => {
     window.electronAPI = {
       invoke: vi.fn().mockResolvedValue([
-        { historyId: 1, id: 'a1', sourcePath: '/x.md', type: 'move', projectId: 'p1', status: 'applied', risk: 'low', reason: '', confidence: 0, createdAt: 1 },
+        {
+          historyId: 1,
+          id: 'a1',
+          sourcePath: '/x.md',
+          type: 'move',
+          projectId: 'p1',
+          status: 'applied',
+          risk: 'low',
+          reason: '',
+          confidence: 0,
+          createdAt: 1,
+        },
       ]),
       onPush: vi.fn().mockReturnValue(() => {}),
       openExternal: vi.fn(),

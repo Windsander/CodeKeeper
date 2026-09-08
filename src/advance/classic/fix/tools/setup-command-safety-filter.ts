@@ -5,15 +5,25 @@
  */
 export class SetupCommandSafetyFilter {
   private readonly dangerousPatterns = [
-    /;/, /&&/, /\|/, />/, /</, /\$\(/, /`/, /\*\*/,
+    /;/,
+    /&&/,
+    /\|/,
+    />/,
+    /</,
+    /\$\(/,
+    /`/,
+    /\*\*/,
     /\b(rm|sudo|chmod|mkfs|dd|eval|source)\b/i,
-    /curl\s*\|/i, /wget\s*\|/i,
-    /\.\./, /~/, /\/etc/, /\/usr/, /\/bin/,
+    /curl\s*\|/i,
+    /wget\s*\|/i,
+    /\.\./,
+    /~/,
+    /\/etc/,
+    /\/usr/,
+    /\/bin/,
   ];
 
-  private readonly allowedPrefixes = [
-    'npm', 'yarn', 'pnpm', 'cargo', 'pip', 'poetry', 'go',
-  ];
+  private readonly allowedPrefixes = ['npm', 'yarn', 'pnpm', 'cargo', 'pip', 'poetry', 'go'];
 
   check(command: string): { allowed: boolean; reason?: string } {
     const normalized = command.trim().replace(/\s+/g, ' ');

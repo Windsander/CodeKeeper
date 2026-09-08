@@ -7,7 +7,10 @@ import type { EverOSAddMessage } from '../../../../src/advance/classic/memory/ev
 describe('MemoryWriteQueue', () => {
   let store: Pick<
     MetadataStore,
-    'insertPendingMemoryWrite' | 'listPendingMemoryWrites' | 'deletePendingMemoryWrite' | 'incrementPendingMemoryFailure'
+    | 'insertPendingMemoryWrite'
+    | 'listPendingMemoryWrites'
+    | 'deletePendingMemoryWrite'
+    | 'incrementPendingMemoryFailure'
   >;
   let queue: MemoryWriteQueue;
   const ctx: MemoryContext = {
@@ -65,7 +68,14 @@ describe('MemoryWriteQueue', () => {
 
   it('listReady 透传 store 查询结果', () => {
     const writes = [
-      { id: 'w1', nextRetryAt: 1, failureCount: 1, kind: 'add_messages' as const, messages: [], projectId: 'proj' },
+      {
+        id: 'w1',
+        nextRetryAt: 1,
+        failureCount: 1,
+        kind: 'add_messages' as const,
+        messages: [],
+        projectId: 'proj',
+      },
     ];
     store.listPendingMemoryWrites = vi.fn().mockReturnValue(writes);
 

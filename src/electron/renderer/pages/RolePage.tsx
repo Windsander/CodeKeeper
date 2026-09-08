@@ -245,8 +245,7 @@ export function RolePage({ role }: RolePageProps) {
                 automation: {
                   ...(roleConfig?.role === 'archiver'
                     ? roleConfig.automation
-                    : (ui.defaultConfig as Extract<RoleConfig, { role: 'archiver' }>)
-                        .automation),
+                    : (ui.defaultConfig as Extract<RoleConfig, { role: 'archiver' }>).automation),
                   enabled: nextEnabled,
                 },
               }

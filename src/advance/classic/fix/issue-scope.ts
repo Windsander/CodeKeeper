@@ -30,7 +30,8 @@ export interface ScopeClassifierOptions {
   promptLoader?: PromptLoader;
 }
 
-const CONTROL_FLOW_KEYWORDS = /\b(if|else|for|while|switch|case|try|catch|finally|return|throw|async|await|function|class|interface|type)\b/;
+const CONTROL_FLOW_KEYWORDS =
+  /\b(if|else|for|while|switch|case|try|catch|finally|return|throw|async|await|function|class|interface|type)\b/;
 
 export class IssueScopeClassifier {
   private readonly promptLoader: PromptLoader;
@@ -45,14 +46,11 @@ export class IssueScopeClassifier {
       return heuristic;
     }
 
-    if (
-      this.options.localJudge &&
-      typeof this.options.localJudge.preFilterScope === 'function'
-    ) {
+    if (this.options.localJudge && typeof this.options.localJudge.preFilterScope === 'function') {
       const verdict = await this.options.localJudge.preFilterScope(
         finding.message,
         finding.file,
-        finding.line,
+        finding.line
       );
       if ('kind' in verdict && verdict.kind === 'reliable') {
         if (verdict.scope !== 'local') {
@@ -113,7 +111,8 @@ export class IssueScopeClassifier {
     if (/添加\s*todo|todo\s*注释|缺少\s*注释|加注释/.test(text)) return true;
     // 缓存环境变量或常量
     if (/缓存\s*(环境变量|常量|变量值)|const\s+\w+\s*=\s*!!?process\.env/.test(text)) return true;
-    if (text.includes('缓存') && (text.includes('环境变量') || text.includes('process.env'))) return true;
+    if (text.includes('缓存') && (text.includes('环境变量') || text.includes('process.env')))
+      return true;
     // 添加可选字段 / 单个字段补全
     if (/添加\s*(可选的?)?\s*字段|加\s*(可选的?)?\s*字段|\?\s*:/.test(text)) return true;
     // 拼写 / 命名
@@ -131,7 +130,11 @@ export class IssueScopeClassifier {
 
     // 规则 ID 直接提示是文档/注释类
     const ruleId = (finding.ruleId ?? '').toUpperCase();
-    if (['TODO', 'DOCUMENTATION', 'COMMENT', 'CHANGE-MANAGEMENT', 'PERFORMANCE'].some((r) => ruleId.includes(r))) {
+    if (
+      ['TODO', 'DOCUMENTATION', 'COMMENT', 'CHANGE-MANAGEMENT', 'PERFORMANCE'].some(r =>
+        ruleId.includes(r)
+      )
+    ) {
       return true;
     }
 
@@ -145,7 +148,7 @@ export class IssueScopeClassifier {
     if (/多个文件|跨文件|cross.file/.test(text)) return true;
 
     const ruleId = (finding.ruleId ?? '').toUpperCase();
-    if (['TYPE-SAFETY', 'API-COMPATIBILITY', 'BREAKING-CHANGE'].some((r) => ruleId.includes(r))) {
+    if (['TYPE-SAFETY', 'API-COMPATIBILITY', 'BREAKING-CHANGE'].some(r => ruleId.includes(r))) {
       return true;
     }
 

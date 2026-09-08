@@ -11,11 +11,7 @@ export function MemoryStatsPage() {
   const stats = graph.stats;
 
   return (
-    <PageLayout
-      icon={<MemoryStatsIcon />}
-      title="记忆统计"
-      onRefresh={() => refresh()}
-    >
+    <PageLayout icon={<MemoryStatsIcon />} title="记忆统计" onRefresh={() => refresh()}>
       <div className="memory-stats-page">
         {error && <div className="error-message">加载失败: {error}</div>}
         {loading && <div className="loading">Loading…</div>}

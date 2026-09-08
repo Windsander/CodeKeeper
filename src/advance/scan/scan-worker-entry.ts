@@ -87,7 +87,7 @@ async function runScan(task: ScanWorkerTask): Promise<void> {
 }
 
 process.on('message', (task: ScanWorkerTask) => {
-  runScan(task).catch((err) => {
+  runScan(task).catch(err => {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[Scan Worker] 扫描任务失败:', message);
     sendMessage({ type: 'error', message });

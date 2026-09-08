@@ -130,7 +130,7 @@ async function main() {
     syncing = true;
     try {
       const enabledProjects = store.getRoleEnabledProjects(config.role);
-      const enabledIds = new Set(enabledProjects.map((p) => p.id));
+      const enabledIds = new Set(enabledProjects.map(p => p.id));
 
       // 停止已禁用或已移除的项目
       for (const [projectId, entry] of activeProjects) {
@@ -147,7 +147,7 @@ async function main() {
           console.log(`[Role Agent] 项目 ${project.name} 已启用，启动循环`);
           activeProjects.set(project.id, { project });
           // 异步启动，避免阻塞本次同步
-          runner.startProjectLoop(project).catch((err) => {
+          runner.startProjectLoop(project).catch(err => {
             console.error(`[Role Agent] 项目 ${project.name} 启动循环失败:`, err);
             activeProjects.delete(project.id);
           });
@@ -188,7 +188,7 @@ const isMainModule =
   process.argv[1] &&
   (process.argv[1].endsWith('role-entry.ts') || process.argv[1].endsWith('role-entry.js'));
 if (isMainModule) {
-  main().catch((err) => {
+  main().catch(err => {
     console.error(err);
     process.exit(1);
   });

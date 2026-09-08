@@ -33,6 +33,7 @@ CodeKeeper 作为独立 TypeScript 项目，与目标项目分离部署：
 ```
 
 运行方式：
+
 ```bash
 cd /ai-framework/codekeeper
 # 方式1：前台单次运行
@@ -197,6 +198,7 @@ cron 触发 / CLI 调用
 假设 200k 为**模型上下文窗口**（Claude 3.5 Sonnet/Opus）：
 
 **预算分配：**
+
 - 系统提示（角色定义 + 输出格式要求）：~1k tokens
 - CLAUDE.md 规则：~3k-8k tokens（取决于项目规则长度）
 - diff 内容：变量，按实际变更计算
@@ -204,6 +206,7 @@ cron 触发 / CLI 调用
 - **可用审查预算**：200k - 1k - 8k - 20k = **~171k tokens**
 
 **diff token 估算：**
+
 - 每行变更（+/-）≈ 5-20 tokens（取决于代码长度）
 - 一个典型文件 diff（30 行变更）≈ 300-600 tokens
 - 171k / 500 ≈ **每批可审查 340 个文件的 diff**
@@ -211,6 +214,7 @@ cron 触发 / CLI 调用
 **结论**：对于绝大多数 MR，200k 上下文足够单批完成审查。只有超大 MR（变更 500+ 文件）才需要分片。
 
 **分片策略（超大 MR）：**
+
 1. 按文件路径前缀分组（同目录文件放一起，保持上下文）
 2. 每批不超过预算的 80%
 3. 标记分片关系（"这是第 2/3 批审查"）
@@ -233,28 +237,28 @@ projects:
       token: env:GITLAB_TOKEN
     review:
       enabled: true
-      schedule: "*/30 * * * *"       # 每30分钟检查一次
-      timezone: "Asia/Shanghai"
+      schedule: '*/30 * * * *' # 每30分钟检查一次
+      timezone: 'Asia/Shanghai'
       tokenBudget: 200000
       autoFix: true
-      autoFixBranchPrefix: "codekeeper/fix-"
-      rulesFile: CLAUDE.md            # 相对于项目根目录
+      autoFixBranchPrefix: 'codekeeper/fix-'
+      rulesFile: CLAUDE.md # 相对于项目根目录
       astGrepConfig: .claude/rules/sgconfig.yml
       filter:
         excludeAuthors: [bot, ci]
         excludeDrafts: true
         minChanges: 1
-        maxChanges: 300               # 超过则跳过，避免超大 MR 耗尽预算
-        excludePaths:                 # 不审查的路径模式
-          - "**/*.md"
-          - "docs/**"
+        maxChanges: 300 # 超过则跳过，避免超大 MR 耗尽预算
+        excludePaths: # 不审查的路径模式
+          - '**/*.md'
+          - 'docs/**'
     learning:
       enabled: true
-      schedule: "0 2 * * *"          # 每天凌晨2点运行学习循环
-      patternThreshold: 3             # Boris 的 3 次规则
+      schedule: '0 2 * * *' # 每天凌晨2点运行学习循环
+      patternThreshold: 3 # Boris 的 3 次规则
       updateClaudeMd: true
       createAstGrepRules: true
-      lookbackDays: 7                 # 扫描最近7天的已合并 MR
+      lookbackDays: 7 # 扫描最近7天的已合并 MR
 
   - id: another-project
     name: Another Project
@@ -264,7 +268,7 @@ projects:
 
 ### 审查 Prompt 模板
 
-```
+````
 你是一个严格的代码审查员，请审查以下代码变更。
 
 ## 项目规则
@@ -276,9 +280,10 @@ projects:
 ## 变更内容（git diff）
 ```diff
 {diff_content}
-```
+````
 
 ## 审查要求
+
 1. 检查是否违反上述项目规则
 2. 检查安全性问题（注入、泄露、越权等）
 3. 检查代码质量问题（命名、类型、重复、冗余）
@@ -286,24 +291,26 @@ projects:
 
 对每个问题，按以下 JSON 格式输出：
 {
-  "findings": [
-    {
-      "severity": "CRITICAL|HIGH|MEDIUM|LOW",
-      "file": "文件路径",
-      "line": 行号,
-      "ruleId": "规则ID（如存在）",
-      "message": "问题描述",
-      "suggestion": "具体的修复建议或代码片段"
-    }
-  ],
-  "summary": "审查总结",
-  "autoFixable": ["可自动修复的问题索引"]
+"findings": [
+{
+"severity": "CRITICAL|HIGH|MEDIUM|LOW",
+"file": "文件路径",
+"line": 行号,
+"ruleId": "规则ID（如存在）",
+"message": "问题描述",
+"suggestion": "具体的修复建议或代码片段"
 }
+],
+"summary": "审查总结",
+"autoFixable": ["可自动修复的问题索引"]
+}
+
 ```
 
 ### 自动修复流程
 
 ```
+
 1. reviewer.ts 返回 findings
 2. fixer.ts 筛选 autoFixable 的问题
 3. 对每个可修复问题：
@@ -318,7 +325,8 @@ projects:
    c. 失败则丢弃修复，记录日志
 5. git commit + push
 6. 在 MR 评论中回复："已创建修复分支 {branch}，包含自动修复"
-```
+
+````
 
 ### 与现有基础设施的衔接
 
@@ -357,23 +365,26 @@ $ launchctl load ~/Library/LaunchAgents/com.codekeeper.review.plist
 
 # 6. 查看日志
 $ tail -f ~/Logs/codekeeper/codekeeper.log
-```
+````
 
 ## Implementation Tasks
 
 ### Task 1: 项目脚手架
+
 - 初始化 npm 项目（TypeScript + Node.js >=22）
 - 配置 tsconfig、eslint、prettier
 - 安装依赖：simple-git, node-cron, pino, zod, dotenv
 - 目录结构创建
 
 ### Task 2: 配置系统
+
 - Zod schema 定义 projects.yaml 结构
 - 配置加载器（支持环境变量插值如 `env:GITLAB_TOKEN`）
 - 配置验证（本地路径存在性、token 有效性检查）
 - CLI 命令：`codekeeper register <path>` 自动扫描项目生成配置
 
 ### Task 3: GitLab API 客户端
+
 - 封装 GitLab REST API（fetch-based）
 - MR 查询（列表、详情、diff、changes）
 - 评论发布（创建 MR note/discussion）
@@ -381,18 +392,21 @@ $ tail -f ~/Logs/codekeeper/codekeeper.log
 - 错误处理和重试
 
 ### Task 4: 项目同步
+
 - simple-git 封装：clone、fetch、checkout
 - SSH key 管理（支持 per-project SSH key）
 - 工作目录隔离（每个项目在独立目录）
 - 并发控制（避免同时操作同一仓库）
 
 ### Task 5: Diff 分析器 + Token 预算
+
 - git diff 解析（提取变更文件、行号、内容）
 - Token 估算（基于字符数 × 经验系数）
 - 分片算法（按路径前缀分组，预算内最大化文件数）
 - 风险评分（核心文件权重更高）
 
 ### Task 6: Prompt 构建器 + AI 审查引擎
+
 - CLAUDE.md 读取与格式化
 - ast-grep 预检结果集成
 - Prompt 组装（规则 + diff + 格式要求）
@@ -401,6 +415,7 @@ $ tail -f ~/Logs/codekeeper/codekeeper.log
 - 错误处理（API 失败、解析失败回退）
 
 ### Task 7: 自动修复
+
 - 修复分支创建（基于 source branch）
 - 文件修改 prompt（原文 + 修改要求 → 新内容）
 - 本地验证（lint / typecheck 运行）
@@ -408,6 +423,7 @@ $ tail -f ~/Logs/codekeeper/codekeeper.log
 - MR 评论回复
 
 ### Task 8: 学习循环
+
 - 已合并 MR 评论获取
 - 评论分类（关键词匹配 + 简单 NLP）
 - 频次计数器（SQLite 或 JSON 文件持久化）
@@ -416,18 +432,21 @@ $ tail -f ~/Logs/codekeeper/codekeeper.log
 - 规则更新 MR 创建
 
 ### Task 9: Scheduler + CLI
+
 - node-cron 调度（per-project schedule）
 - CLI 接口：`codekeeper run`（单次）、`codekeeper daemon`（后台）、`codekeeper status`
 - 优雅退出（SIGTERM 处理）
 - 运行状态报告
 
 ### Task 10: Mac 部署
+
 - install.sh 安装脚本
 - launchd plist 模板
 - 日志轮转配置
 - 健康检查端点（可选 HTTP）
 
 ### Task 11: 与 your-project 集成
+
 - 复用现有 `.claude/rules/security/*.yml`
 - 复用 `mr-review.sh` 的 diff 获取逻辑
 - 适配 your-project 的 CLAUDE.md 格式
@@ -450,11 +469,11 @@ $ tail -f ~/Logs/codekeeper/codekeeper.log
 
 ## Risks & Mitigations
 
-| Risk | Mitigation |
-|------|-----------|
+| Risk                         | Mitigation                                |
+| ---------------------------- | ----------------------------------------- |
 | Token 预算耗尽导致审查不完整 | 分片策略 + 预算预警日志 + maxChanges 过滤 |
-| 自动修复引入新 bug | 修复后强制运行 lint/typecheck，失败则丢弃 |
-| GitLab API 速率限制 | 请求队列 + 指数退避重试 + 速率限制跟踪 |
-| CLAUDE.md 规则冲突 | 学习循环只追加不覆盖，人工审核规则更新 MR |
-| 多项目并发导致资源争抢 | per-project 队列，全局并发限制 |
-| 敏感信息泄露（API key） | 环境变量管理，不提交到 git，日志脱敏 |
+| 自动修复引入新 bug           | 修复后强制运行 lint/typecheck，失败则丢弃 |
+| GitLab API 速率限制          | 请求队列 + 指数退避重试 + 速率限制跟踪    |
+| CLAUDE.md 规则冲突           | 学习循环只追加不覆盖，人工审核规则更新 MR |
+| 多项目并发导致资源争抢       | per-project 队列，全局并发限制            |
+| 敏感信息泄露（API key）      | 环境变量管理，不提交到 git，日志脱敏      |

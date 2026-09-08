@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildMemoryGraph, parseTopicId } from '../../../../src/advance/classic/memory/graph-builder.js';
+import {
+  buildMemoryGraph,
+  parseTopicId,
+} from '../../../../src/advance/classic/memory/graph-builder.js';
 import type { Project } from '../../../../src/electron/shared/types.js';
 import type { EverOSMemoryGetResult } from '../../../../src/advance/classic/memory/everos-api.js';
 
@@ -39,7 +42,7 @@ describe('parseTopicId', () => {
 describe('buildMemoryGraph', () => {
   it('空输入只返回 system 和 project 节点', () => {
     const graph = buildMemoryGraph({ projects, getResults: new Map([['proj-a', makeResult()]]) });
-    expect(graph.nodes.map((n) => n.id)).toEqual(['system', 'project:proj-a']);
+    expect(graph.nodes.map(n => n.id)).toEqual(['system', 'project:proj-a']);
     expect(graph.edges).toHaveLength(1);
   });
 

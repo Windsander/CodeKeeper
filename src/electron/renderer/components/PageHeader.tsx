@@ -20,9 +20,7 @@ export function PageHeader({ icon, title, onRefresh, extra }: PageHeaderProps) {
   const { sidebarCollapsed } = useLayout();
 
   return (
-    <header
-      className={`page-header${sidebarCollapsed ? ' visible' : ''}`}
-    >
+    <header className={`page-header${sidebarCollapsed ? ' visible' : ''}`}>
       <div className="page-header-left">
         <div className="page-header-logo">{icon}</div>
         <h1 className="page-header-title">{title}</h1>
@@ -31,12 +29,7 @@ export function PageHeader({ icon, title, onRefresh, extra }: PageHeaderProps) {
       <div className="page-header-right">
         {extra}
         {onRefresh && (
-          <button
-            type="button"
-            className="page-header-refresh"
-            onClick={onRefresh}
-            title="刷新"
-          >
+          <button type="button" className="page-header-refresh" onClick={onRefresh} title="刷新">
             ↻
           </button>
         )}

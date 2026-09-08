@@ -20,7 +20,10 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { Discussion, ReviewerComment } from '../../../../src/advance/classic/provider/types.js';
+import type {
+  Discussion,
+  ReviewerComment,
+} from '../../../../src/advance/classic/provider/types.js';
 import type {
   MaintainerThreadState,
   MrAgentState,
@@ -74,10 +77,9 @@ function lastNoteAt(d: FixtureDiscussion): number {
 }
 
 /** 基线状态：最后一轮轮询已在所有评论之后完成 */
-function baselinedState(d: FixtureDiscussion): Pick<
-  MrAgentState,
-  'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'
-> {
+function baselinedState(
+  d: FixtureDiscussion
+): Pick<MrAgentState, 'interactiveThreads' | 'processedDiscussions' | 'maintainerThreadState'> {
   return {
     interactiveThreads: {},
     processedDiscussions: {

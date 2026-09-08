@@ -23,8 +23,8 @@ describe('CLI 参数解析', () => {
   });
 
   it('extractRootPath 支持多个 flag', () => {
-    expect(
-      extractRootPath(['--foo', '1', '--bar', '2', '/path'], ['--foo', '--bar']),
-    ).toBe('/path');
+    expect(extractRootPath(['--foo', '1', '--bar', '2', '/path'], ['--foo', '--bar'])).toBe(
+      '/path'
+    );
   });
 });

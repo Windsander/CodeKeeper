@@ -15,20 +15,12 @@ function StatefulAutocompleteInput({
   options: string[];
 }) {
   const [value, setValue] = useState(initialValue);
-  return (
-    <AutocompleteInput
-      value={value}
-      options={options}
-      onChange={(v) => setValue(v)}
-    />
-  );
+  return <AutocompleteInput value={value} options={options} onChange={v => setValue(v)} />;
 }
 
 describe('AutocompleteInput', () => {
   it('输入时显示匹配选项', () => {
-    render(
-      <StatefulAutocompleteInput options={['alice', 'arikan', 'bob']} />
-    );
+    render(<StatefulAutocompleteInput options={['alice', 'arikan', 'bob']} />);
 
     const input = screen.getByRole('textbox');
     fireEvent.change(input, { target: { value: 'ar' } });
@@ -39,13 +31,7 @@ describe('AutocompleteInput', () => {
 
   it('点击选项触发 onChange', () => {
     const onChange = vi.fn();
-    render(
-      <AutocompleteInput
-        value=""
-        options={['alice', 'arikan']}
-        onChange={onChange}
-      />
-    );
+    render(<AutocompleteInput value="" options={['alice', 'arikan']} onChange={onChange} />);
 
     const input = screen.getByRole('textbox');
     fireEvent.focus(input);
@@ -55,9 +41,7 @@ describe('AutocompleteInput', () => {
   });
 
   it('无匹配时显示无匹配项', () => {
-    render(
-      <StatefulAutocompleteInput options={['alice', 'bob']} />
-    );
+    render(<StatefulAutocompleteInput options={['alice', 'bob']} />);
 
     const input = screen.getByRole('textbox');
     fireEvent.change(input, { target: { value: 'zzz' } });
@@ -67,13 +51,7 @@ describe('AutocompleteInput', () => {
 
   it('回车选择高亮项', () => {
     const onChange = vi.fn();
-    render(
-      <AutocompleteInput
-        value=""
-        options={['alice', 'arikan']}
-        onChange={onChange}
-      />
-    );
+    render(<AutocompleteInput value="" options={['alice', 'arikan']} onChange={onChange} />);
 
     const input = screen.getByRole('textbox');
     fireEvent.focus(input);

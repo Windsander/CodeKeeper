@@ -6,10 +6,15 @@ describe('LlmClient', () => {
     const client = new LlmClient({
       apiKey: 'test',
       model: 'test-model',
-      mock: { response: '{"category":"memory","docType":"spec","tags":["a"],"summary":"测试","confidence":0.9}' },
+      mock: {
+        response:
+          '{"category":"memory","docType":"spec","tags":["a"],"summary":"测试","confidence":0.9}',
+      },
     });
     const result = await client.complete(' classify this');
-    expect(result).toBe('{"category":"memory","docType":"spec","tags":["a"],"summary":"测试","confidence":0.9}');
+    expect(result).toBe(
+      '{"category":"memory","docType":"spec","tags":["a"],"summary":"测试","confidence":0.9}'
+    );
   });
 
   it('mock 模式下可模拟异常', async () => {

@@ -19,7 +19,8 @@ export const RERANK_MODELS = [
 ];
 
 // HuggingFace repo id 规则：namespace/model-name，允许字母、数字、-、_、.
-const HF_MODEL_ID_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?\/[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/;
+const HF_MODEL_ID_RE =
+  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?\/[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/;
 
 export function isValidHuggingFaceModelId(model: string): boolean {
   return HF_MODEL_ID_RE.test(model);

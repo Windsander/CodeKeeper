@@ -16,7 +16,11 @@ import {
   isMaintainerNoFixExplanationNote,
   isBotAuthor,
 } from '../../../../../src/advance/classic/runners/shared/review-utils.js';
-import type { MergeRequest, ReviewResult, ReviewFinding } from '../../../../../src/advance/classic/provider/types.js';
+import type {
+  MergeRequest,
+  ReviewResult,
+  ReviewFinding,
+} from '../../../../../src/advance/classic/provider/types.js';
 
 const mockMR: MergeRequest = {
   iid: 1,
@@ -91,9 +95,7 @@ describe('formatReviewComment', () => {
     expect(comment).toContain(
       '  - `src/auth.ts:42` · 规则 `AUTH-001` 密码以明文形式传输<br>**建议**：使用 HTTPS 并对敏感字段加密'
     );
-    expect(comment).toContain(
-      '  - `src/utils.ts:7` 缺少空值检查<br>**建议**：添加可选链或默认值'
-    );
+    expect(comment).toContain('  - `src/utils.ts:7` 缺少空值检查<br>**建议**：添加可选链或默认值');
   });
 
   it('包含生成时间签名', () => {
@@ -162,7 +164,9 @@ describe('formatSummary', () => {
 
 describe('isAgentAuthoredNote', () => {
   it('识别包含 CodeKeeper Advance 的 note', () => {
-    expect(isAgentAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent*')).toBe(true);
+    expect(isAgentAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent*')).toBe(
+      true
+    );
   });
 
   it('普通评论返回 false', () => {
@@ -182,11 +186,15 @@ describe('isBotAuthor', () => {
 
 describe('isMaintainerAuthoredNote', () => {
   it('识别 Maintainer 签名', () => {
-    expect(isMaintainerAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 维护 Agent*')).toBe(true);
+    expect(
+      isMaintainerAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 维护 Agent*')
+    ).toBe(true);
   });
 
   it('Reviewer 签名返回 false', () => {
-    expect(isMaintainerAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent*')).toBe(false);
+    expect(
+      isMaintainerAuthoredNote('---\n*生成于 2026/01/01 · CodeKeeper Advance MR 评审 Agent*')
+    ).toBe(false);
   });
 });
 
@@ -194,8 +202,14 @@ describe('isMaintainerNoFixExplanationNote', () => {
   const footer = '---\n*生成于 2026/07/22 · CodeKeeper Advance MR 维护 Agent · bot*';
 
   it('识别无需重复修改和忽略说明', () => {
-    expect(isMaintainerNoFixExplanationNote(`✅ 已修复（无需重复修改）：\n- src/app.ts:1: 已处理\n\n${footer}`)).toBe(true);
-    expect(isMaintainerNoFixExplanationNote(`📝 已忽略：\n- src/app.ts:1: 无需修改\n\n${footer}`)).toBe(true);
+    expect(
+      isMaintainerNoFixExplanationNote(
+        `✅ 已修复（无需重复修改）：\n- src/app.ts:1: 已处理\n\n${footer}`
+      )
+    ).toBe(true);
+    expect(
+      isMaintainerNoFixExplanationNote(`📝 已忽略：\n- src/app.ts:1: 无需修改\n\n${footer}`)
+    ).toBe(true);
   });
 
   it('普通提问不算最终无需修复说明', () => {

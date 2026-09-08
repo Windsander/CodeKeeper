@@ -48,7 +48,10 @@ export async function main(): Promise<void> {
     const archiveRoot = parseFlag(args, '--archive-root');
     const { store, registry } = getDeps();
     try {
-      const project = registry.register(resolve(rootPath), archiveRoot ? resolve(archiveRoot) : undefined);
+      const project = registry.register(
+        resolve(rootPath),
+        archiveRoot ? resolve(archiveRoot) : undefined
+      );
       console.log(`已注册项目: ${project.name} (${project.id})`);
       if (project.archiveRoot) {
         console.log(`归档位置: ${project.archiveRoot}`);
@@ -150,7 +153,7 @@ export async function main(): Promise<void> {
       const projects = registry.list();
       console.log(`已注册项目数: ${projects.length}`);
       for (const p of projects) {
-        const pending = store.listPendingEvents(1000).filter((e) => e.projectId === p.id).length;
+        const pending = store.listPendingEvents(1000).filter(e => e.projectId === p.id).length;
         console.log(`  ${p.name}: 待处理事件 ${pending}`);
       }
     } finally {
@@ -211,6 +214,8 @@ export async function main(): Promise<void> {
   }
 
   console.log(`未知命令: ${command}`);
-  console.log('用法: codekeeper-advance [register|unregister|list|start|process|status|history|undo]');
+  console.log(
+    '用法: codekeeper-advance [register|unregister|list|start|process|status|history|undo]'
+  );
   process.exit(1);
 }

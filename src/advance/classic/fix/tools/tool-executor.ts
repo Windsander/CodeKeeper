@@ -20,7 +20,14 @@ export interface ToolExecutorOptions {
   allowedScripts?: string[];
 }
 
-import { writeFileSync, mkdirSync, existsSync, createReadStream, statSync, readFileSync } from 'node:fs';
+import {
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  createReadStream,
+  statSync,
+  readFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
@@ -64,9 +71,7 @@ async function readOutputFile(
   }
   const stats = statSync(fullPath);
   if (stats.size > MAX_READ_OUTPUT_FILE_SIZE && tailLines === undefined) {
-    throw new Error(
-      `输出文件过大（${stats.size} bytes），请使用 tailLines 参数读取尾部关键内容`
-    );
+    throw new Error(`输出文件过大（${stats.size} bytes），请使用 tailLines 参数读取尾部关键内容`);
   }
 
   if (tailLines === undefined || tailLines <= 0) {
@@ -191,7 +196,11 @@ function formatValidateResult(
     lint: result.lint,
     typecheck: result.typecheck,
     lintSummary: lintLong
-      ? truncateText(result.lintReason ?? '', MAX_OUTPUT_PREVIEW_LENGTH, result.lint ? 'head' : 'tail')
+      ? truncateText(
+          result.lintReason ?? '',
+          MAX_OUTPUT_PREVIEW_LENGTH,
+          result.lint ? 'head' : 'tail'
+        )
       : result.lintReason,
     typecheckSummary: typecheckLong
       ? truncateText(
@@ -244,7 +253,11 @@ function formatToolResult(
       };
     }
   }
-  if (toolName === 'read_file' && typeof result === 'string' && result.length > MAX_FILE_CONTENT_LENGTH) {
+  if (
+    toolName === 'read_file' &&
+    typeof result === 'string' &&
+    result.length > MAX_FILE_CONTENT_LENGTH
+  ) {
     const outputFile = writeToolOutputFile(worktreePath, toolCallId, result);
     return {
       content: truncateText(result, MAX_FILE_CONTENT_LENGTH, 'head'),
@@ -266,7 +279,9 @@ export class ToolExecutor {
     this.worktreeManager = options.worktreeManager;
     this.memoryClient = options.memoryClient;
     this.recallPlanner = options.recallPlanner;
-    this.allowedScripts = new Set(options.allowedScripts ?? ['lint', 'typecheck', 'build', 'test', 'compile:packages']);
+    this.allowedScripts = new Set(
+      options.allowedScripts ?? ['lint', 'typecheck', 'build', 'test', 'compile:packages']
+    );
   }
 
   /**
@@ -324,7 +339,9 @@ export class ToolExecutor {
     }
   }
 
-  private async readOutputFile(input: Record<string, unknown>): Promise<{ content: string; tailLines?: number }> {
+  private async readOutputFile(
+    input: Record<string, unknown>
+  ): Promise<{ content: string; tailLines?: number }> {
     const outputFile = this.requireString(input, 'outputFile');
     const tailLines = this.optionalNumber(input, 'tailLines');
     const worktreePath = this.worktreeManager.getWorktreePath();
@@ -395,7 +412,9 @@ export class ToolExecutor {
     return this.worktreeManager.searchWorkspace(keyword);
   }
 
-  private async writeFile(input: Record<string, unknown>): Promise<{ written: true; unchanged: boolean; appended: boolean }> {
+  private async writeFile(
+    input: Record<string, unknown>
+  ): Promise<{ written: true; unchanged: boolean; appended: boolean }> {
     const relPath = this.requireString(input, 'relPath');
     // content 允许为空字符串：清空文件是合法的修复操作
     const content = this.requireContent(input);
@@ -448,7 +467,9 @@ export class ToolExecutor {
     return { applied: true };
   }
 
-  private async runSetupCommand(input: Record<string, unknown>): Promise<{ success: boolean; reason?: string }> {
+  private async runSetupCommand(
+    input: Record<string, unknown>
+  ): Promise<{ success: boolean; reason?: string }> {
     const command = this.requireString(input, 'command');
     const cwd = this.optionalString(input, 'cwd');
 
@@ -460,13 +481,19 @@ export class ToolExecutor {
     return this.worktreeManager.runSetupCommand(command, cwd);
   }
 
-  private async runScript(input: Record<string, unknown>): Promise<{ success: boolean; reason?: string }> {
+  private async runScript(
+    input: Record<string, unknown>
+  ): Promise<{ success: boolean; reason?: string }> {
     const script = this.requireString(input, 'script');
     if (!this.allowedScripts.has(script)) {
-      throw new Error(`脚本 ${script} 不在白名单内，只允许: ${Array.from(this.allowedScripts).join(', ')}`);
+      throw new Error(
+        `脚本 ${script} 不在白名单内，只允许: ${Array.from(this.allowedScripts).join(', ')}`
+      );
     }
     const args = this.optionalStringArray(input, 'args');
-    return args ? this.worktreeManager.runScript(script, args) : this.worktreeManager.runScript(script);
+    return args
+      ? this.worktreeManager.runScript(script, args)
+      : this.worktreeManager.runScript(script);
   }
 
   private async validate(): Promise<{

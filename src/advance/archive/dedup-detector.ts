@@ -39,7 +39,7 @@ export class DedupDetector {
     const threshold = this.options.threshold ?? 0.7;
 
     // 快速路径：哈希完全相同的直接判定为重复
-    const exactMatch = candidates.find((c) => c.contentHash === source.contentHash);
+    const exactMatch = candidates.find(c => c.contentHash === source.contentHash);
     if (exactMatch) {
       return {
         relation: 'duplicate',
@@ -52,7 +52,11 @@ export class DedupDetector {
     // 按与 source 内容长度差异升序预排序，优先对比更可能相关的候选
     const sorted = candidates
       .slice()
-      .sort((a, b) => Math.abs(a.content.length - source.content.length) - Math.abs(b.content.length - source.content.length));
+      .sort(
+        (a, b) =>
+          Math.abs(a.content.length - source.content.length) -
+          Math.abs(b.content.length - source.content.length)
+      );
     const limited = sorted.slice(0, maxCandidates);
     let best: DedupResult = { relation: 'unrelated', reason: '未找到相关候选', confidence: 0 };
 

@@ -157,8 +157,8 @@ export function applyPatch(originalContent: string, filePatch: FilePatch): Apply
       };
     }
 
-    const oldLines = hunk.lines.filter((l) => l.type !== 'add').map((l) => l.content);
-    const replacement = hunk.lines.filter((l) => l.type !== 'remove').map((l) => l.content);
+    const oldLines = hunk.lines.filter(l => l.type !== 'add').map(l => l.content);
+    const replacement = hunk.lines.filter(l => l.type !== 'remove').map(l => l.content);
     result.splice(pos, oldLines.length, ...replacement);
     offset += replacement.length - oldLines.length;
   }
@@ -181,7 +181,7 @@ function findHunkPosition(
   hintIndex: number,
   windowSize = 20
 ): number {
-  const oldLines = hunk.lines.filter((l) => l.type !== 'add').map((l) => l.content);
+  const oldLines = hunk.lines.filter(l => l.type !== 'add').map(l => l.content);
   if (oldLines.length === 0) {
     // 没有旧内容需要匹配时，直接返回 hint
     return Math.max(0, Math.min(hintIndex, fileLines.length));

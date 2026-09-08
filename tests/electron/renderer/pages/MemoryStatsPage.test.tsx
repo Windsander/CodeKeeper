@@ -9,7 +9,14 @@ vi.mock('../../../../src/electron/renderer/hooks/useMemoryGraph', () => ({
     graph: {
       nodes: [],
       edges: [],
-      stats: { totalNodes: 2, totalEdges: 1, totalMemories: 2, projectCount: 1, activeDays: 1, dailyGrowth: [{ date: '2026-07-01', count: 2 }] },
+      stats: {
+        totalNodes: 2,
+        totalEdges: 1,
+        totalMemories: 2,
+        projectCount: 1,
+        activeDays: 1,
+        dailyGrowth: [{ date: '2026-07-01', count: 2 }],
+      },
     },
     loading: false,
     error: null,

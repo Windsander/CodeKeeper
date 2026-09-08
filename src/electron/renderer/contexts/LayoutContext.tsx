@@ -19,7 +19,7 @@ export function LayoutProvider({ children, initialCollapsed = false }: LayoutPro
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialCollapsed);
 
   const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed((prev) => !prev);
+    setSidebarCollapsed(prev => !prev);
   }, []);
 
   return (

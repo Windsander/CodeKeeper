@@ -76,11 +76,7 @@ export class MemoryWriteQueue implements IMemoryWriteQueue {
    */
   enqueue(ctx: MemoryContext, kind: 'add_messages', messages: EverOSAddMessage[]): void;
 
-  enqueue(
-    ctx: MemoryContext,
-    kind: PendingMemoryWriteKind,
-    messages?: EverOSAddMessage[]
-  ): void {
+  enqueue(ctx: MemoryContext, kind: PendingMemoryWriteKind, messages?: EverOSAddMessage[]): void {
     const msgs = messages ?? [];
     const contentHash = this.computeContentHash(ctx.sessionId, kind, msgs);
     const id = this.buildId(ctx.projectId, ctx.sessionId, contentHash);

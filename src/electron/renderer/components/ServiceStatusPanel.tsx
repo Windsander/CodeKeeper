@@ -45,7 +45,15 @@ function truncateError(message: string | null | undefined): { text: string; trun
   return { text: `${message.slice(0, MAX_ERROR_LENGTH)}...`, truncated: true };
 }
 
-function StatusBadge({ state, isDaemon = false, running }: { state?: string; isDaemon?: boolean; running?: boolean }) {
+function StatusBadge({
+  state,
+  isDaemon = false,
+  running,
+}: {
+  state?: string;
+  isDaemon?: boolean;
+  running?: boolean;
+}) {
   let display: StatusDisplay;
   if (isDaemon) {
     display = running
@@ -54,7 +62,11 @@ function StatusBadge({ state, isDaemon = false, running }: { state?: string; isD
   } else if (state && state in STATE_DISPLAY) {
     display = STATE_DISPLAY[state];
   } else {
-    display = { label: state ?? '未知', badgeClass: 'badge-secondary', dotClass: 'status-dot-idle' };
+    display = {
+      label: state ?? '未知',
+      badgeClass: 'badge-secondary',
+      dotClass: 'status-dot-idle',
+    };
   }
   return (
     <span className={`badge ${display.badgeClass} status-badge`}>
@@ -116,15 +128,17 @@ function TreeNode({
         )}
         <StatusBadge state={status} isDaemon={isDaemon} running={running} />
       </div>
-      {url && status === 'running' && (
-        <div className="service-status-url">{url}</div>
-      )}
+      {url && status === 'running' && <div className="service-status-url">{url}</div>}
       {detail && <div className={'service-status-meta'}>{detail}</div>}
       {hasError && (
-        <div className={`service-status-error ${isExpanded ? 'service-status-error--expanded' : ''}`}>
+        <div
+          className={`service-status-error ${isExpanded ? 'service-status-error--expanded' : ''}`}
+        >
           <div className="service-status-error-inner">
             {errorText}
-            {truncated && <span className="service-status-error-hint">（查看日志获取完整信息）</span>}
+            {truncated && (
+              <span className="service-status-error-hint">（查看日志获取完整信息）</span>
+            )}
           </div>
         </div>
       )}
@@ -137,7 +151,7 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
   const [expandedKeys, setExpandedKeys] = useState<Set<NodeKey>>(new Set());
 
   const toggle = (key: NodeKey) => {
-    setExpandedKeys((prev) => {
+    setExpandedKeys(prev => {
       const next = new Set(prev);
       if (next.has(key)) {
         next.delete(key);
@@ -155,117 +169,117 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
       </div>
       <div className="service-status-body">
         <div className="service-status-tree">
+          <TreeNode
+            title="Daemon"
+            nodeKey="daemon"
+            icon="🖥️"
+            isDaemon
+            running={daemon?.daemonRunning ?? false}
+            error={inferDaemonError(daemon)}
+            expandedKeys={expandedKeys}
+            onToggle={toggle}
+          >
             <TreeNode
-              title="Daemon"
-              nodeKey="daemon"
-              icon="🖥️"
-              isDaemon
-              running={daemon?.daemonRunning ?? false}
-              error={inferDaemonError(daemon)}
+              title="记忆服务（EverOS）"
+              nodeKey="everos"
+              icon="🧠"
+              status={daemon?.everos?.state}
+              url={daemon?.everos?.url}
+              error={daemon?.everos?.error ?? null}
+              expandedKeys={expandedKeys}
+              onToggle={toggle}
+            />
+            <TreeNode
+              title={'代码图谱服务'}
+              nodeKey={'codeGraph'}
+              icon={'🕸️'}
+              status={daemon?.codeGraph.state}
+              url={daemon?.codeGraph.url}
+              detail={formatCodeGraphJobStatus(daemon)}
+              error={daemon?.codeGraph.error ?? null}
+              expandedKeys={expandedKeys}
+              onToggle={toggle}
+            >
+              {daemon?.codeGraph.providers.map(provider => (
+                <TreeNode
+                  key={provider.providerId}
+                  title={provider.displayName}
+                  nodeKey={`codeGraph-provider-${provider.providerId}`}
+                  icon={'◈'}
+                  status={provider.state}
+                  detail={formatCodeGraphProviderDetail(provider)}
+                  error={provider.state === 'unavailable' ? provider.message : null}
+                  expandedKeys={expandedKeys}
+                  onToggle={toggle}
+                />
+              ))}
+            </TreeNode>
+            <TreeNode
+              title="本地模型服务"
+              nodeKey="localModel"
+              icon="⚙️"
+              status={inferLocalModelState(localModel)}
+              error={inferLocalModelError(localModel) ?? null}
               expandedKeys={expandedKeys}
               onToggle={toggle}
             >
               <TreeNode
-                title="记忆服务（EverOS）"
-                nodeKey="everos"
-                icon="🧠"
-                status={daemon?.everos?.state}
-                url={daemon?.everos?.url}
-                error={daemon?.everos?.error ?? null}
+                title="Embedding"
+                nodeKey="embedding"
+                icon="🔤"
+                status={localModel?.embedding.state}
+                progress={localModel?.embedding.progress}
+                url={localModel?.embedding.url}
+                error={localModel?.embedding.error ?? null}
                 expandedKeys={expandedKeys}
                 onToggle={toggle}
               />
               <TreeNode
-                title={'代码图谱服务'}
-                nodeKey={'codeGraph'}
-                icon={'🕸️'}
-                status={daemon?.codeGraph.state}
-                url={daemon?.codeGraph.url}
-                detail={formatCodeGraphJobStatus(daemon)}
-                error={daemon?.codeGraph.error ?? null}
+                title="Rerank"
+                nodeKey="rerank"
+                icon="🔍"
+                status={localModel?.rerank.state}
+                progress={localModel?.rerank.progress}
+                url={localModel?.rerank.url}
+                error={localModel?.rerank.error ?? null}
                 expandedKeys={expandedKeys}
                 onToggle={toggle}
-              >
-                {daemon?.codeGraph.providers.map(provider => (
-                  <TreeNode
-                    key={provider.providerId}
-                    title={provider.displayName}
-                    nodeKey={`codeGraph-provider-${provider.providerId}`}
-                    icon={'◈'}
-                    status={provider.state}
-                    detail={formatCodeGraphProviderDetail(provider)}
-                    error={provider.state === 'unavailable' ? provider.message : null}
-                    expandedKeys={expandedKeys}
-                    onToggle={toggle}
-                  />
-                ))}
-              </TreeNode>
-              <TreeNode
-                title="本地模型服务"
-                nodeKey="localModel"
-                icon="⚙️"
-                status={inferLocalModelState(localModel)}
-                error={inferLocalModelError(localModel) ?? null}
-                expandedKeys={expandedKeys}
-                onToggle={toggle}
-              >
-                <TreeNode
-                  title="Embedding"
-                  nodeKey="embedding"
-                  icon="🔤"
-                  status={localModel?.embedding.state}
-                  progress={localModel?.embedding.progress}
-                  url={localModel?.embedding.url}
-                  error={localModel?.embedding.error ?? null}
-                  expandedKeys={expandedKeys}
-                  onToggle={toggle}
-                />
-                <TreeNode
-                  title="Rerank"
-                  nodeKey="rerank"
-                  icon="🔍"
-                  status={localModel?.rerank.state}
-                  progress={localModel?.rerank.progress}
-                  url={localModel?.rerank.url}
-                  error={localModel?.rerank.error ?? null}
-                  expandedKeys={expandedKeys}
-                  onToggle={toggle}
-                />
-              </TreeNode>
-              {remoteModel && (
-                <TreeNode
-                  title="远端模型服务"
-                  nodeKey="remoteModel"
-                  icon="🌐"
-                  status={inferRemoteModelState(remoteModel)}
-                  error={inferRemoteModelError(remoteModel) ?? null}
-                  expandedKeys={expandedKeys}
-                  onToggle={toggle}
-                >
-                  <TreeNode
-                    title={remoteModel.llm.modelLabel}
-                    nodeKey="remoteModel-llm"
-                    icon="💬"
-                    status={remoteModel.llm.state}
-                    url={remoteModel.llm.baseUrl}
-                    error={remoteModel.llm.error ?? null}
-                    expandedKeys={expandedKeys}
-                    onToggle={toggle}
-                  />
-                  <TreeNode
-                    title={remoteModel.multimodal.modelLabel}
-                    nodeKey="remoteModel-multimodal"
-                    icon="🖼️"
-                    status={remoteModel.multimodal.state}
-                    url={remoteModel.multimodal.baseUrl}
-                    error={remoteModel.multimodal.error ?? null}
-                    expandedKeys={expandedKeys}
-                    onToggle={toggle}
-                  />
-                </TreeNode>
-              )}
+              />
             </TreeNode>
-          </div>
+            {remoteModel && (
+              <TreeNode
+                title="远端模型服务"
+                nodeKey="remoteModel"
+                icon="🌐"
+                status={inferRemoteModelState(remoteModel)}
+                error={inferRemoteModelError(remoteModel) ?? null}
+                expandedKeys={expandedKeys}
+                onToggle={toggle}
+              >
+                <TreeNode
+                  title={remoteModel.llm.modelLabel}
+                  nodeKey="remoteModel-llm"
+                  icon="💬"
+                  status={remoteModel.llm.state}
+                  url={remoteModel.llm.baseUrl}
+                  error={remoteModel.llm.error ?? null}
+                  expandedKeys={expandedKeys}
+                  onToggle={toggle}
+                />
+                <TreeNode
+                  title={remoteModel.multimodal.modelLabel}
+                  nodeKey="remoteModel-multimodal"
+                  icon="🖼️"
+                  status={remoteModel.multimodal.state}
+                  url={remoteModel.multimodal.baseUrl}
+                  error={remoteModel.multimodal.error ?? null}
+                  expandedKeys={expandedKeys}
+                  onToggle={toggle}
+                />
+              </TreeNode>
+            )}
+          </TreeNode>
+        </div>
       </div>
     </div>
   );
@@ -282,18 +296,22 @@ function formatCodeGraphJobStatus(daemon: DaemonStatus | null): string | null {
 }
 
 function formatCodeGraphProviderDetail(provider: CodeGraphProviderStatus): string | null {
-  const parts = [provider.version ? `v${provider.version}` : '', provider.message ?? ''].filter(Boolean);
+  const parts = [provider.version ? `v${provider.version}` : '', provider.message ?? ''].filter(
+    Boolean
+  );
   return parts.join(' · ') || null;
 }
 
-function inferLocalModelState(localModel: LocalModelStatus | null): ModelServiceStatus['state'] | undefined {
+function inferLocalModelState(
+  localModel: LocalModelStatus | null
+): ModelServiceStatus['state'] | undefined {
   if (!localModel) return 'idle';
   const states = [localModel.embedding.state, localModel.rerank.state];
-  if (states.some((s) => s === 'error')) return 'error';
-  if (states.some((s) => s === 'running')) return 'running';
-  if (states.some((s) => s === 'loading')) return 'loading';
-  if (states.some((s) => s === 'downloading')) return 'downloading';
-  if (states.some((s) => s === 'starting')) return 'starting';
+  if (states.some(s => s === 'error')) return 'error';
+  if (states.some(s => s === 'running')) return 'running';
+  if (states.some(s => s === 'loading')) return 'loading';
+  if (states.some(s => s === 'downloading')) return 'downloading';
+  if (states.some(s => s === 'starting')) return 'starting';
   return 'idle';
 }
 
@@ -303,11 +321,13 @@ function inferLocalModelError(localModel: LocalModelStatus | null): string | nul
   return errors.length > 0 ? errors.join('; ') : null;
 }
 
-function inferRemoteModelState(remoteModel: RemoteModelStatus | null): 'unconfigured' | 'running' | 'error' | undefined {
+function inferRemoteModelState(
+  remoteModel: RemoteModelStatus | null
+): 'unconfigured' | 'running' | 'error' | undefined {
   if (!remoteModel) return 'unconfigured';
   const states = [remoteModel.llm.state, remoteModel.multimodal.state];
-  if (states.some((s) => s === 'error')) return 'error';
-  if (states.some((s) => s === 'running')) return 'running';
+  if (states.some(s => s === 'error')) return 'error';
+  if (states.some(s => s === 'running')) return 'running';
   return 'unconfigured';
 }
 

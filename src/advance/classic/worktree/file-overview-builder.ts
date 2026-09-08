@@ -31,7 +31,7 @@ export interface FileOverview {
 /**
  * 符号识别规则，按语言扩展
  */
-const SYMBOL_PATTERNS: Array<{ kind: SymbolEntry['kind']; regex: RegExp } > = [
+const SYMBOL_PATTERNS: Array<{ kind: SymbolEntry['kind']; regex: RegExp }> = [
   { kind: 'function', regex: /^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/ },
   { kind: 'class', regex: /^(?:export\s+)?class\s+([A-Za-z_$][\w$]*)/ },
   { kind: 'interface', regex: /^(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)/ },

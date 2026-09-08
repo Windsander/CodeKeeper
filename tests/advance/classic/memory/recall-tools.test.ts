@@ -19,46 +19,49 @@ describe('everosMemorySearch', () => {
   });
 
   it('解析 agent_cases 并按 score 降序返回', async () => {
-    globalThis.fetch = vi.fn(async () => ({
-      ok: true,
-      text: async () => '',
-      json: async () => ({
-        request_id: 'req-1',
-        data: {
-          agent_cases: [
-            {
-              id: 'ac-1',
-              agent_id: 'reviewer',
-              app_id: 'codekeeper-advance',
-              project_id: 'p1',
-              session_id: 's1',
-              task_intent: '评审',
-              approach: '建议严格类型',
-              key_insight: '项目偏好 TypeScript 严格模式',
-              quality_score: 0.8,
-              timestamp: '2026-01-01T00:00:00Z',
-              score: 0.9,
+    globalThis.fetch = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          text: async () => '',
+          json: async () => ({
+            request_id: 'req-1',
+            data: {
+              agent_cases: [
+                {
+                  id: 'ac-1',
+                  agent_id: 'reviewer',
+                  app_id: 'codekeeper-advance',
+                  project_id: 'p1',
+                  session_id: 's1',
+                  task_intent: '评审',
+                  approach: '建议严格类型',
+                  key_insight: '项目偏好 TypeScript 严格模式',
+                  quality_score: 0.8,
+                  timestamp: '2026-01-01T00:00:00Z',
+                  score: 0.9,
+                },
+                {
+                  id: 'ac-2',
+                  agent_id: 'reviewer',
+                  app_id: 'codekeeper-advance',
+                  project_id: 'p1',
+                  session_id: 's2',
+                  task_intent: '',
+                  key_insight: null,
+                  approach: '',
+                  timestamp: '2026-01-02T00:00:00Z',
+                  score: 0.5,
+                },
+              ],
+              episodes: [],
+              agent_skills: [],
+              profiles: [],
+              unprocessed_messages: [],
             },
-            {
-              id: 'ac-2',
-              agent_id: 'reviewer',
-              app_id: 'codekeeper-advance',
-              project_id: 'p1',
-              session_id: 's2',
-              task_intent: '',
-              key_insight: null,
-              approach: '',
-              timestamp: '2026-01-02T00:00:00Z',
-              score: 0.5,
-            },
-          ],
-          episodes: [],
-          agent_skills: [],
-          profiles: [],
-          unprocessed_messages: [],
-        },
-      }),
-    } as Response));
+          }),
+        }) as Response
+    );
 
     const result = await everosMemorySearch('http://127.0.0.1:8000', {
       appId: 'codekeeper-advance',
@@ -74,41 +77,44 @@ describe('everosMemorySearch', () => {
   });
 
   it('解析 episodes 与 profiles', async () => {
-    globalThis.fetch = vi.fn(async () => ({
-      ok: true,
-      text: async () => '',
-      json: async () => ({
-        request_id: 'req-2',
-        data: {
-          agent_cases: [],
-          episodes: [
-            {
-              id: 'ep-1',
-              user_id: 'alice',
-              app_id: 'codekeeper-advance',
-              project_id: 'p1',
-              session_id: 's1',
-              summary: 'Alice 偏好小步提交',
-              episode: 'Alice 偏好小步提交，重视单测覆盖。',
-              subject: 'Alice 的偏好',
-              timestamp: '2026-01-01T00:00:00Z',
-              score: 0.85,
+    globalThis.fetch = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          text: async () => '',
+          json: async () => ({
+            request_id: 'req-2',
+            data: {
+              agent_cases: [],
+              episodes: [
+                {
+                  id: 'ep-1',
+                  user_id: 'alice',
+                  app_id: 'codekeeper-advance',
+                  project_id: 'p1',
+                  session_id: 's1',
+                  summary: 'Alice 偏好小步提交',
+                  episode: 'Alice 偏好小步提交，重视单测覆盖。',
+                  subject: 'Alice 的偏好',
+                  timestamp: '2026-01-01T00:00:00Z',
+                  score: 0.85,
+                },
+              ],
+              agent_skills: [],
+              profiles: [
+                {
+                  id: 'profile-1',
+                  user_id: 'alice',
+                  app_id: 'codekeeper-advance',
+                  project_id: 'p1',
+                  profile_data: { preferred_language: 'TypeScript', strict_mode: true },
+                },
+              ],
+              unprocessed_messages: [],
             },
-          ],
-          agent_skills: [],
-          profiles: [
-            {
-              id: 'profile-1',
-              user_id: 'alice',
-              app_id: 'codekeeper-advance',
-              project_id: 'p1',
-              profile_data: { preferred_language: 'TypeScript', strict_mode: true },
-            },
-          ],
-          unprocessed_messages: [],
-        },
-      }),
-    } as Response));
+          }),
+        }) as Response
+    );
 
     const result = await everosMemorySearch('http://127.0.0.1:8000', {
       appId: 'codekeeper-advance',
@@ -118,9 +124,9 @@ describe('everosMemorySearch', () => {
     });
 
     expect(result.items).toHaveLength(2);
-    const episode = result.items.find((i) => i.type === 'episode');
+    const episode = result.items.find(i => i.type === 'episode');
     expect(episode?.content).toBe('Alice 偏好小步提交');
-    const profile = result.items.find((i) => i.type === 'profile');
+    const profile = result.items.find(i => i.type === 'profile');
     expect(profile?.content).toContain('preferred_language');
   });
 });
@@ -132,7 +138,9 @@ describe('MemoryClient 召回方法', () => {
   beforeEach(() => {
     client = new MemoryClient({ mcpUrl: 'http://127.0.0.1:9999', context: mockContext });
     callToolSpy = vi.spyOn(Client.prototype, 'callTool').mockResolvedValue({
-      content: [{ type: 'text', text: JSON.stringify({ results: ['历史评审经验 A', '历史评审经验 B'] }) }],
+      content: [
+        { type: 'text', text: JSON.stringify({ results: ['历史评审经验 A', '历史评审经验 B'] }) },
+      ],
     });
   });
 

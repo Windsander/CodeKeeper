@@ -9,9 +9,7 @@ import { MemoryClient } from '../memory/memory-client.js';
 import type { Project, RoleConfig } from '../../types.js';
 import type { LlmClient } from '../../llm/client.js';
 import { getArchiveRoot, isRoleConfigEnabled } from '../../types.js';
-import {
-  normalizeArchiverConfig,
-} from '../../archiver/provider-config.js';
+import { normalizeArchiverConfig } from '../../archiver/provider-config.js';
 import {
   type ArchiverProviderCoordinator,
   type ArchiverProviderExecution,

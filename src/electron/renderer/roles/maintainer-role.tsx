@@ -15,9 +15,24 @@ registerRoleUI<'maintainer'>({
   soulFileName: 'MAINTAINER-SOUL.md',
   defaultSoulTemplate: DEFAULT_MAINTAINER_SOUL,
   projectConfigFields: [
-    { key: 'maintainerName', label: '维护者名称', type: 'text', defaultValue: 'CodeKeeper Maintainer' },
-    { key: 'autoFixRiskLevels', label: '自动处理风险等级', type: 'risk-levels', defaultValue: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] },
-    { key: 'resolveOthersDiscussions', label: '自动 resolve 他人 discussion', type: 'toggle', defaultValue: true },
+    {
+      key: 'maintainerName',
+      label: '维护者名称',
+      type: 'text',
+      defaultValue: 'CodeKeeper Maintainer',
+    },
+    {
+      key: 'autoFixRiskLevels',
+      label: '自动处理风险等级',
+      type: 'risk-levels',
+      defaultValue: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
+    },
+    {
+      key: 'resolveOthersDiscussions',
+      label: '自动 resolve 他人 discussion',
+      type: 'toggle',
+      defaultValue: true,
+    },
     {
       key: 'cognitiveDepth',
       label: '认知深度',

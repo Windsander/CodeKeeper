@@ -16,18 +16,12 @@ export function getCommentUpdatedAt(comment: ReviewerComment): number {
 
 /** 返回评论最近一次创建或编辑的时间。 */
 export function getCommentActivityAt(comment: ReviewerComment): number {
-  return Math.max(
-    parseActivityTime(comment.createdAt),
-    parseActivityTime(comment.updatedAt)
-  );
+  return Math.max(parseActivityTime(comment.createdAt), parseActivityTime(comment.updatedAt));
 }
 
 /** 返回 discussion 内任一 note 最近一次创建或编辑的时间。 */
 export function getDiscussionActivityAt(discussion: Discussion): number {
-  return discussion.notes.reduce(
-    (latest, note) => Math.max(latest, getCommentActivityAt(note)),
-    0
-  );
+  return discussion.notes.reduce((latest, note) => Math.max(latest, getCommentActivityAt(note)), 0);
 }
 
 /** 按最近活动时间选取评论窗口，不修改输入数组。 */

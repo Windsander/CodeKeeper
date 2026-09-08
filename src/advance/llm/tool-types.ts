@@ -39,10 +39,7 @@ export interface ToolResult {
 
 export type LlmMessageRole = 'user' | 'assistant';
 
-export type LlmMessageContent =
-  | { type: 'text'; text: string }
-  | ToolCall
-  | ToolResult;
+export type LlmMessageContent = { type: 'text'; text: string } | ToolCall | ToolResult;
 
 export interface LlmMessage {
   role: LlmMessageRole;

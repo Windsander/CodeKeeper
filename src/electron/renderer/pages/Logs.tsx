@@ -58,7 +58,7 @@ const MODEL_LOG_KEYWORDS = [
 
 function filterModelLogLine(line: string): boolean {
   const lower = line.toLowerCase();
-  return MODEL_LOG_KEYWORDS.some((keyword) => lower.includes(keyword.toLowerCase()));
+  return MODEL_LOG_KEYWORDS.some(keyword => lower.includes(keyword.toLowerCase()));
 }
 
 /**
@@ -69,10 +69,7 @@ function extractFirstStringField(raw: string, field: string): string | null {
   const pattern = new RegExp(`"${field}"\\s*:\s*"((?:[^"\\\\]|\\\\.)*)"`);
   const match = raw.match(pattern);
   if (!match) return null;
-  return match[1]
-    .replace(/\\"/g, '"')
-    .replace(/\\n/g, '\n')
-    .replace(/\\\\/g, '\\');
+  return match[1].replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\\\/g, '\\');
 }
 
 /**
@@ -90,8 +87,10 @@ function formatLogLine(line: string): string {
 
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
-    const time = typeof parsed.time === 'number' ? new Date(parsed.time).toLocaleString('zh-CN') : '';
-    const levelLabel = typeof parsed.level === 'number' ? LEVEL_LABELS[parsed.level] ?? String(parsed.level) : '';
+    const time =
+      typeof parsed.time === 'number' ? new Date(parsed.time).toLocaleString('zh-CN') : '';
+    const levelLabel =
+      typeof parsed.level === 'number' ? (LEVEL_LABELS[parsed.level] ?? String(parsed.level)) : '';
     const role = typeof parsed.role === 'string' ? `[${parsed.role}]` : '';
 
     let message = '';
@@ -123,7 +122,12 @@ export function Logs() {
 
   const method = tab === 'all' ? 'daemon.logs' : 'role.service.logs';
   const params = tab === 'all' ? { lines } : { role: tab, lines };
-  const { data, loading: daemonLoading, error: daemonError, refresh: refreshDaemon } = useIpc<{ lines: string[] }>(
+  const {
+    data,
+    loading: daemonLoading,
+    error: daemonError,
+    refresh: refreshDaemon,
+  } = useIpc<{ lines: string[] }>(
     isLocalModelTab ? 'daemon.logs' : method,
     isLocalModelTab ? { lines } : params
   );
@@ -149,8 +153,8 @@ export function Logs() {
   const formattedLines = useMemo(() => {
     if (isLocalModelTab) {
       const tagged = [
-        ...embedding.map((line) => `[embedding] ${line}`),
-        ...rerank.map((line) => `[rerank] ${line}`),
+        ...embedding.map(line => `[embedding] ${line}`),
+        ...rerank.map(line => `[rerank] ${line}`),
       ];
       return tagged.filter(filterModelLogLine);
     }
@@ -170,7 +174,7 @@ export function Logs() {
       <div className="card logs-card">
         <div className="logs-card-header">
           <div className="tabs">
-            {TABS.map((t) => (
+            {TABS.map(t => (
               <button
                 key={t.key}
                 type="button"
@@ -189,7 +193,7 @@ export function Logs() {
               type="number"
               className="input"
               value={lines}
-              onChange={(e) => setLines(Number(e.target.value))}
+              onChange={e => setLines(Number(e.target.value))}
             />
           </div>
         </div>

@@ -70,7 +70,7 @@ function parseEverOS(json: string): EverOSConfig {
 
 function stringifyEverOS(cfg: EverOSConfig): string {
   const cleaned: EverOSConfig = {};
-  (Object.keys(cfg) as Array<keyof EverOSConfig>).forEach((key) => {
+  (Object.keys(cfg) as Array<keyof EverOSConfig>).forEach(key => {
     const value = cfg[key];
     if (typeof value === 'string' && value.trim()) {
       (cleaned[key] as string | undefined) = value.trim();
@@ -111,22 +111,40 @@ function SecretInput({ value, onChange, placeholder, ariaLabel, error }: SecretI
         className={`input input-with-btn ${error ? 'input-error input-flash' : ''}`}
         value={value}
         placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={e => onChange(e.target.value)}
       />
       <button
         type="button"
         className="input-inline-btn"
-        onClick={() => setVisible((prev) => !prev)}
+        onClick={() => setVisible(prev => !prev)}
         aria-label={ariaLabel}
         title={visible ? '隐藏' : '显示'}
       >
         {visible ? (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
             <line x1="1" y1="1" x2="23" y2="23" />
           </svg>
         ) : (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
             <circle cx="12" cy="12" r="3" />
           </svg>
@@ -136,7 +154,17 @@ function SecretInput({ value, onChange, placeholder, ariaLabel, error }: SecretI
   );
 }
 
-function Section({ title, badge, hideHeader, children }: { title: string; badge?: React.ReactNode; hideHeader?: boolean; children: React.ReactNode }) {
+function Section({
+  title,
+  badge,
+  hideHeader,
+  children,
+}: {
+  title: string;
+  badge?: React.ReactNode;
+  hideHeader?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <div className="config-section expanded">
       {!hideHeader && (
@@ -181,7 +209,11 @@ function LlmConfigSection({
     <Section title="LLM 配置" hideHeader>
       <div className="form-group">
         <label>Provider</label>
-        <Dropdown value={provider} options={PROVIDER_OPTIONS} onChange={(value) => setProvider(value)} />
+        <Dropdown
+          value={provider}
+          options={PROVIDER_OPTIONS}
+          onChange={value => setProvider(value)}
+        />
       </div>
 
       <div className="form-group">
@@ -200,7 +232,7 @@ function LlmConfigSection({
           className="input"
           value={apiUrl}
           placeholder="留空使用默认"
-          onChange={(e) => setApiUrl(e.target.value)}
+          onChange={e => setApiUrl(e.target.value)}
         />
         <div className="input-hint" style={{ marginTop: 6 }}>
           OpenAI 兼容示例：https://your-openai-proxy.example.com/v1
@@ -213,7 +245,7 @@ function LlmConfigSection({
           className="input"
           value={model}
           placeholder={provider === 'openai' ? 'gpt-4o-mini' : 'claude-3-5-sonnet-20241022'}
-          onChange={(e) => setModel(e.target.value)}
+          onChange={e => setModel(e.target.value)}
         />
       </div>
 
@@ -225,13 +257,13 @@ function LlmConfigSection({
               className="input"
               placeholder="Header 名称"
               value={entry.key}
-              onChange={(e) => updateHeader(index, 'key', e.target.value)}
+              onChange={e => updateHeader(index, 'key', e.target.value)}
             />
             <input
               className="input"
               placeholder="Header 值"
               value={entry.value}
-              onChange={(e) => updateHeader(index, 'value', e.target.value)}
+              onChange={e => updateHeader(index, 'value', e.target.value)}
             />
             <button
               type="button"
@@ -239,7 +271,16 @@ function LlmConfigSection({
               onClick={() => removeHeader(index)}
               title="删除"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <polyline points="3 6 5 6 21 6" />
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                 <line x1="10" y1="11" x2="10" y2="17" />
@@ -248,7 +289,9 @@ function LlmConfigSection({
             </button>
           </div>
         ))}
-        <button className="btn btn-primary btn-sm" onClick={addHeader}>+ 添加 Header</button>
+        <button className="btn btn-primary btn-sm" onClick={addHeader}>
+          + 添加 Header
+        </button>
       </div>
     </Section>
   );
@@ -269,7 +312,7 @@ function DaemonScheduleSection({
   llmRequestsPerMinute: number;
   setLlmRequestsPerMinute: (value: number) => void;
 }) {
-  const isCustomCron = !SCAN_INTERVALS.some((i) => i.cron === scanCron && i.cron !== 'custom');
+  const isCustomCron = !SCAN_INTERVALS.some(i => i.cron === scanCron && i.cron !== 'custom');
 
   const handleIntervalChange = (value: string) => {
     if (value === 'custom') {
@@ -291,8 +334,8 @@ function DaemonScheduleSection({
         <label>扫描间隔</label>
         <Dropdown
           value={isCustomCron ? 'custom' : scanCron}
-          options={SCAN_INTERVALS.map((i) => ({ value: i.cron, label: i.label }))}
-          onChange={(value) => handleIntervalChange(value)}
+          options={SCAN_INTERVALS.map(i => ({ value: i.cron, label: i.label }))}
+          onChange={value => handleIntervalChange(value)}
         />
         {isCustomCron && (
           <input
@@ -300,10 +343,12 @@ function DaemonScheduleSection({
             style={{ marginTop: 8 }}
             value={customCron}
             placeholder="*/5 * * * *"
-            onChange={(e) => handleCustomCronChange(e.target.value)}
+            onChange={e => handleCustomCronChange(e.target.value)}
           />
         )}
-        <div className="input-hint" style={{ marginTop: 6 }}>当前 cron: {scanCron}</div>
+        <div className="input-hint" style={{ marginTop: 6 }}>
+          当前 cron: {scanCron}
+        </div>
       </div>
 
       <div className="form-group">
@@ -314,7 +359,7 @@ function DaemonScheduleSection({
           min={1}
           max={600}
           value={llmRequestsPerMinute}
-          onChange={(e) => setLlmRequestsPerMinute(Math.max(1, Number(e.target.value) || 10))}
+          onChange={e => setLlmRequestsPerMinute(Math.max(1, Number(e.target.value) || 10))}
         />
         <div className="input-hint" style={{ marginTop: 6 }}>
           请求间隔约 {Math.ceil(60000 / llmRequestsPerMinute)}ms
@@ -378,8 +423,11 @@ function LocalModelsSection({
         <label>Embedding 模型</label>
         <Dropdown
           value={EMBEDDING_MODELS.includes(embeddingModel) ? embeddingModel : 'custom'}
-          options={[...EMBEDDING_MODELS.map((m) => ({ value: m, label: m })), { value: 'custom', label: '自定义' }]}
-          onChange={(value) => {
+          options={[
+            ...EMBEDDING_MODELS.map(m => ({ value: m, label: m })),
+            { value: 'custom', label: '自定义' },
+          ]}
+          onChange={value => {
             if (value === 'custom') {
               setEmbeddingModel(embeddingCustom || '');
             } else {
@@ -393,7 +441,7 @@ function LocalModelsSection({
             style={{ marginTop: 8 }}
             placeholder="HuggingFace 模型名，例如 organization/model-name"
             value={EMBEDDING_MODELS.includes(embeddingModel) ? embeddingCustom : embeddingModel}
-            onChange={(e) => {
+            onChange={e => {
               const value = e.target.value;
               if (EMBEDDING_MODELS.includes(embeddingModel)) {
                 setEmbeddingCustom(value);
@@ -412,8 +460,11 @@ function LocalModelsSection({
         <label>Rerank 模型</label>
         <Dropdown
           value={RERANK_MODELS.includes(rerankModel) ? rerankModel : 'custom'}
-          options={[...RERANK_MODELS.map((m) => ({ value: m, label: m })), { value: 'custom', label: '自定义' }]}
-          onChange={(value) => {
+          options={[
+            ...RERANK_MODELS.map(m => ({ value: m, label: m })),
+            { value: 'custom', label: '自定义' },
+          ]}
+          onChange={value => {
             if (value === 'custom') {
               setRerankModel(rerankCustom || '');
             } else {
@@ -427,7 +478,7 @@ function LocalModelsSection({
             style={{ marginTop: 8 }}
             placeholder="HuggingFace 模型名"
             value={RERANK_MODELS.includes(rerankModel) ? rerankCustom : rerankModel}
-            onChange={(e) => {
+            onChange={e => {
               const value = e.target.value;
               if (RERANK_MODELS.includes(rerankModel)) {
                 setRerankCustom(value);
@@ -477,17 +528,27 @@ function MultimodalConfigSection({
     apiKey.trim() ||
     apiUrl.trim() ||
     model.trim() ||
-    headerEntries.some((e) => e.key.trim() || e.value.trim());
+    headerEntries.some(e => e.key.trim() || e.value.trim());
 
   return (
     <Section
       title="多模态模型"
       hideHeader
-      badge={hasCustom ? <span className="badge badge-success">已自定义</span> : <span className="badge badge-secondary">未配置</span>}
+      badge={
+        hasCustom ? (
+          <span className="badge badge-success">已自定义</span>
+        ) : (
+          <span className="badge badge-secondary">未配置</span>
+        )
+      }
     >
       <div className="form-group">
         <label>Provider</label>
-        <Dropdown value={provider} options={PROVIDER_OPTIONS} onChange={(value) => setProvider(value)} />
+        <Dropdown
+          value={provider}
+          options={PROVIDER_OPTIONS}
+          onChange={value => setProvider(value)}
+        />
       </div>
 
       <div className="form-group">
@@ -506,7 +567,7 @@ function MultimodalConfigSection({
           className="input"
           value={apiUrl}
           placeholder="留空使用默认"
-          onChange={(e) => setApiUrl(e.target.value)}
+          onChange={e => setApiUrl(e.target.value)}
         />
         <div className="input-hint" style={{ marginTop: 6 }}>
           OpenAI 兼容示例：https://your-openai-proxy.example.com/v1
@@ -519,7 +580,7 @@ function MultimodalConfigSection({
           className="input"
           value={model}
           placeholder={provider === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022'}
-          onChange={(e) => setModel(e.target.value)}
+          onChange={e => setModel(e.target.value)}
         />
       </div>
 
@@ -531,13 +592,13 @@ function MultimodalConfigSection({
               className="input"
               placeholder="Header 名称"
               value={entry.key}
-              onChange={(e) => updateHeader(index, 'key', e.target.value)}
+              onChange={e => updateHeader(index, 'key', e.target.value)}
             />
             <input
               className="input"
               placeholder="Header 值"
               value={entry.value}
-              onChange={(e) => updateHeader(index, 'value', e.target.value)}
+              onChange={e => updateHeader(index, 'value', e.target.value)}
             />
             <button
               type="button"
@@ -545,7 +606,16 @@ function MultimodalConfigSection({
               onClick={() => removeHeader(index)}
               title="删除"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <polyline points="3 6 5 6 21 6" />
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                 <line x1="10" y1="11" x2="10" y2="17" />
@@ -554,7 +624,9 @@ function MultimodalConfigSection({
             </button>
           </div>
         ))}
-        <button className="btn btn-primary btn-sm" onClick={addHeader}>+ 添加 Header</button>
+        <button className="btn btn-primary btn-sm" onClick={addHeader}>
+          + 添加 Header
+        </button>
       </div>
     </Section>
   );
@@ -579,7 +651,9 @@ export function Settings() {
   const [multimodalApiKey, setMultimodalApiKey] = useState('');
   const [multimodalApiUrl, setMultimodalApiUrl] = useState('');
   const [multimodalModel, setMultimodalModel] = useState('');
-  const [multimodalHeaderEntries, setMultimodalHeaderEntries] = useState<HeaderEntry[]>([{ key: '', value: '' }]);
+  const [multimodalHeaderEntries, setMultimodalHeaderEntries] = useState<HeaderEntry[]>([
+    { key: '', value: '' },
+  ]);
 
   const [embeddingModel, setEmbeddingModel] = useState(DEFAULT_EMBEDDING_MODEL);
   const [rerankModel, setRerankModel] = useState(DEFAULT_RERANK_MODEL);
@@ -612,7 +686,7 @@ export function Settings() {
   }, [data]);
 
   const updateHeader = (index: number, field: keyof HeaderEntry, value: string) => {
-    setHeaderEntries((prev) => {
+    setHeaderEntries(prev => {
       const next = [...prev];
       next[index] = { ...next[index], [field]: value };
       return next;
@@ -620,18 +694,18 @@ export function Settings() {
   };
 
   const addHeader = () => {
-    setHeaderEntries((prev) => [...prev, { key: '', value: '' }]);
+    setHeaderEntries(prev => [...prev, { key: '', value: '' }]);
   };
 
   const removeHeader = (index: number) => {
-    setHeaderEntries((prev) => {
+    setHeaderEntries(prev => {
       const next = prev.filter((_, i) => i !== index);
       return next.length > 0 ? next : [{ key: '', value: '' }];
     });
   };
 
   const updateMultimodalHeader = (index: number, field: keyof HeaderEntry, value: string) => {
-    setMultimodalHeaderEntries((prev) => {
+    setMultimodalHeaderEntries(prev => {
       const next = [...prev];
       next[index] = { ...next[index], [field]: value };
       return next;
@@ -639,11 +713,11 @@ export function Settings() {
   };
 
   const addMultimodalHeader = () => {
-    setMultimodalHeaderEntries((prev) => [...prev, { key: '', value: '' }]);
+    setMultimodalHeaderEntries(prev => [...prev, { key: '', value: '' }]);
   };
 
   const removeMultimodalHeader = (index: number) => {
-    setMultimodalHeaderEntries((prev) => {
+    setMultimodalHeaderEntries(prev => {
       const next = prev.filter((_, i) => i !== index);
       return next.length > 0 ? next : [{ key: '', value: '' }];
     });
@@ -657,7 +731,9 @@ export function Settings() {
     const finalEmbedding = EMBEDDING_MODELS.includes(embeddingModel)
       ? embeddingModel
       : embeddingModel || embeddingCustom;
-    const finalRerank = RERANK_MODELS.includes(rerankModel) ? rerankModel : rerankModel || rerankCustom;
+    const finalRerank = RERANK_MODELS.includes(rerankModel)
+      ? rerankModel
+      : rerankModel || rerankCustom;
 
     if (!isValidHuggingFaceModelId(finalEmbedding)) {
       setLocalModelError(`Embedding 模型名不合法: ${finalEmbedding}`);
@@ -698,7 +774,8 @@ export function Settings() {
 
     const mmHeaders = stringifyHeaders(multimodalHeaderEntries);
     const everosCfg: EverOSConfig = {};
-    if (multimodalProvider.trim()) everosCfg.multimodalProvider = multimodalProvider.trim() as 'anthropic' | 'openai';
+    if (multimodalProvider.trim())
+      everosCfg.multimodalProvider = multimodalProvider.trim() as 'anthropic' | 'openai';
     if (multimodalApiKey.trim()) everosCfg.multimodalApiKey = multimodalApiKey.trim();
     if (multimodalApiUrl.trim()) everosCfg.multimodalBaseUrl = multimodalApiUrl.trim();
     if (multimodalModel.trim()) everosCfg.multimodalModel = multimodalModel.trim();
@@ -804,7 +881,7 @@ export function Settings() {
         <div className="settings-form-column">
           <div className="card">
             <div className="tabs settings-tabs">
-              {TABS.map((tab) => (
+              {TABS.map(tab => (
                 <button
                   key={tab.key}
                   type="button"

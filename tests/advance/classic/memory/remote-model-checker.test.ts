@@ -18,10 +18,13 @@ describe('RemoteModelChecker', () => {
   });
 
   it('模型在列表中返回 running', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ id: 'claude-opus-4-8' }] }),
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: [{ id: 'claude-opus-4-8' }] }),
+      })
+    );
     const result = await checker.checkLlm({
       provider: 'anthropic',
       apiKey: 'test-key',
@@ -32,10 +35,13 @@ describe('RemoteModelChecker', () => {
   });
 
   it('模型不在列表中也返回 running（模型名可能是别名）', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ id: 'other-model' }] }),
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: [{ id: 'other-model' }] }),
+      })
+    );
     const result = await checker.checkLlm({
       provider: 'anthropic',
       apiKey: 'test-key',
@@ -142,7 +148,8 @@ describe('RemoteModelChecker', () => {
       return {
         ok: false,
         status: 400,
-        text: async () => '{"error":{"code":"400","message":"Invalid request","param":"404 NOT_FOUND"}}',
+        text: async () =>
+          '{"error":{"code":"400","message":"Invalid request","param":"404 NOT_FOUND"}}',
       };
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -157,15 +164,21 @@ describe('RemoteModelChecker', () => {
     expect(result.state).toBe('running');
     expect(result.error).toBeNull();
     expect(fetchMock).toHaveBeenCalledWith('https://api.example.com/v1/models', expect.any(Object));
-    expect(fetchMock).toHaveBeenCalledWith('https://api.example.com/v1', expect.objectContaining({ method: 'HEAD' }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/v1',
+      expect.objectContaining({ method: 'HEAD' })
+    );
   });
 
   it('服务端 5xx 返回 error', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
-      text: async () => 'internal server error',
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: async () => 'internal server error',
+      })
+    );
     const result = await checker.checkLlm({
       provider: 'anthropic',
       apiKey: 'test-key',

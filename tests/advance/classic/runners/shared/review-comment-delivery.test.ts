@@ -3,7 +3,11 @@ import {
   deliverReviewComment,
   isReviewCommentDeliveryPending,
 } from '../../../../../src/advance/classic/runners/shared/review-comment-delivery.js';
-import type { IGitProvider, MergeRequest, ReviewerComment } from '../../../../../src/advance/classic/provider/types.js';
+import type {
+  IGitProvider,
+  MergeRequest,
+  ReviewerComment,
+} from '../../../../../src/advance/classic/provider/types.js';
 import type { ReviewCommentDeliveryState } from '../../../../../src/advance/classic/runners/shared/state-utils.js';
 
 const mr: MergeRequest = {

@@ -48,9 +48,7 @@ export class WorkspaceValidationStrategy implements ValidationStrategy {
     const passed = raw.lint === true && raw.typecheck === true;
     return {
       passed,
-      reason: passed
-        ? 'lint 和 typecheck 均通过'
-        : `lint=${raw.lint}, typecheck=${raw.typecheck}`,
+      reason: passed ? 'lint 和 typecheck 均通过' : `lint=${raw.lint}, typecheck=${raw.typecheck}`,
       details: raw,
     };
   }

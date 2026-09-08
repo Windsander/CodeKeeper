@@ -51,13 +51,16 @@ describe('buildFocusedContext', () => {
     const content = lines.join('\n') + '\n';
     const ctx = buildFocusedContext(content, makeFinding(50), { maxLines: 10 });
     expect(ctx.truncated).toBe(true);
-    const snippetLines = ctx.snippet.split('\n').filter((l) => l !== '');
+    const snippetLines = ctx.snippet.split('\n').filter(l => l !== '');
     expect(snippetLines.length).toBeLessThanOrEqual(10);
   });
 
   it('padding 参数生效', () => {
     const content = Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
-    const ctx = buildFocusedContext(content, makeFinding(30), { padding: 3, expandToBoundary: false });
+    const ctx = buildFocusedContext(content, makeFinding(30), {
+      padding: 3,
+      expandToBoundary: false,
+    });
     expect(ctx.snippetStartLine).toBe(27);
     expect(ctx.snippetEndLine).toBe(33);
   });

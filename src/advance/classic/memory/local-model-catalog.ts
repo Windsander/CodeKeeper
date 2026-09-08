@@ -52,7 +52,7 @@ export async function fetchEmbeddingModelDimension(modelId: string): Promise<num
     if (!res.ok) {
       return null;
     }
-    const config = await res.json() as { hidden_size?: number };
+    const config = (await res.json()) as { hidden_size?: number };
     if (typeof config.hidden_size === 'number' && config.hidden_size > 0) {
       return config.hidden_size;
     }
@@ -63,7 +63,8 @@ export async function fetchEmbeddingModelDimension(modelId: string): Promise<num
 }
 
 // HuggingFace repo id 规则：namespace/model-name，允许字母、数字、-、_、.
-const HF_MODEL_ID_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?\/[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/;
+const HF_MODEL_ID_RE =
+  /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?\/[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/;
 
 export function isValidHuggingFaceModelId(model: string): boolean {
   return HF_MODEL_ID_RE.test(model);

@@ -61,10 +61,31 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
     const projectNodeId = projectNodeMap.get(projectId);
     if (!projectNodeId) continue;
     for (const item of result.episodes ?? []) {
-      processEntry(item, 'episode', projectId, projectNodeId, nodes, edges, userTopics, projectUsers, displayNames, episodeNodeMap);
+      processEntry(
+        item,
+        'episode',
+        projectId,
+        projectNodeId,
+        nodes,
+        edges,
+        userTopics,
+        projectUsers,
+        displayNames,
+        episodeNodeMap
+      );
     }
     for (const item of result.agent_cases ?? []) {
-      processEntry(item, 'agent_case', projectId, projectNodeId, nodes, edges, userTopics, projectUsers, displayNames);
+      processEntry(
+        item,
+        'agent_case',
+        projectId,
+        projectNodeId,
+        nodes,
+        edges,
+        userTopics,
+        projectUsers,
+        displayNames
+      );
     }
   }
 
@@ -73,7 +94,17 @@ export function buildMemoryGraph(input: BuildMemoryGraphInput): MemoryGraph {
     const projectNodeId = projectNodeMap.get(projectId);
     if (!projectNodeId) continue;
     for (const item of result.agent_skills ?? []) {
-      processSkill(item, projectId, projectNodeId, nodes, edges, caseProjects, skillCases, systemSkills, displayNames);
+      processSkill(
+        item,
+        projectId,
+        projectNodeId,
+        nodes,
+        edges,
+        caseProjects,
+        skillCases,
+        systemSkills,
+        displayNames
+      );
     }
     for (const item of result.profiles ?? []) {
       processProfile(item, projectId, projectNodeId, nodes, edges, profileProjects, displayNames);
@@ -134,11 +165,17 @@ export function parseTopicId(sessionId: string): { topicId: string; label: strin
   }
   const discussionMatch = sessionId.match(/(?:discussion|interaction)-([^-]+)$/);
   if (discussionMatch) {
-    return { topicId: `discussion:${discussionMatch[1]}`, label: `Discussion #${discussionMatch[1]}` };
+    return {
+      topicId: `discussion:${discussionMatch[1]}`,
+      label: `Discussion #${discussionMatch[1]}`,
+    };
   }
   const archiveMatch = sessionId.match(/archiver-(.+?)-(\d{4}-\d{2}-\d{2})-(\d)$/);
   if (archiveMatch) {
-    return { topicId: `archive:${archiveMatch[2]}-${archiveMatch[3]}`, label: `${archiveMatch[2]}-${archiveMatch[3]}` };
+    return {
+      topicId: `archive:${archiveMatch[2]}-${archiveMatch[3]}`,
+      label: `${archiveMatch[2]}-${archiveMatch[3]}`,
+    };
   }
   return null;
 }
@@ -252,7 +289,11 @@ function processEntry(
     const ownerGroup = group === 'episode' ? inferEpisodeOwnerGroup(ownerId) : 'agent';
     const ownerNodeId = `${ownerGroup}:${ownerId}`;
     if (!nodes.has(ownerNodeId)) {
-      nodes.set(ownerNodeId, { id: ownerNodeId, label: getOwnerLabel(ownerId, displayNames), group: ownerGroup });
+      nodes.set(ownerNodeId, {
+        id: ownerNodeId,
+        label: getOwnerLabel(ownerId, displayNames),
+        group: ownerGroup,
+      });
     }
     addEdge(edges, ownerNodeId, nodeId, 'authored');
     if (ownerGroup === 'agent') {
@@ -281,8 +322,12 @@ function processSkill(
 ): void {
   const rawId = typeof item.id === 'string' ? item.id : `skill-${cryptoRandomId()}`;
   const skillNodeId = `agent_skill:${rawId}`;
-  const sourceCaseIds = ((item.source_case_ids as string[]) ?? []).filter((id): id is string => typeof id === 'string');
-  const sourceProjects = new Set(sourceCaseIds.map((id) => caseProjects.get(id)).filter((p): p is string => !!p));
+  const sourceCaseIds = ((item.source_case_ids as string[]) ?? []).filter(
+    (id): id is string => typeof id === 'string'
+  );
+  const sourceProjects = new Set(
+    sourceCaseIds.map(id => caseProjects.get(id)).filter((p): p is string => !!p)
+  );
   const isSystem = sourceProjects.size >= 2;
   const parentId = isSystem ? 'system' : projectNodeId;
 
@@ -304,7 +349,11 @@ function processSkill(
   if (agentId) {
     const agentNodeId = `agent:${agentId}`;
     if (!nodes.has(agentNodeId)) {
-      nodes.set(agentNodeId, { id: agentNodeId, label: getOwnerLabel(agentId, displayNames), group: 'agent' });
+      nodes.set(agentNodeId, {
+        id: agentNodeId,
+        label: getOwnerLabel(agentId, displayNames),
+        group: 'agent',
+      });
     }
     addEdge(edges, agentNodeId, skillNodeId, 'authored');
   }
@@ -341,7 +390,11 @@ function processProfile(
   profileProjects.get(userId)?.add(projectId);
 
   if (!nodes.has(ownerNodeId)) {
-    nodes.set(ownerNodeId, { id: ownerNodeId, label: getOwnerLabel(userId, displayNames), group: ownerGroup });
+    nodes.set(ownerNodeId, {
+      id: ownerNodeId,
+      label: getOwnerLabel(userId, displayNames),
+      group: ownerGroup,
+    });
   }
   addEdge(edges, ownerNodeId, profileNodeId, 'has_profile');
 }
@@ -369,7 +422,7 @@ function addRelatedSkillEdges(
     for (let j = i + 1; j < skills.length; j++) {
       const [idA, casesA] = skills[i];
       const [idB, casesB] = skills[j];
-      const overlap = [...casesA].some((id) => casesB.has(id));
+      const overlap = [...casesA].some(id => casesB.has(id));
       if (overlap) {
         addEdge(edges, idA, idB, 'related_skill');
       }
@@ -388,7 +441,7 @@ function addProjectShareEdges(
       const pidB = projectIds[j];
       const usersA = projectUsers.get(pidA) ?? new Set();
       const usersB = projectUsers.get(pidB) ?? new Set();
-      const sharedUser = [...usersA].some((u) => usersB.has(u));
+      const sharedUser = [...usersA].some(u => usersB.has(u));
       if (sharedUser) {
         addEdge(edges, `project:${pidA}`, `project:${pidB}`, 'shares');
       }
@@ -396,14 +449,11 @@ function addProjectShareEdges(
   }
 }
 
-function buildStats(
-  nodes: MemoryGraphNode[],
-  edges: MemoryGraphEdge[]
-): MemoryGraphStats {
+function buildStats(nodes: MemoryGraphNode[], edges: MemoryGraphEdge[]): MemoryGraphStats {
   const memoryGroups = ['episode', 'agent_case', 'agent_skill', 'profile'] as const;
   let totalMemories = 0;
   for (const node of nodes) {
-    if (memoryGroups.some((group) => group === node.group)) totalMemories++;
+    if (memoryGroups.some(group => group === node.group)) totalMemories++;
   }
 
   // 与日历时间线使用同一批已去重节点，避免同一 session 下的多条记忆被压成一条
@@ -419,7 +469,7 @@ function buildStats(
     totalNodes: nodes.length,
     totalEdges: edges.length,
     totalMemories,
-    projectCount: nodes.filter((n) => n.group === 'project').length,
+    projectCount: nodes.filter(n => n.group === 'project').length,
     activeDays: dailyMap.size,
     dailyGrowth,
   };
@@ -466,5 +516,7 @@ function stableHash(str: string): string {
     h1 = Math.imul(h1 ^ ch, 2654435761);
     h2 = Math.imul(h2 ^ ch, 1597334677);
   }
-  return ((h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0')).slice(0, 16);
+  return (
+    (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0')
+  ).slice(0, 16);
 }

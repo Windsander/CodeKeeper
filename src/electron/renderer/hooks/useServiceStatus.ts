@@ -1,5 +1,9 @@
 import { useIpc } from './useIpc';
-import type { DaemonStatus, LocalModelStatus, RemoteModelStatus } from '../../shared/service-status';
+import type {
+  DaemonStatus,
+  LocalModelStatus,
+  RemoteModelStatus,
+} from '../../shared/service-status';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -36,7 +40,9 @@ export function useServiceStatus(): ServiceStatusResult {
     loading: remoteModelLoading,
     error: remoteModelError,
     refresh: refreshRemoteModel,
-  } = useIpc<RemoteModelStatus>('remoteModel.status', undefined, { pollInterval: POLL_INTERVAL_MS });
+  } = useIpc<RemoteModelStatus>('remoteModel.status', undefined, {
+    pollInterval: POLL_INTERVAL_MS,
+  });
 
   return {
     daemon: daemon ?? null,

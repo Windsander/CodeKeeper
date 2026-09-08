@@ -54,7 +54,9 @@ describe('classifyCommitFailure', () => {
   });
 
   it('非快进 push 归类为 push', () => {
-    expect(classifyCommitFailure('! [rejected] feature -> feature (non-fast-forward)')).toBe('push');
+    expect(classifyCommitFailure('! [rejected] feature -> feature (non-fast-forward)')).toBe(
+      'push'
+    );
   });
 
   it('无法识别归类为 unknown', () => {

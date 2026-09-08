@@ -130,7 +130,7 @@ function isImportOrRequire(line: string): boolean {
   return (
     trimmed.startsWith('import ') ||
     trimmed.startsWith('require(') ||
-    trimmed.startsWith('const ') && trimmed.includes(' = require(')
+    (trimmed.startsWith('const ') && trimmed.includes(' = require('))
   );
 }
 

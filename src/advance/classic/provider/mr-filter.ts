@@ -18,10 +18,10 @@ export function matchesFilter(mr: MergeRequest, filter?: MrReviewFilter): boolea
   if (!filter || filter.conditions.length === 0) return true;
 
   for (const condition of filter.conditions) {
-    const values = condition.values.filter((v) => v.trim() !== '');
+    const values = condition.values.filter(v => v.trim() !== '');
     if (values.length === 0) continue;
 
-    const matched = values.some((value) => matchesCondition(mr, condition.field, value));
+    const matched = values.some(value => matchesCondition(mr, condition.field, value));
     if (!matched) return false;
   }
 

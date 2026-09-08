@@ -21,13 +21,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     window.electronAPI
       .invoke('theme.get')
-      .then((saved) => {
+      .then(saved => {
         if (cancelled) return;
         const next = saved === 'light' ? 'light' : 'dark';
         setTheme(next);
         document.documentElement.dataset.theme = next;
       })
-      .catch((err) => {
+      .catch(err => {
         if (cancelled) return;
         console.warn('读取主题配置失败，使用默认暗色主题', err);
         document.documentElement.dataset.theme = 'dark';
@@ -41,10 +41,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => {
+    setTheme(prev => {
       const next = prev === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = next;
-      window.electronAPI.invoke('theme.set', { theme: next }).catch((err) => {
+      window.electronAPI.invoke('theme.set', { theme: next }).catch(err => {
         console.warn('保存主题配置失败', err);
       });
       return next;

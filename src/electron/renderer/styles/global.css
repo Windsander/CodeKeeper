@@ -3322,7 +3322,10 @@ select.input:focus {
   color: var(--text-primary);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
 }
 
 .archiver-v2-strategy-card:hover,

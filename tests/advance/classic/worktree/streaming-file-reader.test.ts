@@ -32,11 +32,7 @@ describe('StreamingFileReader', () => {
   });
 
   it('readImports 只返回顶部 import 区', async () => {
-    writeFileSync(
-      tempFile,
-      "import { foo } from './foo';\n\nconst x = 1;\n",
-      'utf-8'
-    );
+    writeFileSync(tempFile, "import { foo } from './foo';\n\nconst x = 1;\n", 'utf-8');
     const imports = await readImports(tempFile);
     expect(imports).toContain("import { foo } from './foo';");
     expect(imports).not.toContain('const x');

@@ -35,7 +35,8 @@ export function buildProjectStatus(params: {
   organizedCount: number;
   flaggedCount: number;
 }): ProjectStatus {
-  const total = params.pendingCount + params.archivedCount + params.ignoredCount + params.orphanedCount;
+  const total =
+    params.pendingCount + params.archivedCount + params.ignoredCount + params.orphanedCount;
   const resolved = params.archivedCount + params.ignoredCount + params.orphanedCount;
   const healthScore = total === 0 ? 1 : Math.round((resolved / total) * 100) / 100;
   return {

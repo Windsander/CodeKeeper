@@ -32,9 +32,9 @@ function createMockWorktreeManager(overrides: Partial<WorktreeManager> = {}): Wo
     readFileRange: vi.fn().mockResolvedValue('range-content'),
     getFileOverview: vi.fn().mockResolvedValue({ lineCount: 100, symbols: [] }),
     searchInFile: vi.fn().mockResolvedValue([{ startLine: 5, endLine: 5 }]),
-    searchWorkspace: vi.fn().mockResolvedValue([
-      { file: 'src/facade.ts', line: 30, content: 'facade.dispose();' },
-    ]),
+    searchWorkspace: vi
+      .fn()
+      .mockResolvedValue([{ file: 'src/facade.ts', line: 30, content: 'facade.dispose();' }]),
     writeFile: vi.fn().mockReturnValue(undefined),
     removeFile: vi.fn().mockResolvedValue(undefined),
     applyPatch: vi.fn().mockResolvedValue(true),
@@ -50,7 +50,11 @@ describe('ToolExecutor', () => {
     const worktree = createMockWorktreeManager();
     const executor = new ToolExecutor({ worktreeManager: worktree });
 
-    const result = await executor.execute({ id: '1', name: 'read_file', input: { relPath: 'src/index.ts' } });
+    const result = await executor.execute({
+      id: '1',
+      name: 'read_file',
+      input: { relPath: 'src/index.ts' },
+    });
 
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
@@ -325,7 +329,9 @@ describe('ToolExecutor', () => {
   it('validate 失败时超长输出落盘并保留尾部摘要', async () => {
     const errorReason = '前面很多行\n'.repeat(700) + '最后的 lint 错误';
     const worktree = createMockWorktreeManager({
-      validate: vi.fn().mockResolvedValue({ lint: false, typecheck: true, lintReason: errorReason }),
+      validate: vi
+        .fn()
+        .mockResolvedValue({ lint: false, typecheck: true, lintReason: errorReason }),
     });
     const executor = new ToolExecutor({ worktreeManager: worktree });
 
@@ -344,7 +350,11 @@ describe('ToolExecutor', () => {
     });
     const executor = new ToolExecutor({ worktreeManager: worktree, allowedScripts: ['build'] });
 
-    const result = await executor.execute({ id: '1', name: 'run_script', input: { script: 'build' } });
+    const result = await executor.execute({
+      id: '1',
+      name: 'run_script',
+      input: { script: 'build' },
+    });
 
     const parsed = JSON.parse(result.content);
     expect(parsed.success).toBe(true);
@@ -378,7 +388,11 @@ describe('ToolExecutor', () => {
     });
     const executor = new ToolExecutor({ worktreeManager: worktree, allowedScripts: ['build'] });
 
-    const runResult = await executor.execute({ id: '1', name: 'run_script', input: { script: 'build' } });
+    const runResult = await executor.execute({
+      id: '1',
+      name: 'run_script',
+      input: { script: 'build' },
+    });
     const runParsed = JSON.parse(runResult.content);
     const outputFile = runParsed.data.outputFile;
 
@@ -399,7 +413,11 @@ describe('ToolExecutor', () => {
     });
     const executor = new ToolExecutor({ worktreeManager: worktree, allowedScripts: ['build'] });
 
-    const runResult = await executor.execute({ id: '1', name: 'run_script', input: { script: 'build' } });
+    const runResult = await executor.execute({
+      id: '1',
+      name: 'run_script',
+      input: { script: 'build' },
+    });
     const runParsed = JSON.parse(runResult.content);
     const outputFile = runParsed.data.outputFile;
 

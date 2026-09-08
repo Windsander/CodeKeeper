@@ -24,7 +24,7 @@ export async function detectGitInfo(projectRoot: string): Promise<GitInfo> {
   let remoteUrl: string | undefined;
   try {
     const remotes = await git.getRemotes(true);
-    const origin = remotes.find((r) => r.name === 'origin');
+    const origin = remotes.find(r => r.name === 'origin');
     remoteUrl = origin?.refs.fetch ?? origin?.refs.push;
   } catch {
     // 无法读取 remote 时继续返回空分支列表

@@ -9,7 +9,17 @@ describe('Dashboard', () => {
   beforeEach(() => {
     window.electronAPI = {
       invoke: vi.fn().mockResolvedValue([
-        { id: 'p1', name: 'proj', rootPath: '/tmp', healthScore: 0.8, pending: 1, archived: 2, ignored: 0, suggestion: 1, lastScannedAt: null },
+        {
+          id: 'p1',
+          name: 'proj',
+          rootPath: '/tmp',
+          healthScore: 0.8,
+          pending: 1,
+          archived: 2,
+          ignored: 0,
+          suggestion: 1,
+          lastScannedAt: null,
+        },
       ]),
       onPush: vi.fn().mockReturnValue(() => {}),
       openExternal: vi.fn(),

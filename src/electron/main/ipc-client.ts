@@ -21,8 +21,8 @@ export class ElectronIpcClient {
       this.socket = createConnection(getIpcSocketPath(), () => {
         resolve();
       });
-      this.socket.on('data', (data) => this.handleData(data));
-      this.socket.on('error', (err) => {
+      this.socket.on('data', data => this.handleData(data));
+      this.socket.on('error', err => {
         // 连接阶段的错误交给 connect Promise
         if (!this.isConnected()) {
           reject(err);

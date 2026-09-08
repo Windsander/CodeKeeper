@@ -43,7 +43,11 @@ export function extractJsonText(text: string): string {
   return trimmed;
 }
 
-function findBalancedRange(text: string, openChar: string, closeChar: string): { start: number; end: number } | null {
+function findBalancedRange(
+  text: string,
+  openChar: string,
+  closeChar: string
+): { start: number; end: number } | null {
   const start = text.indexOf(openChar);
   if (start === -1) return null;
 

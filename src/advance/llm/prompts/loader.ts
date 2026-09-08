@@ -63,11 +63,7 @@ export class FilePromptLoader implements PromptLoader {
     return join(dirname(__dirname), '..', '..', 'assets', 'prompts');
   }
 
-  private resolve(
-    raw: string,
-    variables: Record<string, string>,
-    resolving: Set<string>
-  ): string {
+  private resolve(raw: string, variables: Record<string, string>, resolving: Set<string>): string {
     // 先处理 include，再处理变量，避免变量值里出现 include 被误解析
     let result = this.resolveIncludes(raw, variables, resolving);
     result = this.substituteVariables(result, variables);
@@ -83,7 +79,9 @@ export class FilePromptLoader implements PromptLoader {
     return raw.replace(includePattern, (_match, includeName: string) => {
       const normalized = this.normalizeName(includeName.trim());
       if (resolving.has(normalized)) {
-        throw new Error(`Prompt include 循环引用: ${Array.from(resolving).join(' -> ')} -> ${normalized}`);
+        throw new Error(
+          `Prompt include 循环引用: ${Array.from(resolving).join(' -> ')} -> ${normalized}`
+        );
       }
       const content = this.registry.get(normalized) ?? this.readFromDisk(normalized);
       const nextResolving = new Set(resolving);

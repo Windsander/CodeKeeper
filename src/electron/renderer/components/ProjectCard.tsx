@@ -24,13 +24,13 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
     <div>
       <h3>{project.name}</h3>
       <div className="project-path">{project.rootPath}</div>
-      {project.archiveRoot && (
-        <div className="project-meta">归档位置: {project.archiveRoot}</div>
-      )}
+      {project.archiveRoot && <div className="project-meta">归档位置: {project.archiveRoot}</div>}
       <div className="project-stats">
         <div className="project-stat">
           <div className="project-stat-label">健康度</div>
-          <div className="project-stat-value"><span className={badgeClass}>{healthPercent}%</span></div>
+          <div className="project-stat-value">
+            <span className={badgeClass}>{healthPercent}%</span>
+          </div>
         </div>
         <div className="project-stat">
           <div className="project-stat-label">已复制</div>
@@ -46,7 +46,9 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
         </div>
       </div>
       <div className="project-meta">
-        待处理: {project.pending} · 已归档: {project.archived} · 已忽略: {project.ignored} · 已孤儿: {project.orphaned} · 最后扫描: {project.lastScannedAt ? new Date(project.lastScannedAt).toLocaleString() : '从未'}
+        待处理: {project.pending} · 已归档: {project.archived} · 已忽略: {project.ignored} · 已孤儿:{' '}
+        {project.orphaned} · 最后扫描:{' '}
+        {project.lastScannedAt ? new Date(project.lastScannedAt).toLocaleString() : '从未'}
       </div>
     </div>
   );

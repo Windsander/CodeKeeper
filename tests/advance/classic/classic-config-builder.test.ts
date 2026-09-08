@@ -3,9 +3,7 @@ import {
   buildMrAgentEnv,
   type MrAgentEnv,
 } from '../../../src/advance/classic/classic-config-builder';
-import {
-  loadConfigFromEnv,
-} from '../../../src/advance/classic/agent-entries/role-entry';
+import { loadConfigFromEnv } from '../../../src/advance/classic/agent-entries/role-entry';
 import type { Project } from '../../../src/advance/types';
 
 /**
@@ -239,9 +237,7 @@ describe('loadConfigFromEnv', () => {
   });
 
   it('缺少必要环境变量时应抛出错误', () => {
-    expect(() => loadConfigFromEnv({})).toThrow(
-      '缺少必要的环境变量'
-    );
+    expect(() => loadConfigFromEnv({})).toThrow('缺少必要的环境变量');
   });
 
   it('CK_LLM_HEADERS 缺失时应默认使用空对象 JSON', () => {
@@ -278,8 +274,6 @@ describe('loadConfigFromEnv', () => {
       CK_PROJECTS_JSON: '不是 json',
     };
 
-    expect(() => loadConfigFromEnv(env)).toThrow(
-      'CK_PROJECTS_JSON 解析失败'
-    );
+    expect(() => loadConfigFromEnv(env)).toThrow('CK_PROJECTS_JSON 解析失败');
   });
 });

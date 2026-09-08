@@ -12,7 +12,11 @@ function getTestSocketPath(tmp: string): string {
   return join(tmp, 'test.sock');
 }
 
-function sendAndReceive(socketPath: string, msg: object | string, timeoutMs = 5000): Promise<string> {
+function sendAndReceive(
+  socketPath: string,
+  msg: object | string,
+  timeoutMs = 5000
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const client = createConnection(socketPath, () => {
       const line = typeof msg === 'string' ? msg : JSON.stringify(msg);
@@ -33,7 +37,7 @@ function sendAndReceive(socketPath: string, msg: object | string, timeoutMs = 50
       reject(new Error(`sendAndReceive 超时（${timeoutMs}ms）`));
     }, timeoutMs);
 
-    client.on('data', (data) => {
+    client.on('data', data => {
       buffer += data.toString();
       const idx = buffer.indexOf('\n');
       if (idx !== -1 && !resolved) {
@@ -43,7 +47,7 @@ function sendAndReceive(socketPath: string, msg: object | string, timeoutMs = 50
         client.destroy();
       }
     });
-    client.on('error', (err) => {
+    client.on('error', err => {
       if (!resolved) {
         resolved = true;
         clearTimeout(timer);
@@ -83,7 +87,11 @@ describe('IpcServer', () => {
 
   it('应响应 echo 请求', async () => {
     await server.start();
-    const res = await sendAndReceive(socketPath, { id: '1', method: 'echo', params: { hello: 'world' } });
+    const res = await sendAndReceive(socketPath, {
+      id: '1',
+      method: 'echo',
+      params: { hello: 'world' },
+    });
     const parsed = JSON.parse(res);
     expect(parsed.id).toBe('1');
     expect(parsed.result).toEqual({ hello: 'world' });
@@ -112,15 +120,15 @@ describe('IpcServer', () => {
 
     // 等待两个客户端都连接成功，并给 server 一点时间来记录 socket
     await Promise.all([
-      new Promise<void>((resolve) => client1.on('connect', resolve)),
-      new Promise<void>((resolve) => client2.on('connect', resolve)),
+      new Promise<void>(resolve => client1.on('connect', resolve)),
+      new Promise<void>(resolve => client2.on('connect', resolve)),
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     const recv1 = new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('client1 超时')), 3000);
       let buf = '';
-      client1.on('data', (data) => {
+      client1.on('data', data => {
         buf += data.toString();
         if (buf.includes('\n')) {
           clearTimeout(timer);
@@ -132,7 +140,7 @@ describe('IpcServer', () => {
     const recv2 = new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('client2 超时')), 3000);
       let buf = '';
-      client2.on('data', (data) => {
+      client2.on('data', data => {
         buf += data.toString();
         if (buf.includes('\n')) {
           clearTimeout(timer);
@@ -165,7 +173,7 @@ describe('IpcServer', () => {
       });
       let buf = '';
       let count = 0;
-      client.on('data', (data) => {
+      client.on('data', data => {
         buf += data.toString();
         let idx;
         while ((idx = buf.indexOf('\n')) !== -1) {
@@ -208,7 +216,7 @@ describe('IpcServer', () => {
       });
       let buf = '';
       let count = 0;
-      client.on('data', (data) => {
+      client.on('data', data => {
         buf += data.toString();
         let idx;
         while ((idx = buf.indexOf('\n')) !== -1) {

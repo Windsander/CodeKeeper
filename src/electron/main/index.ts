@@ -22,7 +22,7 @@ async function connectWithRetry(maxAttempts = 30, intervalMs = 1000): Promise<vo
         console.warn('未能连接到守护进程，部分功能不可用');
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
     }
   }
 }
@@ -72,24 +72,38 @@ app.whenReady().then(async () => {
     return { success: true };
   });
 
-  ipcMain.handle('show-open-dialog', async (_event, options: {
-    title?: string;
-    defaultPath?: string;
-    properties?: string[];
-  }) => {
-    const win = BrowserWindow.getFocusedWindow();
-    const dialogOptions = {
-      title: options.title,
-      defaultPath: options.defaultPath,
-      properties: (options.properties ?? ['openDirectory']) as Array<
-        'openFile' | 'openDirectory' | 'multiSelections' | 'showHiddenFiles' | 'createDirectory' | 'promptToCreate' | 'noResolveAliases' | 'treatPackageAsDirectory' | 'dontAddToRecent'
-      >,
-    };
-    const result = win
-      ? await dialog.showOpenDialog(win, dialogOptions)
-      : await dialog.showOpenDialog(dialogOptions);
-    return result;
-  });
+  ipcMain.handle(
+    'show-open-dialog',
+    async (
+      _event,
+      options: {
+        title?: string;
+        defaultPath?: string;
+        properties?: string[];
+      }
+    ) => {
+      const win = BrowserWindow.getFocusedWindow();
+      const dialogOptions = {
+        title: options.title,
+        defaultPath: options.defaultPath,
+        properties: (options.properties ?? ['openDirectory']) as Array<
+          | 'openFile'
+          | 'openDirectory'
+          | 'multiSelections'
+          | 'showHiddenFiles'
+          | 'createDirectory'
+          | 'promptToCreate'
+          | 'noResolveAliases'
+          | 'treatPackageAsDirectory'
+          | 'dontAddToRecent'
+        >,
+      };
+      const result = win
+        ? await dialog.showOpenDialog(win, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      return result;
+    }
+  );
 
   ipcMain.handle('window-minimize', () => {
     const win = BrowserWindow.getFocusedWindow();

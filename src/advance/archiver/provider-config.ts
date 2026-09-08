@@ -66,10 +66,7 @@ export function normalizeArchiverProviderStrategy(value: unknown): ArchiverProvi
     raw.synthesis && typeof raw.synthesis === 'object'
       ? (raw.synthesis as Record<string, unknown>)
       : undefined;
-  const synthesisProvider = normalizeText(
-    synthesisRaw?.provider,
-    defaults.synthesis.provider
-  );
+  const synthesisProvider = normalizeText(synthesisRaw?.provider, defaults.synthesis.provider);
   const sources = normalizeProviderIds(raw.sources).filter(id => id !== synthesisProvider);
   const sourceSet = new Set(sources);
   const augmenters = normalizeProviderIds(raw.augmenters).filter(
@@ -113,8 +110,7 @@ export function toArchiverProviderExecutionStrategy(
     fallbacks: sources.slice(1),
     enrichers,
     builtinFallback:
-      synthesisProvider === BUILTIN_ARCHIVER_PROVIDER_ID &&
-      knowledge.synthesis.policy !== 'off',
+      synthesisProvider === BUILTIN_ARCHIVER_PROVIDER_ID && knowledge.synthesis.policy !== 'off',
     overrides: {},
   };
 }
@@ -144,11 +140,8 @@ export function normalizeArchiverConfig(value: unknown): ArchiverConfig {
       enabled:
         typeof automation.enabled === 'boolean'
           ? automation.enabled
-          : legacyEnabled ?? defaults.automation.enabled,
-      cron: normalizeText(
-        automation.cron,
-        normalizeText(legacyCron, defaults.automation.cron)
-      ),
+          : (legacyEnabled ?? defaults.automation.enabled),
+      cron: normalizeText(automation.cron, normalizeText(legacyCron, defaults.automation.cron)),
     },
   };
 }

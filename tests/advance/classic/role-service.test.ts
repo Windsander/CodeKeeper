@@ -10,8 +10,16 @@ describe('RoleServiceRegistry', () => {
     const registry = new RoleServiceRegistry(mockContext, 'virtual-runner.js');
     registry.register('reviewer');
     registry.register('maintainer');
-    expect(registry.getStatus('reviewer')).toEqual({ running: false, enabledProjects: 0, runningProjects: [] });
-    expect(registry.getStatus('maintainer')).toEqual({ running: false, enabledProjects: 0, runningProjects: [] });
+    expect(registry.getStatus('reviewer')).toEqual({
+      running: false,
+      enabledProjects: 0,
+      runningProjects: [],
+    });
+    expect(registry.getStatus('maintainer')).toEqual({
+      running: false,
+      enabledProjects: 0,
+      runningProjects: [],
+    });
   });
 
   it('setMemoryMcpUrl 会回传给已创建的服务实例', () => {

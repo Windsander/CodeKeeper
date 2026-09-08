@@ -41,7 +41,7 @@ export function buildMrAgentEnv(
     headers: string;
   }
 ): MrAgentEnv {
-  const mrProjects = projects.filter((p) => p.mrReview?.enabled && p.gitlab);
+  const mrProjects = projects.filter(p => p.mrReview?.enabled && p.gitlab);
   return {
     CK_LLM_API_KEY: daemonConfig.apiKey,
     CK_LLM_PROVIDER: daemonConfig.provider,

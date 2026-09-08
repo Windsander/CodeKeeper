@@ -130,9 +130,9 @@ describe('CodeGraphService', () => {
 
   it('没有 Server 地址时只保留内置安全回退', () => {
     const coordinator = createArchiverProviderCoordinator('');
-    expect((coordinator as { listProviders(): ArchiverProviderDescriptor[] }).listProviders()).toEqual([
-      expect.objectContaining({ id: 'builtin' }),
-    ]);
+    expect(
+      (coordinator as { listProviders(): ArchiverProviderDescriptor[] }).listProviders()
+    ).toEqual([expect.objectContaining({ id: 'builtin' })]);
   });
 
   it('通过单一 HTTP Server 为角色进程转发同步与查询', async () => {
@@ -162,13 +162,7 @@ describe('CodeGraphService', () => {
         { query: '依赖关系', role: 'reviewer', limit: 3 }
       )
     ).resolves.toEqual(['统一查询结果']);
-    await client.finalizeBuiltin(
-      project,
-      'virtual-client-archive',
-      report,
-      true,
-      '内置提炼完成'
-    );
+    await client.finalizeBuiltin(project, 'virtual-client-archive', report, true, '内置提炼完成');
 
     expect(backend.syncProject).toHaveBeenCalledWith(project, 'virtual-archive', strategy);
     expect(backend.finalizeBuiltin).toHaveBeenCalledWith(

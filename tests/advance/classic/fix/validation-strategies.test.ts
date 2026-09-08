@@ -68,7 +68,11 @@ describe('ErrorDeltaValidationStrategy', () => {
         typecheckReason: 'error TS123',
       }),
     } as unknown as WorktreeManager;
-    const baseline = await strategy.evaluate({ worktreeManager, appliedFiles: [], deletedFiles: [] });
+    const baseline = await strategy.evaluate({
+      worktreeManager,
+      appliedFiles: [],
+      deletedFiles: [],
+    });
     const result = await strategy.evaluate({
       worktreeManager,
       appliedFiles: ['src/a.ts'],
@@ -88,7 +92,11 @@ describe('ErrorDeltaValidationStrategy', () => {
         typecheckReason: 'error TS123',
       }),
     } as unknown as WorktreeManager;
-    const baseline = await strategy.evaluate({ worktreeManager, appliedFiles: [], deletedFiles: [] });
+    const baseline = await strategy.evaluate({
+      worktreeManager,
+      appliedFiles: [],
+      deletedFiles: [],
+    });
     const result = await strategy.evaluate({
       worktreeManager,
       appliedFiles: ['src/a.ts'],

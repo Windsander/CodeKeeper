@@ -10,7 +10,8 @@ describe('ProjectDetail', () => {
       invoke: vi.fn((method: string) => {
         if (method === 'project.context') return Promise.resolve({ content: '# Context' });
         if (method === 'project.suggestions') return Promise.resolve({ content: '建议' });
-        if (method === 'project.status') return Promise.resolve({ schemaVersion: 1, projectId: 'p1' });
+        if (method === 'project.status')
+          return Promise.resolve({ schemaVersion: 1, projectId: 'p1' });
         return Promise.resolve({});
       }),
       onPush: vi.fn().mockReturnValue(() => {}),
