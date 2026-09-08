@@ -23,7 +23,8 @@ import {
 } from '../classic/status/project-status-store.js';
 import type { ScanService } from '../scan/scan-service.js';
 import type { IGitProvider } from '../classic/provider/types.js';
-import type { RoleServiceRegistry } from '../classic/role-service-registry.js';
+import type { PipelineScheduler } from '../pipeline/pipeline-scheduler.js';
+import { regeneratePipelineDefinitionIfGenerated } from '../pipeline/default-pipeline.js';
 import type { LocalModelServiceManager } from '../classic/memory/local-model-service.js';
 import type { ModelCapability } from '../classic/memory/model-server.js';
 import { ReviewerManager } from '../classic/roles/reviewer-manager.js';
@@ -69,7 +70,7 @@ import type { RemoteModelChecker } from '../classic/memory/remote-model-checker.
 export interface HandlerContext {
   store: MetadataStore;
   registry: ProjectRegistry;
-  serviceRegistry: RoleServiceRegistry;
+  serviceRegistry: PipelineScheduler;
   /** 数据库文件路径，供子进程独立打开 metadata store */
   dbPath: string;
   scanService?: ScanService;
@@ -122,6 +123,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.register': async (ctx, params) => {
     const project = ctx.registry.register(params.rootPath, params.archiveRoot);
     ctx.watchProject?.(project);
+    // 新项目接入管线调度（角色启用后立即可被触发）
+    ctx.serviceRegistry?.reloadProject(project.id);
     // 全量扫描在独立 worker 中异步执行，不阻塞注册返回，也不阻塞 daemon IPC
     if (ctx.scanService) {
       try {
@@ -158,6 +161,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
 
   'project.unregister': async (ctx, params) => {
     ctx.unwatchProject?.(params.projectId);
+    // 先摘除管线触发器并终止节点实例，再注销
+    ctx.serviceRegistry?.unloadProject(params.projectId);
     ctx.registry.unregister(params.projectId);
     return { success: true };
   },
@@ -879,7 +884,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     }
     const manager = createRoleManager(role, ctx.store);
     await manager.updateConfig(projectId, config);
-    // 触发服务重启由后续 task 补齐
+    // 角色配置变更：若管线正本仍是自动生成件则同步重建，随后重排调度并重启节点实例
+    const project = ctx.store.getProject(projectId);
+    if (project) {
+      regeneratePipelineDefinitionIfGenerated(project);
+    }
+    ctx.serviceRegistry?.reloadProject(projectId);
     return { success: true };
   },
 
@@ -932,7 +942,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'role.service.restart': async (ctx, params) => {
     const { role, projectId } = params as { role: Role; projectId?: string };
     if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
-    await ctx.serviceRegistry.restartProject(role, projectId ?? '');
+    if (projectId) {
+      await ctx.serviceRegistry.restartProject(role, projectId);
+    } else {
+      // 未指定项目：整角色重启（重建全部节点实例，获取最新进程环境）
+      await ctx.serviceRegistry.restartRole(role);
+    }
     return { success: true };
   },
 

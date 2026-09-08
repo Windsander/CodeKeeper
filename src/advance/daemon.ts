@@ -11,7 +11,7 @@ import { getIpcSocketPath } from './ipc/paths';
 import { handlers, type HandlerContext } from './ipc/handlers';
 import { logger } from './core/logger';
 import { LlmClient } from './llm/client';
-import { RoleServiceRegistry } from './classic/role-service-registry.js';
+import { PipelineScheduler } from './pipeline/pipeline-scheduler.js';
 import { ROLES } from './types.js';
 import { ScanService } from './scan/scan-service.js';
 import { GitLabProvider } from './classic/provider/gitlab-provider.js';
@@ -72,7 +72,7 @@ export class Daemon {
   private watcherInitImmediate: NodeJS.Immediate | null = null;
   private watcherTimeout: NodeJS.Timeout | null = null;
   private handlerContext: HandlerContext;
-  private serviceRegistry: RoleServiceRegistry;
+  private serviceRegistry: PipelineScheduler;
   private scanService: ScanService;
   private everosService: EverOSService | null = null;
   private everosMcpServer: EverOSMcpServer | null = null;
@@ -108,8 +108,8 @@ export class Daemon {
   private remoteModelCheckTimer: NodeJS.Timeout | null = null;
 
   constructor(private options: DaemonOptions) {
-    // 初始化角色服务注册表，注册所有支持的角色
-    this.serviceRegistry = new RoleServiceRegistry(
+    // 初始化管线调度器（兼容旧 RoleServiceRegistry 接口），注册所有支持的角色
+    this.serviceRegistry = new PipelineScheduler(
       // 先创建占位 context，等 scanService 初始化后再补全
       {} as HandlerContext,
       path.join(__dirname, 'classic', 'agent-entries', 'role-entry.js')
@@ -282,10 +282,8 @@ export class Daemon {
       clearTimeout(this.watcherTimeout);
       this.watcherTimeout = null;
     }
-    // 停止所有角色服务
-    for (const role of ROLES) {
-      await this.serviceRegistry.stop(role);
-    }
+    // 停止所有管线触发器与角色节点子进程
+    await this.serviceRegistry.stopAll();
     await this.codeGraphService.stop();
     this.scanService.stop();
     this.scanJob?.stop();

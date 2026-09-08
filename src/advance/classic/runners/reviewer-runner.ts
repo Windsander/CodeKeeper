@@ -73,10 +73,6 @@ export class ReviewerRunner extends BaseRoleRunner {
     return 'reviewer';
   }
 
-  protected getDefaultSchedule(): string {
-    return '*/10 * * * *';
-  }
-
   /**
    * 对单个项目执行 MR 评审轮询
    */

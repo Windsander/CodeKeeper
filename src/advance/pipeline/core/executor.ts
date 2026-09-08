@@ -17,6 +17,12 @@ import type { PipelineRunRecord, PipelineRunStore } from './run-store.js';
 export interface ExecuteOptions {
   /** 运行关联的项目 id（可选，写入 run 记录） */
   projectId?: string;
+  /**
+   * 只执行从给定节点出发可达的子 DAG（含起点本身）。
+   * 用于多触发器管线：某个 trigger 触发时只运行其下游分支。
+   * 缺省执行整张图。
+   */
+  startFrom?: string[];
 }
 
 export class PipelineExecutor {
@@ -31,7 +37,7 @@ export class PipelineExecutor {
     ctx: RunContext,
     options: ExecuteOptions = {}
   ): Promise<PipelineRunRecord> {
-    const ordered = this.prepare(definition);
+    const ordered = this.prepare(definition, options.startFrom);
     const runId =
       this.store?.createRun(definition.id, definition, options.projectId) ?? 'ephemeral';
     ctx.vars = { ...ctx.vars, pipelineId: definition.id, runId };
@@ -55,8 +61,10 @@ export class PipelineExecutor {
   /**
    * 从最近成功节点续跑一个 failed/running 的 run。
    * 已成功节点不重跑，其落库产物继续供下游消费。
-   * 注意：续跑使用的是 run 创建时落库的定义快照，
-   * 对 pipeline.yaml 的后续修改不会影响进行中的 run。
+   * 注意：
+   * - 续跑使用的是 run 创建时落库的定义快照，对 pipeline.yaml 的后续修改不影响进行中的 run；
+   * - resume 按全图校验处理器，若原 run 是 startFrom 子图执行且其它分支处理器未注册，
+   *   需由调用方保证注册表覆盖全图（当前调度器不使用 resume，预留给后续里程碑）。
    */
   async resume(runId: string, ctx: RunContext): Promise<PipelineRunRecord> {
     if (!this.store) {
@@ -95,11 +103,18 @@ export class PipelineExecutor {
     return resumed;
   }
 
-  /** 结构校验 + 处理器存在性/端口声明校验 + 拓扑排序 */
-  private prepare(definition: PipelineDefinition): NodeDef[] {
+  /** 结构校验 + 处理器存在性/端口声明校验 + 拓扑排序（startFrom 时裁剪为下游子图） */
+  private prepare(definition: PipelineDefinition, startFrom?: string[]): NodeDef[] {
     validateGraph(definition);
+    // startFrom 时先裁剪：只校验并执行可达子图，允许图中存在本次不执行的、
+    // 处理器未注册的其它分支（如多角色管线中别的角色分支）
+    const ordered = topoSort(definition);
+    const scoped = startFrom
+      ? ordered.filter(node => collectReachable(definition, startFrom).has(node.id))
+      : ordered;
+
     const issues: string[] = [];
-    for (const node of definition.nodes) {
+    for (const node of scoped) {
       const handler = this.handlers.get(node.type);
       if (!handler) {
         issues.push(`节点 ${node.id} 的类型未注册处理器: ${node.type}`);
@@ -127,7 +142,7 @@ export class PipelineExecutor {
     if (issues.length > 0) {
       throw new PipelineDefinitionError('管线处理器校验失败', issues);
     }
-    return topoSort(definition);
+    return scoped;
   }
 
   private async executeNodes(
@@ -186,6 +201,31 @@ export class PipelineExecutor {
     }
     return inputs;
   }
+}
+
+/** 收集从起点集合出发可达的全部节点 id（含起点）；起点不存在时抛错。 */
+function collectReachable(definition: PipelineDefinition, startFrom: string[]): Set<string> {
+  const known = new Set(definition.nodes.map(node => node.id));
+  const downstream = new Map<string, string[]>();
+  for (const edge of definition.edges) {
+    downstream.set(edge.from.node, [...(downstream.get(edge.from.node) ?? []), edge.to.node]);
+  }
+
+  const reachable = new Set<string>();
+  const queue: string[] = [];
+  for (const id of startFrom) {
+    if (!known.has(id)) {
+      throw new PipelineDefinitionError(`startFrom 起点节点不存在: ${id}`);
+    }
+    queue.push(id);
+  }
+  while (queue.length > 0) {
+    const id = queue.shift();
+    if (id === undefined || reachable.has(id)) continue;
+    reachable.add(id);
+    queue.push(...(downstream.get(id) ?? []));
+  }
+  return reachable;
 }
 
 /** 无 store 时的临时运行记录（不持久化，仅返回执行结果） */

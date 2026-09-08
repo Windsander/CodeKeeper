@@ -111,10 +111,6 @@ export class ArchiverRunner extends BaseRoleRunner {
     return 'archiver';
   }
 
-  protected getDefaultSchedule(): string {
-    return '0 2 * * *';
-  }
-
   /**
    * Archiver 不需要 GitLab 配置，只要本地项目目录存在即可
    */

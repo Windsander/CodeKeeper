@@ -223,6 +223,50 @@ describe('PipelineExecutor', () => {
     expect(record.id).toBe('ephemeral');
   });
 
+  it('startFrom 只执行起点下游子图', async () => {
+    const calls: string[] = [];
+    const handlers = new Map<string, NodeHandler>([
+      handler('n', async (_ctx, _inputs, params) => {
+        calls.push(String(params.name));
+        return {};
+      }),
+    ]);
+    // t1 -> a；t2 -> b：从 t1 触发不应执行 t2/b
+    const def: PipelineDefinition = {
+      version: 1,
+      id: 'p',
+      nodes: [
+        { id: 't1', type: 'n', params: { name: 't1' } },
+        { id: 'a', type: 'n', params: { name: 'a' } },
+        { id: 't2', type: 'n', params: { name: 't2' } },
+        { id: 'b', type: 'n', params: { name: 'b' } },
+      ],
+      edges: [
+        { from: { node: 't1', port: 'o' }, to: { node: 'a', port: 'i' }, channel: 'memory' },
+        { from: { node: 't2', port: 'o' }, to: { node: 'b', port: 'i' }, channel: 'memory' },
+      ],
+    };
+
+    const record = await new PipelineExecutor(handlers, makeStore()).execute(def, makeCtx(), {
+      startFrom: ['t1'],
+    });
+    expect(record.status).toBe('succeeded');
+    expect(calls).toEqual(['t1', 'a']);
+  });
+
+  it('startFrom 起点不存在时报错', async () => {
+    const handlers = new Map<string, NodeHandler>([handler('n', async () => ({}))]);
+    const def: PipelineDefinition = {
+      version: 1,
+      id: 'p',
+      nodes: [{ id: 'a', type: 'n', params: {} }],
+      edges: [],
+    };
+    await expect(
+      new PipelineExecutor(handlers, makeStore()).execute(def, makeCtx(), { startFrom: ['ghost'] })
+    ).rejects.toThrow(/ghost/);
+  });
+
   it('abort signal 在节点间生效', async () => {
     const controller = new AbortController();
     const calls: string[] = [];

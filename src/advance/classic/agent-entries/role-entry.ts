@@ -1,5 +1,5 @@
 import { createRoleRunner } from '../runners/role-runner.js';
-import type { Role, Project } from '../../types.js';
+import type { Role } from '../../types.js';
 import { LlmClient } from '../../llm/client.js';
 import { MetadataStore } from '../../store/metadata-store.js';
 
@@ -8,6 +8,7 @@ import { MetadataStore } from '../../store/metadata-store.js';
  */
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv): {
   role: Role;
+  projectId: string;
   dbPath: string;
   llm: {
     apiKey: string;
@@ -17,9 +18,9 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): {
     headers: string;
     rpm: number;
   };
-  projects: Project[];
 } {
   const role = env.ROLE as Role;
+  const projectId = env.CK_PROJECT_ID ?? '';
   const dbPath = env.CK_DB_PATH ?? '';
   const apiKey = env.CK_LLM_API_KEY ?? '';
   const provider = env.CK_LLM_PROVIDER ?? '';
@@ -27,29 +28,28 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv): {
   const apiUrl = env.CK_LLM_API_URL ?? '';
   const headers = env.CK_LLM_HEADERS ?? '{}';
   const rpm = Number(env.CK_LLM_RPM ?? '10');
-  const projects = parseProjectsJson(env.CK_PROJECTS_JSON);
 
+  if (!role) {
+    throw new Error('缺少 ROLE 环境变量');
+  }
+  if (!projectId) {
+    throw new Error('缺少 CK_PROJECT_ID 环境变量');
+  }
+  if (!dbPath) {
+    throw new Error('缺少 CK_DB_PATH 环境变量');
+  }
   if (!apiKey || !provider || !model || !apiUrl) {
-    throw new Error('缺少必要的环境变量');
+    throw new Error(
+      '缺少必要的环境变量：CK_LLM_API_KEY, CK_LLM_PROVIDER, CK_LLM_MODEL, CK_LLM_API_URL'
+    );
   }
 
   return {
     role,
+    projectId,
     dbPath,
     llm: { apiKey, provider, model, apiUrl, headers, rpm },
-    projects,
   };
-}
-
-function parseProjectsJson(raw?: string): Project[] {
-  if (!raw || raw.trim() === '') return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as Project[];
-  } catch {
-    throw new Error('CK_PROJECTS_JSON 解析失败');
-  }
 }
 
 /**
@@ -61,30 +61,15 @@ function computeMinRequestInterval(rpm: number): number {
 }
 
 /**
- * 统一角色 Agent Entry
- * 作为独立子进程运行，周期性读取数据库中该角色的启用项目，
- * 动态启动/停止对应项目的 Agent 循环。
+ * Role 节点实例入口（子进程）。
+ *
+ * 一个进程只服务一个 (项目, 角色) 节点实例：启动时加载项目并构造 Runner，
+ * 之后等待父进程（RoleNodeRuntime）经 IPC 下发的 run 指令执行单次循环。
+ * 调度由 daemon 侧 PipelineScheduler（trigger.cron 节点）负责，本进程不再自持 cron。
  */
 async function main() {
   const config = loadConfigFromEnv(process.env);
-
-  console.log(`[Role Agent] 启动，ROLE=${config.role}`);
-  if (!config.role) {
-    throw new Error('缺少 ROLE 环境变量');
-  }
-  if (!config.dbPath) {
-    throw new Error('缺少 CK_DB_PATH 环境变量');
-  }
-
-  console.log(`[Role Agent] 数据库路径: ${config.dbPath}`);
-  console.log(
-    `[Role Agent] LLM 配置检查: provider=${config.llm.provider ? '有' : '无'}, model=${config.llm.model ? '有' : '无'}, apiUrl=${config.llm.apiUrl ? '有' : '无'}, apiKey=${config.llm.apiKey ? '有' : '无'}, rpm=${config.llm.rpm}`
-  );
-  if (!config.llm.apiKey || !config.llm.provider || !config.llm.model || !config.llm.apiUrl) {
-    throw new Error(
-      '[Role Agent] 缺少必要的环境变量：CK_LLM_API_KEY, CK_LLM_PROVIDER, CK_LLM_MODEL, CK_LLM_API_URL'
-    );
-  }
+  console.log(`[Role Node] 启动，ROLE=${config.role}，项目=${config.projectId}`);
 
   // 解析额外请求头（空字符串按空对象处理）
   let headers: Record<string, string> = {};
@@ -92,12 +77,11 @@ async function main() {
     try {
       headers = JSON.parse(config.llm.headers) as Record<string, string>;
     } catch {
-      console.warn('[Role Agent] CK_LLM_HEADERS 解析失败，使用空对象');
+      console.warn('[Role Node] CK_LLM_HEADERS 解析失败，使用空对象');
     }
   }
 
   const minRequestInterval = computeMinRequestInterval(config.llm.rpm);
-  console.log(`[Role Agent] LLM 最小请求间隔: ${minRequestInterval}ms`);
 
   const llmClient = new LlmClient({
     apiKey: config.llm.apiKey,
@@ -115,72 +99,46 @@ async function main() {
     codeGraphUrl: process.env.CK_CODEGRAPH_SERVER_URL,
   });
 
-  // 子进程独立打开数据库，周期性读取启用项目并同步 Agent 循环
   const store = new MetadataStore(config.dbPath);
+  const project = store.getProject(config.projectId);
+  if (!project) {
+    throw new Error(`[Role Node] 项目不存在: ${config.projectId}`);
+  }
 
-  const activeProjects = new Map<
-    string,
-    { project: { id: string; rootPath: string; name: string } }
-  >();
+  // 指令循环：等待父进程派发 run
+  process.on('message', message => {
+    if (!isRunMessage(message)) return;
+    runner
+      .runProjectOnce(project)
+      .then(() => {
+        process.send?.({ type: 'done' });
+      })
+      .catch(error => {
+        const text = error instanceof Error ? error.message : String(error);
+        console.error(`[Role Node] 单次执行失败: ${text}`);
+        process.send?.({ type: 'error', message: text });
+      });
+  });
 
-  let syncing = false;
+  // 就绪信号：父进程据此开始派发
+  process.send?.({ type: 'ready' });
+  console.log('[Role Node] 已就绪，等待触发指令');
 
-  const syncProjects = async () => {
-    if (syncing) return;
-    syncing = true;
-    try {
-      const enabledProjects = store.getRoleEnabledProjects(config.role);
-      const enabledIds = new Set(enabledProjects.map(p => p.id));
-
-      // 停止已禁用或已移除的项目
-      for (const [projectId, entry] of activeProjects) {
-        if (!enabledIds.has(projectId)) {
-          console.log(`[Role Agent] 项目 ${entry.project.name} 已禁用，停止循环`);
-          runner.stopProjectLoop(projectId);
-          activeProjects.delete(projectId);
-        }
-      }
-
-      // 启动新启用的项目
-      for (const project of enabledProjects) {
-        if (!activeProjects.has(project.id)) {
-          console.log(`[Role Agent] 项目 ${project.name} 已启用，启动循环`);
-          activeProjects.set(project.id, { project });
-          // 异步启动，避免阻塞本次同步
-          runner.startProjectLoop(project).catch(err => {
-            console.error(`[Role Agent] 项目 ${project.name} 启动循环失败:`, err);
-            activeProjects.delete(project.id);
-          });
-        }
-      }
-    } catch (err) {
-      console.error('[Role Agent] 同步启用项目失败:', err);
-    } finally {
-      syncing = false;
-    }
-  };
-
-  // 立即同步一次，然后每 10 秒轮询
-  await syncProjects();
-  const intervalId = setInterval(() => {
-    void syncProjects();
-  }, 10000);
-
-  console.log('[Role Agent] 监控服务已启动，每 10 秒检查一次项目启用状态');
-
-  // 优雅退出：收到信号后停止所有循环并关闭数据库
+  // 优雅退出
   const cleanup = () => {
-    console.log('[Role Agent] 收到退出信号，停止监控');
-    clearInterval(intervalId);
-    for (const [projectId] of activeProjects) {
-      runner.stopProjectLoop(projectId);
-    }
-    activeProjects.clear();
     store.close();
     process.exit(0);
   };
   process.on('SIGTERM', cleanup);
   process.on('SIGINT', cleanup);
+}
+
+function isRunMessage(message: unknown): boolean {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    (message as { type?: unknown }).type === 'run'
+  );
 }
 
 // 仅当直接运行时执行主函数（子进程入口）

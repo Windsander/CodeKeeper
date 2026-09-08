@@ -519,10 +519,6 @@ export class MaintainerRunner extends BaseRoleRunner {
     return 'maintainer';
   }
 
-  protected getDefaultSchedule(): string {
-    return '*/10 * * * *';
-  }
-
   /**
    * 对单个项目执行 MR 维护轮询
    */

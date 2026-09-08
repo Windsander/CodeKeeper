@@ -16,20 +16,17 @@ export interface ProjectConfig {
 
 /**
  * 角色 Runner 统一接口
- * 每个角色实现此接口以提供项目级循环逻辑
+ * 每个角色实现此接口以提供项目级单次执行逻辑
+ *
+ * 调度由 daemon 侧 PipelineScheduler（管线 trigger.cron 节点）负责，
+ * Runner 只响应"执行一次"。
  */
 export interface IRoleRunner {
   /**
-   * 启动指定项目的角色循环
+   * 执行指定项目的单次角色循环
    * @param project - 项目配置
    */
-  startProjectLoop(project: ProjectConfig): Promise<void>;
-
-  /**
-   * 停止指定项目的角色循环
-   * @param projectId - 项目唯一标识
-   */
-  stopProjectLoop(projectId: string): void;
+  runProjectOnce(project: ProjectConfig): Promise<void>;
 }
 
 export interface CreateRoleRunnerOptions {

@@ -1,15 +1,13 @@
-import { schedule, validate as validateCron } from 'node-cron';
 import { existsSync } from 'node:fs';
 import { LlmClient } from '../../llm/client.js';
 import type { Project, GitlabConfig, RoleConfig, Role } from '../../types.js';
-import { getArchiveRoot, getRoleConfigSchedule, isRoleConfigEnabled } from '../../types.js';
+import { getArchiveRoot, isRoleConfigEnabled } from '../../types.js';
 import { loadSoulContent, type SoulContent } from '../soul/soul-loader.js';
 import { loadProjectContext } from '../context/project-context-loader.js';
 import {
   recordProjectError,
   clearProjectError,
   recordProjectMissingToken,
-  recordAgentStarted,
 } from '../status/project-status-store.js';
 import type { ProjectConfig, IRoleRunner } from './role-runner.js';
 
@@ -22,17 +20,15 @@ export interface BaseRoleRunnerOptions {
  * 角色 Runner 抽象基类
  *
  * 统一约束所有角色 Runner 的公共生命周期：
- * - 启动/停止项目循环
- * - cron 调度
- * - 运行锁（前一次未完成则跳过）
+ * - 单次项目执行（runProjectOnce），含运行锁（重入跳过）
  * - GitLab Token / 本地目录预检查
  * - 项目错误状态记录
  *
- * 子类只需实现 runProject() 方法，专注于业务逻辑。
+ * 调度由 daemon 侧 PipelineScheduler 负责（管线 trigger.cron 节点），
+ * Runner 不再自持 cron 循环。
  */
 export abstract class BaseRoleRunner implements IRoleRunner {
   protected readonly llmClient: LlmClient;
-  private activeLoops = new Map<string, ReturnType<typeof schedule>>();
   private runningProjects = new Set<string>();
 
   constructor(options: BaseRoleRunnerOptions) {
@@ -45,71 +41,21 @@ export abstract class BaseRoleRunner implements IRoleRunner {
   protected abstract getRole(): Role;
 
   /**
-   * 默认的 cron 调度表达式
+   * 执行单次项目循环；若该项目前一次仍在运行则跳过（运行锁）
    */
-  protected abstract getDefaultSchedule(): string;
-
-  /**
-   * 启动指定项目的角色循环
-   */
-  async startProjectLoop(project: ProjectConfig): Promise<void> {
+  async runProjectOnce(project: ProjectConfig): Promise<void> {
     const fullProject = project as unknown as Project;
-    const config = this.getRoleConfig(fullProject);
-
-    if (!isRoleConfigEnabled(config)) {
-      console.log(`[${this.getRoleName()}] 项目 ${fullProject.name} 未启用，跳过`);
-      return;
-    }
-
-    const scheduleExpr = getRoleConfigSchedule(config)?.trim() || this.getDefaultSchedule();
-    if (!validateCron(scheduleExpr)) {
-      const message = `[${this.getRoleName()}] 项目 ${fullProject.name} 的 reviewSchedule "${scheduleExpr}" 不是合法的 cron 表达式`;
-      console.error(message);
-      recordProjectError(fullProject, new Error(message), 'unknown');
-      return;
-    }
-
-    recordAgentStarted(fullProject);
-
-    // 立即执行一次
-    await this.runOnce(fullProject);
-
-    // 按 schedule 定时执行，若前一次未完成则跳过
-    const job = schedule(scheduleExpr, () => {
-      void this.runOnce(fullProject);
-    });
-
-    this.activeLoops.set(fullProject.id, job);
-    console.log(`[${this.getRoleName()}] 项目 ${fullProject.name} 已启动定时循环: ${scheduleExpr}`);
-  }
-
-  /**
-   * 停止指定项目的角色循环
-   */
-  stopProjectLoop(projectId: string): void {
-    const job = this.activeLoops.get(projectId);
-    if (job) {
-      job.stop();
-      this.activeLoops.delete(projectId);
-      console.log(`[${this.getRoleName()}] 项目 ${projectId} 定时循环已停止`);
-    }
-  }
-
-  /**
-   * 执行单次循环；若前一次仍在运行则跳过
-   */
-  private async runOnce(project: Project): Promise<void> {
-    if (this.runningProjects.has(project.id)) {
+    if (this.runningProjects.has(fullProject.id)) {
       console.log(
-        `[${this.getRoleName()}] 项目 ${project.name} 的上一次循环尚未完成，跳过本次调度`
+        `[${this.getRoleName()}] 项目 ${fullProject.name} 的上一次循环尚未完成，跳过本次调度`
       );
       return;
     }
-    this.runningProjects.add(project.id);
+    this.runningProjects.add(fullProject.id);
     try {
-      await this.runProjectSafely(project);
+      await this.runProjectSafely(fullProject);
     } finally {
-      this.runningProjects.delete(project.id);
+      this.runningProjects.delete(fullProject.id);
     }
   }
 

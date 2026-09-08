@@ -35,6 +35,14 @@ export class MetadataStore {
     this.migrate();
   }
 
+  /**
+   * 暴露底层数据库句柄，供同进程的其他 store（如 PipelineRunStore）共享连接。
+   * WAL 模式下多 store 共用同一连接是安全的。
+   */
+  get database(): Database.Database {
+    return this.db;
+  }
+
   private migrate(): void {
     // 旧版 projects 表字段迁移
     const projectColumns = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{
