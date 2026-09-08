@@ -95,10 +95,14 @@ export interface HandlerContext {
     scanCron: string;
     llmRequestsPerMinute: number;
     everos: string;
+    agents?: import('../agents/registry.js').AgentSpec[];
   };
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
-  /** EverOS HTTP URL，用于 memory.search 等 handler 直接访问 */
+  /** MCP 门面地址（外部 Agent 接入点） */
+  getMcpFacadeUrl?: () =>
+    | string
+    | null; /** EverOS HTTP URL，用于 memory.search 等 handler 直接访问 */
   everosUrl?: string;
   /** 本地 Embedding/Rerank 模型服务管理器 */
   localModelManager?: LocalModelServiceManager;
@@ -819,6 +823,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         queuedJobs: 0,
         providers: [],
       },
+      mcpFacade: { url: ctx.getMcpFacadeUrl?.() ?? null },
     } satisfies DaemonStatus;
   },
 

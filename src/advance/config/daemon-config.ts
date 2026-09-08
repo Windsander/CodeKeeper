@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { agentSpecSchema } from '../agents/registry.js';
 
 /**
  * EverOS 多模态模型覆盖配置。
@@ -35,6 +36,8 @@ export interface DaemonPersistedConfig {
   rerankModel?: string;
   /** EverOS 独立配置；未配置时继承 Agent 通用配置 */
   everos?: EverOSConfig;
+  /** 外部 Agent 注册表（管线 agent.* 节点引用），结构见 agents/registry.ts */
+  agents?: import('../agents/registry.js').AgentSpec[];
 }
 
 const CONFIG_DIR = join(homedir(), '.codekeeper-advance');
@@ -46,7 +49,18 @@ export function loadDaemonConfig(): DaemonPersistedConfig {
   }
   try {
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw) as DaemonPersistedConfig;
+    const config = JSON.parse(raw) as DaemonPersistedConfig;
+    // agents 逐条校验：坏 spec 在启动期剔除，而不是等到节点执行时才炸
+    if (Array.isArray(config.agents)) {
+      config.agents = config.agents.filter(spec => {
+        const result = agentSpecSchema.safeParse(spec);
+        if (!result.success) {
+          console.warn('[daemon-config] 忽略非法的外部 Agent 配置项:', spec?.id ?? '(无 id)');
+        }
+        return result.success;
+      });
+    }
+    return config;
   } catch {
     return {};
   }

@@ -31,6 +31,8 @@ import {
 import { pipelineDefinitionSchema, PipelineDefinitionError } from './core/types.js';
 import { topoSort } from './core/topology.js';
 import { RoleNodeRuntime } from '../classic/role-node-runtime.js';
+import { AgentRegistry } from '../agents/registry.js';
+import type { TaskEnvelope } from '../agents/task-envelope.js';
 
 export interface PipelineSchedulerOptions {
   /** EverOS MCP Server URL（由 daemon 启动后回设） */
@@ -333,6 +335,14 @@ export class PipelineScheduler {
     }
   }
 
+  /** 手动触发某项目的角色节点立即执行（MCP 门面 / 未来 UI 按钮用） */
+  async runProjectRoleNow(projectId: string, role: Role): Promise<void> {
+    const project = this.context.store.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+    ensurePipelineDefinition(project);
+    await this.runRoleNow(project, role);
+  }
+
   /** 立即执行某项目的角色节点（启动/重启后的对账轮） */
   private async runRoleNow(project: Project, role: Role): Promise<void> {
     const definition = loadProjectPipeline(project);
@@ -348,7 +358,7 @@ export class PipelineScheduler {
     roleNodeId: string,
     role: Role
   ): Promise<void> {
-    const handlers = this.buildNodeHandlers(project, role);
+    const handlers = this.buildNodeHandlers(project, role, definition);
     const executor = new PipelineExecutor(handlers, this.getRunStore());
     const triggerNode = this.findUpstreamTrigger(definition, roleNodeId);
     const startFrom = triggerNode ? [triggerNode.id] : [roleNodeId];
@@ -358,7 +368,11 @@ export class PipelineScheduler {
     });
   }
 
-  private buildNodeHandlers(project: Project, role: Role): Map<string, NodeHandler> {
+  private buildNodeHandlers(
+    project: Project,
+    role: Role,
+    definition?: PipelineDefinition
+  ): Map<string, NodeHandler> {
     const handlers = new Map<string, NodeHandler>();
     handlers.set('trigger.cron', {
       type: 'trigger.cron',
@@ -375,6 +389,38 @@ export class PipelineScheduler {
         return {};
       },
     });
+
+    // 外部 Agent 节点：经注册表解析传输适配器，任务信封交互
+    if (definition) {
+      const registry = new AgentRegistry(this.context.getDaemonConfig?.().agents ?? []);
+      for (const node of definition.nodes) {
+        if (!node.type.startsWith('agent.') || handlers.has(node.type)) continue;
+        handlers.set(node.type, {
+          type: node.type,
+          run: async (ctx, inputs, params, currentNode) => {
+            const transport = registry.resolveTransport(node.type, params);
+            const capability =
+              typeof params.capability === 'string' ? params.capability : node.type;
+            const envelope: TaskEnvelope = {
+              id: `${ctx.vars.runId ?? 'run'}:${currentNode.id}`,
+              capability,
+              input: inputs,
+              artifacts: Object.entries(inputs).map(([name, value]) => ({
+                name,
+                type: 'PipelineArtifact',
+                content: typeof value === 'string' ? value : JSON.stringify(value),
+              })),
+              timeoutMs: typeof params.timeoutMs === 'number' ? params.timeoutMs : undefined,
+            };
+            const result = await transport.execute(envelope);
+            if (result.status === 'failed') {
+              throw new Error(`外部 Agent 执行失败: ${result.error ?? '未知错误'}`);
+            }
+            return result.output;
+          },
+        });
+      }
+    }
     return handlers;
   }
 

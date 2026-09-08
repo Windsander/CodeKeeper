@@ -12,6 +12,7 @@ import { handlers, type HandlerContext } from './ipc/handlers';
 import { logger } from './core/logger';
 import { LlmClient } from './llm/client';
 import { PipelineScheduler } from './pipeline/pipeline-scheduler.js';
+import { McpFacadeServer } from './agents/mcp-facade.js';
 import { ROLES } from './types.js';
 import { ScanService } from './scan/scan-service.js';
 import { GitLabProvider } from './classic/provider/gitlab-provider.js';
@@ -60,6 +61,8 @@ export interface DaemonOptions {
   rerankModel?: string;
   /** EverOS 独立配置；未设置时继承 Agent 通用配置 */
   everos?: import('./config/daemon-config.js').EverOSConfig;
+  /** 外部 Agent 注册表（管线 agent.* 节点引用） */
+  agents?: import('./agents/registry.js').AgentSpec[];
   /** 测试或嵌入场景可替换 CodeGraph 服务实现 */
   codeGraphService?: CodeGraphServiceController;
 }
@@ -77,6 +80,8 @@ export class Daemon {
   private everosService: EverOSService | null = null;
   private everosMcpServer: EverOSMcpServer | null = null;
   private everosMcpUrl: string | null = null;
+  private mcpFacade: McpFacadeServer | null = null;
+  private mcpFacadeUrl: string | null = null;
   private everosStarting = false;
   private everosState: EverosStatus['state'] = 'idle';
   private everosHttpUrl: string | null = null;
@@ -129,6 +134,7 @@ export class Daemon {
         model: this.options.model ?? '',
         headers: this.options.headers ?? {},
         llmRequestsPerMinute: this.options.llmRequestsPerMinute ?? 10,
+        agents: this.options.agents ?? [],
       }),
       maxEventsPerScan: this.options.maxEventsPerScan,
     });
@@ -185,12 +191,14 @@ export class Daemon {
         embeddingModel: this.options.embeddingModel ?? DEFAULT_EMBEDDING_MODEL,
         rerankModel: this.options.rerankModel ?? DEFAULT_RERANK_MODEL,
         everos: this.options.everos ? JSON.stringify(this.options.everos) : '',
+        agents: this.options.agents ?? [],
       }),
       isDaemonRunning: () => this.running,
       getEverosStatus: () => this.getEverosStatus(),
       getCodeGraphStatus: () => this.getCodeGraphStatus(),
       watchProject: project => this.watchProject(project),
       unwatchProject: projectId => this.unwatchProject(projectId),
+      getMcpFacadeUrl: () => this.mcpFacadeUrl,
     };
 
     // 将完整的 handlerContext 回设到 serviceRegistry
@@ -206,6 +214,21 @@ export class Daemon {
       handler: (method, params) => this.handleIpc(method, params),
     });
     await this.ipcServer.start();
+
+    // MCP 门面独立于 EverOS 启动：pipeline_list_runs/submit 不依赖记忆服务，
+    // knowledge_recall 在 EverOS 未就绪时自行降级
+    try {
+      this.mcpFacade = new McpFacadeServer({
+        scheduler: this.serviceRegistry,
+        getEverosUrl: () => this.everosHttpUrl,
+      });
+      this.mcpFacadeUrl = await this.mcpFacade.start();
+      logger.info({ mcpFacadeUrl: this.mcpFacadeUrl }, 'MCP 门面已启动（外部 Agent 接入）');
+    } catch (err) {
+      logger.warn({ err }, 'MCP 门面启动失败（不影响其余功能）');
+      this.mcpFacade = null;
+      this.mcpFacadeUrl = null;
+    }
 
     try {
       const codeGraphUrl = await this.codeGraphService.start();
@@ -282,7 +305,10 @@ export class Daemon {
       clearTimeout(this.watcherTimeout);
       this.watcherTimeout = null;
     }
-    // 停止所有管线触发器与角色节点子进程
+    // 停止 MCP 门面与所有管线触发器、角色节点子进程
+    await this.mcpFacade?.stop();
+    this.mcpFacade = null;
+    this.mcpFacadeUrl = null;
     await this.serviceRegistry.stopAll();
     await this.codeGraphService.stop();
     this.scanService.stop();

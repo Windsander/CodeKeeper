@@ -100,10 +100,15 @@ export interface NodeHandler {
   readonly inputs?: readonly string[];
   /** 声明的输出端口名（可选，用于校验边连接与产物类型） */
   readonly outputs?: readonly string[];
+  /**
+   * 同类型多节点共享一份处理器时，经第四个参数区分当前执行节点
+   * （信封 id、日志定位等需要节点粒度的场景必须用它，勿闭包捕获）。
+   */
   run(
     ctx: RunContext,
     inputs: Record<string, unknown>,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    node: NodeDef
   ): Promise<Record<string, unknown> | void>;
 }
 

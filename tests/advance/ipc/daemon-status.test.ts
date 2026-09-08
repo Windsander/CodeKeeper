@@ -41,6 +41,7 @@ describe('daemon.status handler', () => {
         queuedJobs: 2,
         providers: [],
       },
+      mcpFacade: { url: null },
     });
   });
 
@@ -65,6 +66,7 @@ describe('daemon.status handler', () => {
         queuedJobs: 0,
         providers: [],
       },
+      mcpFacade: { url: null },
     });
   });
 });

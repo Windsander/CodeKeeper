@@ -21,7 +21,9 @@ This is an individually maintained project; responses are best-effort (initial r
 
 ## 本项目特有的安全注意点 / Project-specific Notes
 
-- CodeKeeper 在**本地**处理 LLM API Key、GitLab Token 等敏感凭据（`.env`，永不入库）。提交 Issue、日志或崩溃报告时，请务必先脱敏。
-  CodeKeeper handles sensitive credentials (LLM API keys, GitLab tokens) **locally** via `.env`, which is never committed. Please redact credentials before sharing logs or crash reports.
+- CodeKeeper 在**本地**处理 LLM API Key、GitLab Token 等敏感凭据（`daemon-config.json`，永不入库）。提交 Issue、日志或崩溃报告时，请务必先脱敏。
+  CodeKeeper handles sensitive credentials (LLM API keys, GitLab tokens) **locally** via `daemon-config.json`, which is never committed. Please redact credentials before sharing logs or crash reports.
+- MCP 门面（外部 Agent 接入点）仅绑定 `127.0.0.1` 并携带启动期随机 token；其 `pipeline_submit` 具有真实世界写副作用（评审评论、代码修复、MR 合并）。**绑定本机即信任本机全部进程**——请勿在共享/多租户机器上运行，勿把门面 URL 转发到本机之外。
+  The MCP facade binds to `127.0.0.1` with a per-boot random token; `pipeline_submit` has real-world write side effects. Running on this host implies trusting all local processes — do not run on shared machines or forward the facade URL off-host.
 - 若发现凭据意外进入 git 历史，请立即通过上述私密渠道告知，我们将重写历史并轮换凭据。
   If you find credentials accidentally committed to git history, please report via the private channel above; we will rewrite history and rotate the credentials.

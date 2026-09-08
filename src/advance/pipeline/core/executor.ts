@@ -168,7 +168,7 @@ export class PipelineExecutor {
       const stageId = this.store?.beginStage(runId, node.id, inputs);
 
       try {
-        const outputs = (await handler.run(ctx, inputs, node.params)) ?? {};
+        const outputs = (await handler.run(ctx, inputs, node.params, node)) ?? {};
         completedOutputs.set(node.id, outputs);
         if (this.store && stageId) {
           this.store.finishStage(stageId, 'succeeded', outputs);

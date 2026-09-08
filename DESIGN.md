@@ -124,10 +124,24 @@ Archiver 文件优先管线产出策展产物（context.md 等）。
 | M1     | 旧线清除；幸存者迁移入 advance；入口统一                                   | ✅     |
 | M2     | 管线核心：图 schema / YAML 加载 / 顺序执行器 / 运行落库                    | ✅     |
 | M3     | Role 黑箱节点化；daemon 调度改造；配置自动迁移；本文档                     | 进行中 |
-| M4     | 可视化画布（节点编辑、检查器吸收 Role 配置、运行状态叠加）                 |        |
-| M5     | 外部 Agent 节点（A2A 词汇任务信封 + A2A/subprocess/MCP 适配器 + MCP 门面） |        |
-| M6     | 双正本智库 + 投影管线 + 蒸馏管线                                           |        |
-| M7     | 钻取层：Role 节点内 stage 子图拆解与编排                                   |        |
+| M4     | 可视化画布（节点编辑、检查器吸收 Role 配置、运行状态叠加）                 | ✅     |
+| M5     | 外部 Agent 节点（A2A 词汇任务信封 + A2A/subprocess/MCP 适配器 + MCP 门面） | ✅     |
+
+### 外部 Agent 接入（M5）
+
+- **任务信封契约**（`src/advance/agents/task-envelope.ts`）：A2A 词汇的
+  TaskEnvelope/TaskResult/AgentArtifact/AgentCapabilityCard；传输层可插拔。
+- **传输适配器**：`subprocess`（本地 CLI，stdin/stdout JSON）、`a2a`
+  （HTTP POST /tasks + AgentCard 探测；A2A 词汇的最小映射，**不与现网完整
+  A2A 协议互通**）、`mcp`（MCP SSE 工具调用）。
+- **注册表**（daemon-config.json 的 `agents` 数组）：`params.agentId` 引用注册项时
+  **注册项优先**（pipeline.yaml 可入库，不允许项目内定义覆盖本机连接参数）；
+  `agent.subprocess` 强制要求 agentId（命令只来自本机白名单）；网络类传输允许内联参数。
+- **MCP 门面**（`src/advance/agents/mcp-facade.ts`）：127.0.0.1 + 随机 token，
+  工具：`pipeline_list_runs` / `pipeline_submit`（异步派发）/ `knowledge_recall`。
+  门面独立于 EverOS 启动，地址经 `daemon.status` 展示。
+  | M6 | 双正本智库 + 投影管线 + 蒸馏管线 | |
+  | M7 | 钻取层：Role 节点内 stage 子图拆解与编排 | |
 
 ## 五、工程约束（RULES）
 

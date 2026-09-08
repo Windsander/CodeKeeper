@@ -58,6 +58,8 @@ export interface DaemonStatus {
   daemonRunning: boolean;
   everos: EverosStatus;
   codeGraph: CodeGraphServiceStatus;
+  /** MCP 门面地址（外部 Agent 接入点）；未启动时为 null */
+  mcpFacade?: { url: string | null };
 }
 
 export interface LocalModelStatus {
