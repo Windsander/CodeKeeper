@@ -20,6 +20,7 @@ import { extractJsonText } from '../utils/json-extraction.js';
 import type { ValidationStrategy, ValidationResult } from './validation-strategy.js';
 import { ErrorDeltaValidationStrategy } from './validation-strategy.js';
 import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
+import type { MaintainerLocalJudge } from './maintainer-local-judge.js';
 
 export interface FixToolLoopOptions {
   llmClient: LlmClient;
@@ -64,6 +65,8 @@ export interface FixToolLoopOptions {
     reason: string;
     evidence?: string;
   }>;
+  /** 可选的轻量判别辅助，用于无进展时的卡点校正建议 */
+  localJudge?: MaintainerLocalJudge;
 }
 
 /** 判断 stopReason 是否表示输出被长度截断 */
@@ -99,6 +102,7 @@ export class FixToolLoop {
   private readonly validationStrategy: ValidationStrategy;
   private readonly promptLoader: PromptLoader;
   private readonly recheckAlreadyFixed?: FixToolLoopOptions['recheckAlreadyFixed'];
+  private readonly localJudge?: MaintainerLocalJudge;
   private readonly messages: LlmMessage[] = [];
 
   private appliedFiles = new Set<string>();
@@ -140,6 +144,7 @@ export class FixToolLoop {
     this.finalActingSteps = Math.max(1, options.finalActingSteps ?? 3);
     this.promptLoader = options.promptLoader ?? defaultPromptLoader;
     this.recheckAlreadyFixed = options.recheckAlreadyFixed;
+    this.localJudge = options.localJudge;
     this.registry = new ToolRegistry(FIX_TOOLS);
     this.executor = new ToolExecutor({
       worktreeManager: options.worktreeManager,
@@ -296,9 +301,14 @@ export class FixToolLoop {
       });
 
       if (this.stepsWithoutProgress === this.staleReminderStep) {
+        let reminder = this.promptLoader.load('fix-tool-loop-stale-reminder');
+        const stuckAdvice = await this.tryGetStuckAdvice();
+        if (stuckAdvice) {
+          reminder += `\n\n${stuckAdvice}`;
+        }
         this.messages.push({
           role: 'user',
-          content: this.promptLoader.load('fix-tool-loop-stale-reminder'),
+          content: reminder,
         });
       }
 
@@ -398,6 +408,44 @@ export class FixToolLoop {
       console.warn(`[FixToolLoop] already-fixed 回查失败: ${message}`);
       return null;
     }
+  }
+
+  /**
+   * 可选的卡点校正辅助：无进展时向 localJudge 请求转向建议。
+   * 不可靠/不可用时返回 null，不影响既有静态提醒流程。
+   */
+  private async tryGetStuckAdvice(): Promise<string | null> {
+    if (!this.localJudge) return null;
+    try {
+      const progressSummary = `已执行 ${this.stepsWithoutProgress} 步无实质进展（未修改/删除文件、未读取新文件窗口）。已修改文件: ${Array.from(this.appliedFiles).join(', ') || '无'}，已读取文件: ${this.readFilesThisRun.size} 个窗口。`;
+      const verdict = await this.localJudge.adviseOnStuckProgress(
+        this.finding.message,
+        progressSummary,
+      );
+      // StuckCorrectionResult 无 kind 字段；LocalJudgeVerdict(unreliable) 有 kind
+      if (!('suggestion' in verdict)) return null;
+      return this.formatStuckAdvice(verdict);
+    } catch {
+      return null;
+    }
+  }
+
+  /** 格式化卡点校正建议为提示文本 */
+  private formatStuckAdvice(result: {
+    suggestion: string;
+    suggestStop: boolean;
+    reason: string;
+  }): string | null {
+    if (result.suggestStop) {
+      return `⚠️ 辅助判别建议：当前方向可能无效，建议考虑收拢或改变策略。理由：${result.reason}`;
+    }
+    if (result.suggestion === 'refocus') {
+      return `💡 辅助判别建议：尝试缩小范围，聚焦到更具体的修改目标。理由：${result.reason}`;
+    }
+    if (result.suggestion === 'broaden') {
+      return `💡 辅助判别建议：当前范围可能太窄，考虑读取更多相关文件或上下文。理由：${result.reason}`;
+    }
+    return null;
   }
 
   getAppliedFiles(): string[] {

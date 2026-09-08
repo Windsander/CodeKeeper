@@ -687,6 +687,7 @@ export class MaintainerRunner extends BaseRoleRunner {
         recallPlanner,
         checkpoint: () => saveState(project, state, 'maintainer'),
         metrics: lifecycle.metrics,
+        localJudge: this.localJudge,
       });
 
       let currentHeadSha: string | undefined;
@@ -1937,6 +1938,37 @@ export class MaintainerRunner extends BaseRoleRunner {
         return;
       }
 
+      // 语义重识别：stale finding 无精确 key 匹配时（行号漂移），
+      // 尝试匹配同文件的历史 ignore 决策，避免完整 LLM 重新评估。
+      if (staleFinding && !existing) {
+        const semanticMatch = await this.trySemanticReidentification(
+          threadState,
+          finding,
+          key
+        );
+        if (semanticMatch) {
+          threadState.decisions[key] = semanticMatch;
+          threadState.lastHumanNoteAt = lastHumanNoteAt;
+          await actor.applyDecision(
+            mr,
+            discussion,
+            finding,
+            {
+              action: 'ignore',
+              alreadyFixed: semanticMatch.alreadyFixed,
+              reason: semanticMatch.reason,
+              replyBody: semanticMatch.replyBody,
+            },
+            state
+          );
+          console.log(
+            `[MaintainerRunner] stale finding ${key} 语义匹配历史 ignore 决策，跳过重评估`
+          );
+          recordProcessed();
+          return;
+        }
+      }
+
       const fileContent = await readDiscussionFileContent(
         worktreeManager,
         projectRootPath,
@@ -2192,6 +2224,35 @@ export class MaintainerRunner extends BaseRoleRunner {
           suppressRepeatedAsk
         );
         continue;
+      }
+
+      // 语义重识别：stale finding 无精确 key 匹配时，尝试匹配同文件的历史 ignore 决策
+      if (staleFinding && !existing) {
+        const semanticMatch = await this.trySemanticReidentification(
+          threadState,
+          finding,
+          key
+        );
+        if (semanticMatch) {
+          threadState.decisions[key] = semanticMatch;
+          this.applyStoredDecision(
+            semanticMatch,
+            finding,
+            {
+              fixedItems,
+              failedItems,
+              askedItems,
+              ignoredItems,
+              alreadyFixedItems,
+              fixableItems,
+            },
+            suppressRepeatedAsk
+          );
+          console.log(
+            `[MaintainerRunner] stale finding ${key} 语义匹配历史 ignore 决策，跳过重评估`
+          );
+          continue;
+        }
       }
 
       const focusedContent = await readDiscussionFileContent(
@@ -2900,8 +2961,7 @@ export class MaintainerRunner extends BaseRoleRunner {
     }
 
     try {
-      const baseResult = await brain.recheckAlreadyFixed(finding);
-
+      // 先跑轻量 LLM 辅助判断，命中时跳过昂贵的 CognitiveEngine 全量分析
       const assist = await this.localJudge.assistAlreadyFixedCheck(
         `${finding.message}\n${finding.suggestion}`,
         focusedContextToString(focusedContent)
@@ -2914,7 +2974,8 @@ export class MaintainerRunner extends BaseRoleRunner {
         };
       }
 
-      return baseResult;
+      // 辅助不可靠或不认为已修复 → 走原有重逻辑
+      return await brain.recheckAlreadyFixed(finding);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(
@@ -2922,6 +2983,48 @@ export class MaintainerRunner extends BaseRoleRunner {
       );
       return null;
     }
+  }
+
+  /**
+   * 语义重识别：stale finding 无精确 key 匹配时（行号漂移），
+   * 尝试匹配同文件的历史 ignore 决策。
+   *
+   * 只在同文件存在 ignore 决策时尝试，且仅匹配最近一条，
+   * 避免 N 次 LLM 调用。不可靠时静默返回 null，走原有评估流程。
+   */
+  private async trySemanticReidentification(
+    threadState: MaintainerThreadState,
+    finding: ReviewFinding,
+    currentKey: string
+  ): Promise<MaintainerThreadState['decisions'][string] | null> {
+    const sameFileDecisions = Object.entries(threadState.decisions)
+      .filter(([k]) => k.startsWith(`${finding.file}:`) && k !== currentKey)
+      .filter(([, d]) => d.action === 'ignore')
+      .sort(([, a], [, b]) => b.decidedAt - a.decidedAt);
+
+    if (sameFileDecisions.length === 0) return null;
+
+    const [, bestCandidate] = sameFileDecisions[0];
+    try {
+      const verdict = await this.localJudge.reassessSemanticIdentity(
+        finding.message,
+        `${bestCandidate.action}: ${bestCandidate.reason}`
+      );
+      // SemanticReidentificationResult 无 kind 字段；LocalJudgeVerdict(unreliable) 有 kind
+      if ('kind' in verdict) return null;
+      if (verdict.likelySame && verdict.confidence !== 'low') {
+        console.log(
+          `[MaintainerRunner] stale finding ${currentKey} 语义匹配历史决策（confidence=${verdict.confidence}）: ${verdict.reason}`
+        );
+        return {
+          ...bestCandidate,
+          decidedAt: Date.now(),
+        };
+      }
+    } catch {
+      // 语义匹配失败不影响主流程
+    }
+    return null;
   }
 
   /**

@@ -40,6 +40,7 @@ import {
   buildDefaultDeleteMessage,
 } from './commit-pipeline.js';
 import { isSelfAnswerableQuestion } from './ask-gate.js';
+import type { MaintainerLocalJudge } from './maintainer-local-judge.js';
 import { compactDiscussionReason } from '../runners/shared/reply-safety.js';
 
 // 兼容既有引用（含测试）：从本模块再导出，实现统一收敛到 commit-pipeline
@@ -64,6 +65,8 @@ export interface MaintainerActorOptions {
   checkpoint?: () => void;
   /** 可选的 M 系列过程指标计数器（M1/M2/M3/M5/M6 由本类自增） */
   metrics?: MrLifecycleMetrics;
+  /** 可选的轻量判别辅助，用于 FixToolLoop 卡点校正建议 */
+  localJudge?: MaintainerLocalJudge;
 }
 
 export interface MaintainerActionResult {
@@ -862,6 +865,7 @@ export class MaintainerActor {
                 .filter(Boolean)
                 .join('\n\n'),
               recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
+              localJudge: this.options.localJudge,
             });
             const reflowResult = await reflowLoop.run();
             this.trackFinalActingRound(reflowLoop);
@@ -973,6 +977,7 @@ export class MaintainerActor {
               .filter(Boolean)
               .join('\n\n'),
             recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
+            localJudge: this.options.localJudge,
           });
           const result = await loop.run();
           this.trackFinalActingRound(loop);
@@ -1337,6 +1342,7 @@ export class MaintainerActor {
             .filter(Boolean)
             .join('\n\n'),
           recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(finding),
+          localJudge: this.options.localJudge,
         });
         const result = await loop.run();
         this.trackFinalActingRound(loop);
@@ -1742,6 +1748,7 @@ export class MaintainerActor {
             .filter(Boolean)
             .join('\n\n'),
           recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(syntheticFinding),
+          localJudge: this.options.localJudge,
         });
         const result = await loop.run();
         this.trackFinalActingRound(loop);
@@ -2098,6 +2105,7 @@ export class MaintainerActor {
         .filter(Boolean)
         .join('\n\n'),
       recheckAlreadyFixed: () => this.options.brain.recheckAlreadyFixed(reflowFinding),
+      localJudge: this.options.localJudge,
     });
     const result = await loop.run();
     this.trackFinalActingRound(loop);
