@@ -41,7 +41,10 @@ export class ArchivePipeline {
 
   async run(project: Project): Promise<void> {
     const events = this.options.store.listPendingEvents(this.options.maxEvents);
-    logger.info({ projectId: project.id, projectRoot: project.rootPath, eventCount: events.length }, '开始归档扫描');
+    logger.info(
+      { projectId: project.id, projectRoot: project.rootPath, eventCount: events.length },
+      '开始归档扫描'
+    );
     if (events.length === 0) {
       logger.info('没有待处理的文件事件，跳过本次扫描');
       await this.reconcileArchived(project);
@@ -62,8 +65,8 @@ export class ArchivePipeline {
     const executor = new ArchiveExecutor({ archiveRoot });
 
     const existingMetadata = this.options.store.listArchiveMetadataByProject(project.id);
-    const existingBySource = new Map(existingMetadata.map((m) => [m.sourcePath, m]));
-    const existingArchivePaths = new Set(existingMetadata.map((m) => m.archivePath.toLowerCase()));
+    const existingBySource = new Map(existingMetadata.map(m => [m.sourcePath, m]));
+    const existingArchivePaths = new Set(existingMetadata.map(m => m.archivePath.toLowerCase()));
 
     const processedEventIds: number[] = [];
     const executedIds: string[] = [];
@@ -145,7 +148,8 @@ export class ArchivePipeline {
               copiedAt: existing?.copiedAt ?? now,
               organizedAt: action.type === 'organize' ? now : (existing?.organizedAt ?? undefined),
               status: 'active',
-              type: action.type === 'organize' ? 'organize' : action.type === 'flag' ? 'flag' : 'copy',
+              type:
+                action.type === 'organize' ? 'organize' : action.type === 'flag' ? 'flag' : 'copy',
             });
             existingArchivePaths.add(finalArchivePath.toLowerCase());
           }
@@ -177,7 +181,10 @@ export class ArchivePipeline {
   private async handleUnlink(
     project: Project,
     filePath: string,
-    existingBySource: Map<string, ReturnType<MetadataStore['listArchiveMetadataByProject']>[number]>,
+    existingBySource: Map<
+      string,
+      ReturnType<MetadataStore['listArchiveMetadataByProject']>[number]
+    >,
     now: number
   ): Promise<void> {
     const entryId = makeEntryId(project.id, filePath);
@@ -274,9 +281,7 @@ export class ArchivePipeline {
     });
   }
 
-  private buildContextEntries(
-    projectId: string
-  ): Array<{
+  private buildContextEntries(projectId: string): Array<{
     filePath: string;
     archivePath: string;
     category: string;
@@ -288,7 +293,7 @@ export class ArchivePipeline {
     updatedAt: number;
   }> {
     const all = this.options.store.listArchiveMetadataByProject(projectId);
-    return all.map((m) => ({
+    return all.map(m => ({
       filePath: m.sourcePath,
       archivePath: m.archivePath,
       category: m.category,
@@ -296,7 +301,8 @@ export class ArchivePipeline {
       summary: m.summary,
       tags: m.tags,
       sections: [],
-      status: m.status === 'active' ? 'archived' : m.status === 'superseded' ? 'archived' : m.status,
+      status:
+        m.status === 'active' ? 'archived' : m.status === 'superseded' ? 'archived' : m.status,
       updatedAt: m.organizedAt ?? m.copiedAt,
     }));
   }
@@ -346,10 +352,7 @@ export class ArchivePipeline {
 
     writeReadme({ archiveRoot });
 
-    logger.info(
-      { projectId: project.id, scanStatus: status.scanStatus, counts },
-      '归档扫描完成'
-    );
+    logger.info({ projectId: project.id, scanStatus: status.scanStatus, counts }, '归档扫描完成');
   }
 }
 

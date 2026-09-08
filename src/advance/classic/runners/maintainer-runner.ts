@@ -8,7 +8,10 @@
 
 import { LlmClient } from '../../llm/client.js';
 import { LlmMaintainerLocalJudge } from '../fix/maintainer-llm-judge.js';
-import { ConservativeLocalJudgeStub, type MaintainerLocalJudge } from '../fix/maintainer-local-judge.js';
+import {
+  ConservativeLocalJudgeStub,
+  type MaintainerLocalJudge,
+} from '../fix/maintainer-local-judge.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';

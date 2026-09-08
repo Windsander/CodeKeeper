@@ -265,10 +265,7 @@ export class CodeGraphService implements CodeGraphServiceController {
     );
   }
 
-  private clearSyncJob(
-    projectId: string,
-    job: Promise<ArchiverProviderExecution>
-  ): void {
+  private clearSyncJob(projectId: string, job: Promise<ArchiverProviderExecution>): void {
     if (this.syncJobs.get(projectId) === job) this.syncJobs.delete(projectId);
   }
 
@@ -279,9 +276,7 @@ export class CodeGraphService implements CodeGraphServiceController {
     }
   }
 
-  private initialProviderStatus(
-    descriptor: ArchiverProviderDescriptor
-  ): CodeGraphProviderStatus {
+  private initialProviderStatus(descriptor: ArchiverProviderDescriptor): CodeGraphProviderStatus {
     if (descriptor.kind === 'builtin') {
       return {
         providerId: descriptor.id,
@@ -308,10 +303,7 @@ export class CodeGraphService implements CodeGraphServiceController {
       state: descriptor.automation === 'manual' ? 'manual' : 'unavailable',
       prepared: false,
       version: null,
-      message:
-        descriptor.automation === 'manual'
-          ? '需要 Agent 工作流调度'
-          : '未声明可用运行时',
+      message: descriptor.automation === 'manual' ? '需要 Agent 工作流调度' : '未声明可用运行时',
     };
   }
 
@@ -413,10 +405,7 @@ export class CodeGraphService implements CodeGraphServiceController {
     }
   }
 
-  private async handleRequest(
-    request: IncomingMessage,
-    response: ServerResponse
-  ): Promise<void> {
+  private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
     if (request.method === 'GET' && url.pathname === '/health') {
       this.writeJson(response, 200, { ok: true, result: this.getStatus() });

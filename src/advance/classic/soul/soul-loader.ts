@@ -61,7 +61,7 @@ export function loadSoulContent(project: Project, role: Role): SoulContent {
 export async function saveSoulContent(
   project: Project,
   role: Role,
-  content: string,
+  content: string
 ): Promise<void> {
   const sourcePath = getSoulPath(project, role);
   mkdirSync(dirname(sourcePath), { recursive: true });

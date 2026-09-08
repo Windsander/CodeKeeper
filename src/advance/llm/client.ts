@@ -3,7 +3,14 @@ import { logger } from '../../core/logger';
 import { logMemorySnapshot } from '../classic/utils/memory-snapshot.js';
 import { extractJsonText } from '../classic/utils/json-extraction.js';
 
-import type { ToolCall, ToolDefinition, LlmMessage, CompleteWithToolsOptions, CompleteWithToolsResult, ToolResult } from './tool-types.js';
+import type {
+  ToolCall,
+  ToolDefinition,
+  LlmMessage,
+  CompleteWithToolsOptions,
+  CompleteWithToolsResult,
+  ToolResult,
+} from './tool-types.js';
 
 /**
  * 决策工具调用未按约定返回时抛出的异常。
@@ -145,11 +152,13 @@ export class LlmClient {
         const isRateLimit = message.includes('429') || message.includes('Too many requests');
         if (!isRateLimit || attempt === maxRetries) {
           const prefix = `[LlmClient:${this.provider}]`;
-          const cleanMessage = message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+          const cleanMessage = message.startsWith(prefix)
+            ? message.slice(prefix.length).trim()
+            : message;
           throw new Error(`${prefix} ${cleanMessage}`);
         }
         const delay = Math.min(2000 * 2 ** attempt, 60000);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
     throw new Error(`[LlmClient:${this.provider}] 重试后仍失败`);
@@ -172,7 +181,7 @@ export class LlmClient {
         const idx = this.mockCallIndex % this.mock.toolResponses.length;
         this.mockCallIndex++;
         const r = this.mock.toolResponses[idx];
-        const valid = r.toolCalls.filter((tc) => tools.some((t) => t.name === tc.name));
+        const valid = r.toolCalls.filter(tc => tools.some(t => t.name === tc.name));
         if (valid.length === 1) {
           return valid[0];
         }
@@ -184,21 +193,27 @@ export class LlmClient {
         if (valid.length === 0) {
           throw new LlmDecisionError('mock 未返回允许的决策工具', 'no_tool_calls');
         }
-        throw new LlmDecisionError(`mock 返回了 ${valid.length} 个允许工具，期望 1 个`, 'multiple_tool_calls');
+        throw new LlmDecisionError(
+          `mock 返回了 ${valid.length} 个允许工具，期望 1 个`,
+          'multiple_tool_calls'
+        );
       }
       // 支持 mock.response 直接模拟 content 兜底
       if (this.mock.response?.trim()) {
         const fallback = this.tryParseDecisionFromContent(tools, this.mock.response);
         if (fallback) return fallback;
       }
-      throw new LlmDecisionError('mock 模式下 completeDecision 需要配置 mock.toolResponses', 'no_tool_calls');
+      throw new LlmDecisionError(
+        'mock 模式下 completeDecision 需要配置 mock.toolResponses',
+        'no_tool_calls'
+      );
     }
 
-    const result = await this.completeWithTools(
-      [{ role: 'user', content: prompt }],
-      tools,
-      { system, toolChoice: { type: 'any' }, maxTokens: this.maxTokens }
-    );
+    const result = await this.completeWithTools([{ role: 'user', content: prompt }], tools, {
+      system,
+      toolChoice: { type: 'any' },
+      maxTokens: this.maxTokens,
+    });
 
     // 兜底：部分 OpenAI 兼容端点不严格遵循 tool_choice=required，把 JSON 放到了 content 里
     if (result.toolCalls.length === 0 && result.content.trim()) {
@@ -210,12 +225,18 @@ export class LlmClient {
       throw new LlmDecisionError('LLM 未返回任何工具调用', 'no_tool_calls');
     }
     if (result.toolCalls.length > 1) {
-      throw new LlmDecisionError(`LLM 返回了 ${result.toolCalls.length} 个工具调用，期望 1 个`, 'multiple_tool_calls');
+      throw new LlmDecisionError(
+        `LLM 返回了 ${result.toolCalls.length} 个工具调用，期望 1 个`,
+        'multiple_tool_calls'
+      );
     }
 
     const toolCall = result.toolCalls[0];
-    if (!tools.some((t) => t.name === toolCall.name)) {
-      throw new LlmDecisionError(`LLM 调用了未允许的工具: ${toolCall.name}`, 'unexpected_tool_name');
+    if (!tools.some(t => t.name === toolCall.name)) {
+      throw new LlmDecisionError(
+        `LLM 调用了未允许的工具: ${toolCall.name}`,
+        'unexpected_tool_name'
+      );
     }
     if (!toolCall.input || typeof toolCall.input !== 'object' || Array.isArray(toolCall.input)) {
       throw new LlmDecisionError(`工具 ${toolCall.name} 的输入不是合法对象`, 'invalid_input');
@@ -237,7 +258,7 @@ export class LlmClient {
       max_tokens: options?.maxTokens ?? this.maxTokens,
       system: options?.system,
       messages: this.toAnthropicMessages(messages),
-      tools: tools.map((t) => ({
+      tools: tools.map(t => ({
         name: t.name,
         description: t.description,
         input_schema: t.input_schema,
@@ -247,15 +268,20 @@ export class LlmClient {
 
     const content = response.content
       .filter((c): c is Anthropic.TextBlock => c.type === 'text')
-      .map((c) => c.text)
+      .map(c => c.text)
       .join('');
 
     const toolCalls: ToolCall[] = response.content
       .filter((c): c is Anthropic.ToolUseBlock => c.type === 'tool_use')
-      .map((c) => ({ id: c.id, name: c.name, input: c.input as Record<string, unknown> }));
+      .map(c => ({ id: c.id, name: c.name, input: c.input as Record<string, unknown> }));
 
-    logger.debug({ model: this.model, contentLength: content.length, toolCalls: toolCalls.length }, 'Anthropic tool-use 响应');
-    console.log(`[LlmClient] completeWithTools Anthropic content 长度=${content.length}, toolCalls=${toolCalls.length}`);
+    logger.debug(
+      { model: this.model, contentLength: content.length, toolCalls: toolCalls.length },
+      'Anthropic tool-use 响应'
+    );
+    console.log(
+      `[LlmClient] completeWithTools Anthropic content 长度=${content.length}, toolCalls=${toolCalls.length}`
+    );
 
     return {
       content,
@@ -284,7 +310,7 @@ export class LlmClient {
         messages: bodyMessages,
         max_tokens: options?.maxTokens ?? this.maxTokens,
         stream: false,
-        tools: tools.map((t) => ({
+        tools: tools.map(t => ({
           type: 'function',
           function: {
             name: t.name,
@@ -343,10 +369,17 @@ export class LlmClient {
     }
 
     logger.debug(
-      { status: response.status, model: this.model, contentLength: content.length, toolCalls: toolCalls.length },
+      {
+        status: response.status,
+        model: this.model,
+        contentLength: content.length,
+        toolCalls: toolCalls.length,
+      },
       'OpenAI tool-use 响应'
     );
-    console.log(`[LlmClient] completeWithTools OpenAI content 长度=${content.length}, toolCalls=${toolCalls.length}`);
+    console.log(
+      `[LlmClient] completeWithTools OpenAI content 长度=${content.length}, toolCalls=${toolCalls.length}`
+    );
 
     return {
       content: String(content),
@@ -356,12 +389,12 @@ export class LlmClient {
   }
 
   private toAnthropicMessages(messages: LlmMessage[]): Anthropic.MessageParam[] {
-    return messages.map((m) => {
+    return messages.map(m => {
       if (typeof m.content === 'string') {
         return { role: m.role, content: m.content };
       }
 
-      const contentBlocks: Anthropic.MessageParam['content'] = m.content.map((part) => {
+      const contentBlocks: Anthropic.MessageParam['content'] = m.content.map(part => {
         if ('tool_use_id' in part) {
           const result = part as ToolResult;
           return {
@@ -383,7 +416,9 @@ export class LlmClient {
     });
   }
 
-  private toAnthropicToolChoice(toolChoice: CompleteWithToolsOptions['toolChoice']): Anthropic.ToolChoice {
+  private toAnthropicToolChoice(
+    toolChoice: CompleteWithToolsOptions['toolChoice']
+  ): Anthropic.ToolChoice {
     if (!toolChoice) return { type: 'auto' };
     switch (toolChoice.type) {
       case 'any':
@@ -397,8 +432,22 @@ export class LlmClient {
     }
   }
 
-  private toOpenAIMessages(messages: LlmMessage[]): Array<{ role: string; content: string; tool_calls?: unknown[]; tool_call_id?: string; name?: string }> {
-    const result: Array<{ role: string; content: string; tool_calls?: unknown[]; tool_call_id?: string; name?: string }> = [];
+  private toOpenAIMessages(
+    messages: LlmMessage[]
+  ): Array<{
+    role: string;
+    content: string;
+    tool_calls?: unknown[];
+    tool_call_id?: string;
+    name?: string;
+  }> {
+    const result: Array<{
+      role: string;
+      content: string;
+      tool_calls?: unknown[];
+      tool_call_id?: string;
+      name?: string;
+    }> = [];
 
     for (const m of messages) {
       if (typeof m.content === 'string') {
@@ -408,12 +457,14 @@ export class LlmClient {
 
       if (m.role === 'assistant') {
         const textParts = m.content
-          .filter((part): part is { type: 'text'; text: string } => 'type' in part && part.type === 'text')
-          .map((part) => part.text)
+          .filter(
+            (part): part is { type: 'text'; text: string } => 'type' in part && part.type === 'text'
+          )
+          .map(part => part.text)
           .join('\n');
         const toolCalls = m.content
           .filter((part): part is ToolCall => 'name' in part && 'id' in part)
-          .map((call) => ({
+          .map(call => ({
             id: call.id,
             type: 'function',
             function: {
@@ -431,8 +482,10 @@ export class LlmClient {
 
       // user 消息：文本部分合并为一条，工具结果拆分为多条 role=tool 消息
       const textParts = m.content
-        .filter((part): part is { type: 'text'; text: string } => 'type' in part && part.type === 'text')
-        .map((part) => part.text)
+        .filter(
+          (part): part is { type: 'text'; text: string } => 'type' in part && part.type === 'text'
+        )
+        .map(part => part.text)
         .join('\n');
       if (textParts) {
         result.push({ role: 'user', content: textParts });
@@ -480,10 +533,11 @@ export class LlmClient {
     }
     // 多工具场景：尝试识别 { name, input } 格式
     const parsedName = parsed.name;
-    if (typeof parsedName === 'string' && tools.some((t) => t.name === parsedName)) {
-      const input = parsed.input && typeof parsed.input === 'object' && !Array.isArray(parsed.input)
-        ? (parsed.input as Record<string, unknown>)
-        : parsed;
+    if (typeof parsedName === 'string' && tools.some(t => t.name === parsedName)) {
+      const input =
+        parsed.input && typeof parsed.input === 'object' && !Array.isArray(parsed.input)
+          ? (parsed.input as Record<string, unknown>)
+          : parsed;
       console.log(`[LlmClient] completeDecision 从 content 兜底解析为 ${parsedName}`);
       return {
         id: `fallback-${this.fallbackId++}`,
@@ -539,15 +593,11 @@ export class LlmClient {
       },
     };
 
-    const result = await this.completeWithTools(
-      [{ role: 'user', content: prompt }],
-      [tool],
-      {
-        system,
-        toolChoice: { type: 'tool', name: 'respond_json' },
-        maxTokens: this.maxTokens,
-      }
-    );
+    const result = await this.completeWithTools([{ role: 'user', content: prompt }], [tool], {
+      system,
+      toolChoice: { type: 'tool', name: 'respond_json' },
+      maxTokens: this.maxTokens,
+    });
 
     if (result.toolCalls.length > 0) {
       const input = result.toolCalls[0].input;
@@ -652,7 +702,9 @@ export class LlmClient {
       return this.mock.response ?? '';
     }
 
-    console.log(`[LlmClient] complete 开始 provider=${this.provider} model=${this.model} promptLength=${prompt.length}`);
+    console.log(
+      `[LlmClient] complete 开始 provider=${this.provider} model=${this.model} promptLength=${prompt.length}`
+    );
     const startHeap = process.memoryUsage().heapUsed;
     let peakGrowth = 0;
     const interval = setInterval(() => {
@@ -674,7 +726,9 @@ export class LlmClient {
           result = await this.completeAnthropic(prompt, system);
         }
         clearInterval(interval);
-        console.log(`[LlmClient] complete prompt 长度=${prompt.length}, response 长度=${result.length}`);
+        console.log(
+          `[LlmClient] complete prompt 长度=${prompt.length}, response 长度=${result.length}`
+        );
         return result;
       } catch (error) {
         clearInterval(interval);
@@ -682,11 +736,13 @@ export class LlmClient {
         const isRateLimit = message.includes('429') || message.includes('Too many requests');
         if (!isRateLimit || attempt === maxRetries) {
           const prefix = `[LlmClient:${this.provider}]`;
-          const cleanMessage = message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+          const cleanMessage = message.startsWith(prefix)
+            ? message.slice(prefix.length).trim()
+            : message;
           throw new Error(`${prefix} ${cleanMessage}`);
         }
         const delay = Math.min(2000 * 2 ** attempt, 60000);
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
     clearInterval(interval);
@@ -697,7 +753,7 @@ export class LlmClient {
     const now = Date.now();
     const elapsed = now - this.lastRequestTime;
     if (elapsed < this.minRequestInterval) {
-      await new Promise((resolve) => setTimeout(resolve, this.minRequestInterval - elapsed));
+      await new Promise(resolve => setTimeout(resolve, this.minRequestInterval - elapsed));
     }
     this.lastRequestTime = Date.now();
   }
@@ -710,9 +766,7 @@ export class LlmClient {
   }
 
   private defaultModel(): string {
-    return this.provider === 'openai'
-      ? 'gpt-4o-mini'
-      : 'claude-3-5-sonnet-20241022';
+    return this.provider === 'openai' ? 'gpt-4o-mini' : 'claude-3-5-sonnet-20241022';
   }
 
   private async completeAnthropic(prompt: string, system?: string): Promise<string> {
@@ -730,7 +784,7 @@ export class LlmClient {
 
       const text = response.content
         .filter((c): c is Anthropic.TextBlock => c.type === 'text')
-        .map((c) => c.text)
+        .map(c => c.text)
         .join('')
         .trim();
       logger.debug({ model: this.model, contentLength: text.length }, 'Anthropic 响应');
@@ -801,7 +855,9 @@ export class LlmClient {
     responseFormat?: 'json_object'
   ): Promise<string> {
     const url = this.baseURL ?? 'https://api.openai.com/v1/chat/completions';
-    console.log(`[LlmClient] completeOpenAIStream 请求前 model=${this.model} max_tokens=${this.maxTokens}`);
+    console.log(
+      `[LlmClient] completeOpenAIStream 请求前 model=${this.model} max_tokens=${this.maxTokens}`
+    );
 
     const body: Record<string, unknown> = {
       model: this.model,
@@ -823,7 +879,9 @@ export class LlmClient {
       body: JSON.stringify(body),
     });
 
-    console.log(`[LlmClient] completeOpenAIStream 响应 status=${response.status} content-length=${response.headers.get('content-length') ?? 'unknown'}`);
+    console.log(
+      `[LlmClient] completeOpenAIStream 响应 status=${response.status} content-length=${response.headers.get('content-length') ?? 'unknown'}`
+    );
 
     if (!response.ok) {
       const text = await this.readResponseTextWithLimit(response);
@@ -852,7 +910,9 @@ export class LlmClient {
       buffer += decoder.decode(value, { stream: true });
       if (buffer.length > maxBufferChars) {
         reader.cancel().catch(() => undefined);
-        throw new Error(`SSE buffer 累积 ${buffer.length} 字符，超过 ${maxBufferChars}，可能后端返回了非 SSE 大响应`);
+        throw new Error(
+          `SSE buffer 累积 ${buffer.length} 字符，超过 ${maxBufferChars}，可能后端返回了非 SSE 大响应`
+        );
       }
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
@@ -877,7 +937,9 @@ export class LlmClient {
           if (text) {
             if (content.length + text.length > MAX_COMPLETE_RESPONSE_CHARS) {
               reader.cancel().catch(() => undefined);
-              throw new Error(`流式响应累计长度 ${content.length + text.length} 超过上限 ${MAX_COMPLETE_RESPONSE_CHARS}`);
+              throw new Error(
+                `流式响应累计长度 ${content.length + text.length} 超过上限 ${MAX_COMPLETE_RESPONSE_CHARS}`
+              );
             }
             content += text;
           }
@@ -890,7 +952,9 @@ export class LlmClient {
       }
     }
 
-    console.log(`[LlmClient] completeOpenAIStream 读取完成 chunks=${chunkCount} contentLength=${content.length}`);
+    console.log(
+      `[LlmClient] completeOpenAIStream 读取完成 chunks=${chunkCount} contentLength=${content.length}`
+    );
     logger.debug(
       { model: this.model, contentLength: content.length, rawPreview: rawPreview.slice(0, 500) },
       'OpenAI 流式响应'

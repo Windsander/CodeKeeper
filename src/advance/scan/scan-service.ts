@@ -110,20 +110,17 @@ export class ScanService {
     });
     this.child = child;
 
-    child.stdout?.on('data', (data) => {
+    child.stdout?.on('data', data => {
       logger.info({ output: data.toString().trim() }, '[Scan Worker]');
     });
-    child.stderr?.on('data', (data) => {
+    child.stderr?.on('data', data => {
       logger.warn({ output: data.toString().trim() }, '[Scan Worker]');
     });
 
     child.on('message', (msg: ScanWorkerMessage) => {
       switch (msg.type) {
         case 'progress':
-          logger.info(
-            { projectId: msg.projectId, stage: msg.stage },
-            '[ScanService] 扫描进度'
-          );
+          logger.info({ projectId: msg.projectId, stage: msg.stage }, '[ScanService] 扫描进度');
           break;
         case 'done':
           logger.info('[ScanService] 扫描任务完成');
@@ -134,7 +131,7 @@ export class ScanService {
       }
     });
 
-    child.on('exit', (code) => {
+    child.on('exit', code => {
       logger.info({ exitCode: code }, '[ScanService] 扫描 worker 退出');
       this.child = null;
       this.running = false;

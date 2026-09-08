@@ -26,10 +26,10 @@ describe('Maintainer memory graph visibility', () => {
 
     const graph = buildMemoryGraph({ projects, getResults: new Map([['proj-a', result]]) });
 
-    expect(graph.nodes.some((node) => node.id === 'agent:maintainer')).toBe(true);
+    expect(graph.nodes.some(node => node.id === 'agent:maintainer')).toBe(true);
     expect(graph.stats.totalMemories).toBe(1);
     expect(graph.stats.dailyGrowth).toHaveLength(14);
-    expect(graph.stats.dailyGrowth.find((entry) => entry.date === '2026-07-22')).toEqual({
+    expect(graph.stats.dailyGrowth.find(entry => entry.date === '2026-07-22')).toEqual({
       date: '2026-07-22',
       count: 1,
     });

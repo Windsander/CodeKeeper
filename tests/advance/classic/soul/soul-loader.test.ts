@@ -47,12 +47,8 @@ describe('getSoulPath', () => {
   it('应返回正确的完整路径', () => {
     const project = makeProject('test-path');
     const soulsDir = getProjectSoulsDir('test-path');
-    expect(getSoulPath(project, 'reviewer')).toBe(
-      join(soulsDir, 'MR-REVIEWER-SOUL.md'),
-    );
-    expect(getSoulPath(project, 'maintainer')).toBe(
-      join(soulsDir, 'MAINTAINER-SOUL.md'),
-    );
+    expect(getSoulPath(project, 'reviewer')).toBe(join(soulsDir, 'MR-REVIEWER-SOUL.md'));
+    expect(getSoulPath(project, 'maintainer')).toBe(join(soulsDir, 'MAINTAINER-SOUL.md'));
   });
 });
 
@@ -122,10 +118,7 @@ describe('soul-loader', () => {
     const weirdName = 'project/name:with|special';
     const weirdProject = makeProject(weirdName);
     await saveSoulContent(weirdProject, 'reviewer', 'test');
-    const path = join(
-      getProjectSoulsDir('project_name_with_special'),
-      'MR-REVIEWER-SOUL.md',
-    );
+    const path = join(getProjectSoulsDir('project_name_with_special'), 'MR-REVIEWER-SOUL.md');
     expect(existsSync(path)).toBe(true);
     rmSync(getProjectSoulsDir('project_name_with_special'), {
       recursive: true,

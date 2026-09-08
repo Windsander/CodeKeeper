@@ -24,10 +24,10 @@ export class IpcServer {
         }
       }
 
-      this.server = createServer((socket) => {
+      this.server = createServer(socket => {
         this.sockets.add(socket);
         let buffer = '';
-        socket.on('data', (data) => {
+        socket.on('data', data => {
           buffer += data.toString('utf-8');
           let idx;
           while ((idx = buffer.indexOf('\n')) !== -1) {
@@ -37,7 +37,7 @@ export class IpcServer {
           }
         });
         socket.on('close', () => this.sockets.delete(socket));
-        socket.on('error', (err) => logger.warn({ err }, 'IPC socket 错误'));
+        socket.on('error', err => logger.warn({ err }, 'IPC socket 错误'));
       });
 
       this.server.listen(this.options.socketPath, () => {
@@ -55,7 +55,7 @@ export class IpcServer {
   }
 
   stop(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       if (!this.server) {
         resolve();
         return;
@@ -80,7 +80,7 @@ export class IpcServer {
     const line = JSON.stringify(msg) + '\n';
     for (const socket of this.sockets) {
       if (socket.writable) {
-        socket.write(line, (err) => {
+        socket.write(line, err => {
           if (err) {
             logger.warn({ err, event }, 'IPC broadcast 写入失败');
           }
@@ -99,7 +99,10 @@ export class IpcServer {
     }
 
     if (typeof request.id !== 'string' || typeof request.method !== 'string') {
-      this.send(socket, { id: 'unknown', error: { code: 'INVALID_REQUEST', message: '请求缺少 id 或 method 字段' } });
+      this.send(socket, {
+        id: 'unknown',
+        error: { code: 'INVALID_REQUEST', message: '请求缺少 id 或 method 字段' },
+      });
       return;
     }
 
@@ -122,7 +125,7 @@ export class IpcServer {
       logger.warn({ response }, 'IPC socket 不可写，跳过发送');
       return;
     }
-    socket.write(JSON.stringify(response) + '\n', (err) => {
+    socket.write(JSON.stringify(response) + '\n', err => {
       if (err) {
         logger.warn({ err, response }, 'IPC socket 写入失败');
       }

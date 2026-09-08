@@ -43,7 +43,7 @@ export class MemoryWriteRetryService {
   start(): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
-      this.tick().catch((err) => {
+      this.tick().catch(err => {
         logger.error({ err }, 'MemoryWriteRetryService tick 异常');
       });
     }, this.intervalMs);
@@ -71,7 +71,7 @@ export class MemoryWriteRetryService {
       if (this.processingIds.has(write.id)) continue;
       this.processingIds.add(write.id);
       this.retryOne(url, write)
-        .catch((err) => {
+        .catch(err => {
           logger.error({ err, writeId: write.id }, '重试单条记忆写入时未捕获异常');
         })
         .finally(() => {

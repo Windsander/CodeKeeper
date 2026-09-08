@@ -74,7 +74,7 @@ function isRetryableStatus(status: number): boolean {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
@@ -136,7 +136,7 @@ export async function everosMemoryAddMessages(
     app_id: sanitizeEverOSId(params.appId),
     project_id: sanitizeEverOSId(params.projectId),
     session_id: sanitizeEverOSId(params.sessionId),
-    messages: messages.map((m) => ({
+    messages: messages.map(m => ({
       sender_id: sanitizeEverOSId(m.senderId),
       role: m.role,
       timestamp: m.timestamp ?? Date.now(),
@@ -295,11 +295,15 @@ export async function everosMemorySearch(
     body.agent_id = sanitizeEverOSId(params.owner.agentId);
   }
 
-  const res = await fetchWithRetry(`${everosUrl}/api/v1/memory/search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, { timeoutMs: 60000 });
+  const res = await fetchWithRetry(
+    `${everosUrl}/api/v1/memory/search`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    { timeoutMs: 60000 }
+  );
   if (!res.ok) {
     throw new Error(`EverOS memory/search 失败: ${res.status} ${await res.text()}`);
   }
@@ -328,11 +332,15 @@ export async function everosMemorySearchProject(
     enable_llm_rerank: true,
   };
 
-  const res = await fetchWithRetry(`${everosUrl}/api/v1/memory/search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, { timeoutMs: 60000 });
+  const res = await fetchWithRetry(
+    `${everosUrl}/api/v1/memory/search`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+    { timeoutMs: 60000 }
+  );
   if (!res.ok) {
     throw new Error(`EverOS memory/search(project) 失败: ${res.status} ${await res.text()}`);
   }

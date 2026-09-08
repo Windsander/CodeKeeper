@@ -98,7 +98,12 @@ export class ModelServer {
   private started = false;
   private urlValue: string | null = null;
   private exitHandler?: () => void;
-  private statusValue: ModelServiceStatus = { state: 'idle', url: null, error: null, progress: null };
+  private statusValue: ModelServiceStatus = {
+    state: 'idle',
+    url: null,
+    error: null,
+    progress: null,
+  };
   private stderrBuffer = '';
   private progressTimer: NodeJS.Timeout | null = null;
   private expectedTotalBytes: number | null = null;
@@ -158,7 +163,10 @@ export class ModelServer {
     ];
 
     this.setStatus('starting');
-    logger.info({ model: this.options.model, port }, `启动 ${this.options.capability} 本地模型服务`);
+    logger.info(
+      { model: this.options.model, port },
+      `启动 ${this.options.capability} 本地模型服务`
+    );
 
     return new Promise((resolve, reject) => {
       const child = spawn(cli, args, {
@@ -184,7 +192,7 @@ export class ModelServer {
       // 同时累积 stdout 与 stderr，infinity_emb v2 会把 Uvicorn running 输出到 stderr
       let output = '';
 
-      child.stdout?.on('data', (chunk) => {
+      child.stdout?.on('data', chunk => {
         const text = chunk.toString();
         this.appendLog('stdout', text);
         output += text;
@@ -192,7 +200,7 @@ export class ModelServer {
         this.tryParseUrl(output, resolve);
       });
 
-      child.stderr?.on('data', (chunk) => {
+      child.stderr?.on('data', chunk => {
         const text = chunk.toString();
         this.appendLog('stderr', text);
         this.stderrBuffer += text;
@@ -201,13 +209,13 @@ export class ModelServer {
         this.tryParseUrl(output, resolve);
       });
 
-      child.on('error', (err) => {
+      child.on('error', err => {
         this.setError(`启动 ${this.options.capability} 失败: ${err.message}`);
         this.cleanup();
         reject(new Error(`启动 ${this.options.capability} 失败: ${err.message}`));
       });
 
-      child.on('exit', (code) => {
+      child.on('exit', code => {
         const tail = this.getLogs(LOG_TAIL_LINES).join('\n');
         if (!this.started) {
           this.setError(`${this.options.capability} 进程退出 code=${code}\n最近日志:\n${tail}`);
@@ -215,7 +223,11 @@ export class ModelServer {
         const stderrSnapshot = this.stderrBuffer;
         this.cleanup();
         if (!this.started) {
-          reject(new Error(`${this.options.capability} 进程退出 code=${code}, output=${output}, stderr=${stderrSnapshot}`));
+          reject(
+            new Error(
+              `${this.options.capability} 进程退出 code=${code}, output=${output}, stderr=${stderrSnapshot}`
+            )
+          );
         }
       });
 
@@ -293,7 +305,7 @@ export class ModelServer {
 
     // 先异步获取模型总大小，再开始轮询缓存目录
     fetchTreeSize(modelId)
-      .then((total) => {
+      .then(total => {
         if (total != null && total > 0) {
           this.expectedTotalBytes = total;
           logger.debug({ modelId, totalBytes: total }, '已获取 HuggingFace 模型总大小');
@@ -363,7 +375,7 @@ export class ModelServer {
     // 优先从百分比进度条提取最大进度值（支持 45%、45.5%）
     const percentMatches = text.match(/(\d+(?:\.\d+)?)%/g);
     if (percentMatches) {
-      const maxProgress = Math.max(...percentMatches.map((m) => parseFloat(m)));
+      const maxProgress = Math.max(...percentMatches.map(m => parseFloat(m)));
       this.setStatus('downloading', Math.round(maxProgress));
       return;
     }

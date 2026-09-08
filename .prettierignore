@@ -1,0 +1,7 @@
+dist/
+vendor/
+node_modules/
+package-lock.json
+tests/fixtures/
+src/assets/prompts/
+*.log

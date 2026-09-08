@@ -15,11 +15,7 @@ import { join } from 'node:path';
 import { getProjectAgentStatusDir } from '../../../core/platform.js';
 import type { Project } from '../../types.js';
 
-export type MrAgentProjectErrorType =
-  | 'missing-token'
-  | 'invalid-token'
-  | 'gitlab-api'
-  | 'unknown';
+export type MrAgentProjectErrorType = 'missing-token' | 'invalid-token' | 'gitlab-api' | 'unknown';
 
 export interface MrAgentProjectStatus {
   /** 最近一次错误 */
@@ -68,10 +64,7 @@ export function loadProjectStatus(project: Project): MrAgentProjectStatus {
 /**
  * 写入项目 MR Agent 状态
  */
-export function saveProjectStatus(
-  project: Project,
-  status: MrAgentProjectStatus
-): void {
+export function saveProjectStatus(project: Project, status: MrAgentProjectStatus): void {
   const path = getStatusPath(project);
   mkdirSync(getProjectAgentStatusDir(project.name), { recursive: true });
   writeFileSync(path, JSON.stringify(status, null, 2), 'utf-8');

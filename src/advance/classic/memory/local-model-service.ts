@@ -5,11 +5,11 @@ import { spawn } from 'node:child_process';
 import { logger } from '../../../core/logger.js';
 import { getAppStorageDir, getLogDir } from '../../../core/platform.js';
 import { ModelServer, type ModelCapability } from './model-server.js';
-import {
-  DEFAULT_EMBEDDING_MODEL,
-  DEFAULT_RERANK_MODEL,
-} from './local-model-catalog.js';
-import type { LocalModelStatus, ModelServiceStatus } from '../../../electron/shared/service-status.js';
+import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL } from './local-model-catalog.js';
+import type {
+  LocalModelStatus,
+  ModelServiceStatus,
+} from '../../../electron/shared/service-status.js';
 
 export interface LocalModelServiceManagerOptions {
   venvDir?: string;
@@ -23,8 +23,18 @@ export class LocalModelServiceManager {
   private readonly rerankModel: string;
   private embeddingServer: ModelServer | null = null;
   private rerankServer: ModelServer | null = null;
-  private embeddingStatus: ModelServiceStatus = { state: 'idle', url: null, error: null, progress: null };
-  private rerankStatus: ModelServiceStatus = { state: 'idle', url: null, error: null, progress: null };
+  private embeddingStatus: ModelServiceStatus = {
+    state: 'idle',
+    url: null,
+    error: null,
+    progress: null,
+  };
+  private rerankStatus: ModelServiceStatus = {
+    state: 'idle',
+    url: null,
+    error: null,
+    progress: null,
+  };
   private starting = false;
   private stopping = false;
 
@@ -121,8 +131,8 @@ export class LocalModelServiceManager {
 
     const prefix = `model-${capability}-`;
     const files = readdirSync(logDir)
-      .filter((name) => name.startsWith(prefix) && name.endsWith('.log'))
-      .map((name) => {
+      .filter(name => name.startsWith(prefix) && name.endsWith('.log'))
+      .map(name => {
         const fullPath = join(logDir, name);
         return { name, path: fullPath, mtime: statSync(fullPath).mtime };
       })
@@ -133,7 +143,7 @@ export class LocalModelServiceManager {
     try {
       const all = readFileSync(files[0].path, 'utf-8')
         .split('\n')
-        .filter((line) => line.trim() !== '');
+        .filter(line => line.trim() !== '');
       return all.slice(-maxLines);
     } catch (err) {
       logger.warn({ err, capability }, '读取模型日志文件失败');
@@ -168,7 +178,7 @@ export class LocalModelServiceManager {
     }
     const libDir = join(this.venvDir, 'lib');
     const entries = readdirSync(libDir, { withFileTypes: true });
-    const pythonDir = entries.find((e) => e.isDirectory() && e.name.startsWith('python'))?.name;
+    const pythonDir = entries.find(e => e.isDirectory() && e.name.startsWith('python'))?.name;
     if (!pythonDir) {
       throw new Error(`无法定位 venv site-packages: ${libDir}`);
     }
@@ -176,7 +186,10 @@ export class LocalModelServiceManager {
   }
 
   private async ensureVenv(): Promise<void> {
-    const cli = join(this.venvDir, process.platform === 'win32' ? 'Scripts\\infinity_emb.exe' : 'bin/infinity_emb');
+    const cli = join(
+      this.venvDir,
+      process.platform === 'win32' ? 'Scripts\\infinity_emb.exe' : 'bin/infinity_emb'
+    );
     const stubOk = existsSync(join(this.sitePackagesDir(), 'optimum', 'bettertransformer.py'));
     if (existsSync(cli) && stubOk) return;
 
@@ -236,7 +249,11 @@ __all__ = ['BetterTransformer', 'BetterTransformerManager']
     logger.info({ optimumDir }, '已确保 optimum bettertransformer 占位 stub');
   }
 
-  private async startCapability(capability: ModelCapability, model: string, force = false): Promise<void> {
+  private async startCapability(
+    capability: ModelCapability,
+    model: string,
+    force = false
+  ): Promise<void> {
     if (!force) {
       const existing = capability === 'embedding' ? this.embeddingServer : this.rerankServer;
       if (existing?.isHealthy()) return;
@@ -246,7 +263,7 @@ __all__ = ['BetterTransformer', 'BetterTransformerManager']
       capability,
       model,
       venvDir: this.venvDir,
-      onStatusChange: (status) => {
+      onStatusChange: status => {
         this.setCapabilityStatus(capability, status);
       },
     });
@@ -285,7 +302,8 @@ __all__ = ['BetterTransformer', 'BetterTransformerManager']
   }
 
   private async findPython(): Promise<string> {
-    const candidates = process.platform === 'win32' ? ['python.exe', 'python3.exe'] : ['python3', 'python'];
+    const candidates =
+      process.platform === 'win32' ? ['python.exe', 'python3.exe'] : ['python3', 'python'];
     for (const cmd of candidates) {
       try {
         await this.runCommand(cmd, ['--version']);
@@ -301,13 +319,16 @@ __all__ = ['BetterTransformer', 'BetterTransformerManager']
     await new Promise<void>((resolve, reject) => {
       const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] });
       let stderr = '';
-      child.stderr?.on('data', (chunk) => {
+      child.stderr?.on('data', chunk => {
         stderr += chunk.toString();
       });
       child.on('error', reject);
-      child.on('exit', (code) => {
+      child.on('exit', code => {
         if (code === 0) resolve();
-        else reject(new Error(`命令失败: ${command} ${args.join(' ')}，code=${code}，stderr=${stderr}`));
+        else
+          reject(
+            new Error(`命令失败: ${command} ${args.join(' ')}，code=${code}，stderr=${stderr}`)
+          );
       });
     });
   }

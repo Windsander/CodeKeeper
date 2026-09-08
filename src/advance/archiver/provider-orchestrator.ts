@@ -466,7 +466,8 @@ export class ArchiverProviderOrchestrator implements ArchiverProviderCoordinator
     const passiveProviderIds = this.registry
       .listDescriptors()
       .filter(
-        descriptor => descriptor.automation === 'manual' && descriptor.capabilities.includes('query')
+        descriptor =>
+          descriptor.automation === 'manual' && descriptor.capabilities.includes('query')
       )
       .map(descriptor => descriptor.id);
     const knowledgeProviderIds = uniqueIds([...providerIds, ...passiveProviderIds]);

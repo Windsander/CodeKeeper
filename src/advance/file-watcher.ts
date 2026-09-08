@@ -85,15 +85,17 @@ export class FileWatcher {
     };
 
     this.watcher
-      .on('add', (path) => emit('add', path))
-      .on('change', (path) => emit('change', path))
-      .on('unlink', (path) => emit('unlink', path));
+      .on('add', path => emit('add', path))
+      .on('change', path => emit('change', path))
+      .on('unlink', path => emit('unlink', path));
 
     if (onReady) {
       this.watcher.on('ready', onReady);
     }
     if (onError) {
-      this.watcher.on('error', (err: unknown) => onError(err instanceof Error ? err : new Error(String(err))));
+      this.watcher.on('error', (err: unknown) =>
+        onError(err instanceof Error ? err : new Error(String(err)))
+      );
     }
   }
 

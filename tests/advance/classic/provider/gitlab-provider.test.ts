@@ -270,10 +270,7 @@ describe('GitLabProvider', () => {
 
   describe('listProtectedBranches', () => {
     it('应返回保护分支名列表', async () => {
-      mockListProtectedBranches.mockResolvedValue([
-        { name: 'main' },
-        { name: 'develop' },
-      ]);
+      mockListProtectedBranches.mockResolvedValue([{ name: 'main' }, { name: 'develop' }]);
 
       const provider = new GitLabProvider(gitlabConfig);
       const branches = await provider.listProtectedBranches();
@@ -282,7 +279,6 @@ describe('GitLabProvider', () => {
       expect(mockListProtectedBranches).toHaveBeenCalled();
     });
   });
-
 
   describe('getDiscussions', () => {
     it('keeps the review headSha from discussion position', async () => {
@@ -349,18 +345,12 @@ describe('GitLabProvider', () => {
         resolved: false,
         system: false,
       };
-      mockGetMergeRequestNotes.mockResolvedValue([
-        oldHumanNote,
-        agentNote,
-        ...newestBotNotes,
-      ]);
+      mockGetMergeRequestNotes.mockResolvedValue([oldHumanNote, agentNote, ...newestBotNotes]);
 
       const snapshot = await new GitLabProvider(gitlabConfig).getReviewerCommentSnapshot(42);
 
       expect(snapshot.all).toHaveLength(102);
-      expect(snapshot.all.map(comment => comment.id)).toEqual(
-        expect.arrayContaining([1001, 1002])
-      );
+      expect(snapshot.all.map(comment => comment.id)).toEqual(expect.arrayContaining([1001, 1002]));
       expect(snapshot.active).toHaveLength(100);
       expect(snapshot.activeHuman).toEqual([]);
     });
@@ -432,8 +422,8 @@ describe('GitLabProvider', () => {
 
       // 只保留 alice 和 robert 的评论（非 system 且非 bot）
       expect(result).toHaveLength(2);
-      expect(result.map((r) => r.author)).toContain('alice');
-      expect(result.map((r) => r.author)).toContain('robert');
+      expect(result.map(r => r.author)).toContain('alice');
+      expect(result.map(r => r.author)).toContain('robert');
     });
 
     it('bot 用户名匹配应忽略大小写', async () => {

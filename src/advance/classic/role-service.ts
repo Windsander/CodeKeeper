@@ -43,7 +43,7 @@ export class RoleService {
     private role: Role,
     private context: HandlerContext,
     private runnerPath: string,
-    private options: RoleServiceOptions = {},
+    private options: RoleServiceOptions = {}
   ) {}
 
   /**
@@ -80,14 +80,14 @@ export class RoleService {
     });
     this.child = child;
 
-    child.stdout?.on('data', (data) => {
+    child.stdout?.on('data', data => {
       logger.info({ role: this.role, output: data.toString().trim() }, '[Role Agent]');
     });
-    child.stderr?.on('data', (data) => {
+    child.stderr?.on('data', data => {
       logger.warn({ role: this.role, output: data.toString().trim() }, '[Role Agent]');
     });
 
-    child.on('exit', (code) => {
+    child.on('exit', code => {
       logger.info(`角色 ${this.role} 子进程退出，code=${code}`);
       // 防止旧子进程的 exit 事件在 restart 后把新子进程引用清空
       if (this.child === child) {
@@ -140,7 +140,7 @@ export class RoleService {
     oldChild.kill('SIGTERM');
 
     // 等待旧子进程退出，最多 3 秒；超时则强制结束
-    await new Promise<void>((resolve) => {
+    await new Promise<void>(resolve => {
       const timer = setTimeout(() => {
         logger.warn(`角色 ${this.role} 旧子进程未在 3 秒内退出，强制结束`);
         oldChild.kill('SIGKILL');
@@ -163,7 +163,7 @@ export class RoleService {
     return {
       running: this.child !== null,
       enabledProjects: enabledProjects.length,
-      runningProjects: enabledProjects.map((p) => p.id),
+      runningProjects: enabledProjects.map(p => p.id),
     };
   }
 

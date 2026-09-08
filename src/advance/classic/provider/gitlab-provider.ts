@@ -19,10 +19,7 @@ import {
   type CiFailureReport,
   type CiFailedJob,
 } from './types.js';
-import {
-  selectRecentActiveComments,
-  selectRecentActiveDiscussions,
-} from './activity-window.js';
+import { selectRecentActiveComments, selectRecentActiveDiscussions } from './activity-window.js';
 import { matchesFilter } from './mr-filter.js';
 import { GitLabClient } from '../../../gitlab/client.js';
 import type { ProjectConfig } from '../../../types.js';
@@ -72,22 +69,22 @@ export class GitLabProvider implements IGitProvider {
 
   async listMembers(): Promise<Array<{ username: string; name?: string }>> {
     const members = await this.client.listMembers();
-    return members.map((m) => ({ username: m.username, name: m.name }));
+    return members.map(m => ({ username: m.username, name: m.name }));
   }
 
   async listLabels(): Promise<string[]> {
     const labels = await this.client.listLabels();
-    return labels.map((l) => l.name);
+    return labels.map(l => l.name);
   }
 
   async listProtectedBranches(): Promise<string[]> {
     const branches = await this.client.listProtectedBranches();
-    return branches.map((b) => b.name);
+    return branches.map(b => b.name);
   }
 
   async listBranches(): Promise<string[]> {
     const branches = await this.client.listBranches();
-    return branches.map((b) => b.name);
+    return branches.map(b => b.name);
   }
 
   async verify(): Promise<void> {
@@ -154,7 +151,7 @@ export class GitLabProvider implements IGitProvider {
     // 取每个字段的第一个值利用 GitLab API 预过滤，减少传输量
     if (filters) {
       for (const condition of filters.conditions) {
-        const values = condition.values.filter((v) => v.trim() !== '');
+        const values = condition.values.filter(v => v.trim() !== '');
         if (values.length === 0) continue;
         const firstValue = values[0];
         switch (condition.field) {
@@ -193,7 +190,7 @@ export class GitLabProvider implements IGitProvider {
       target_branch: apiParams.target_branch,
     });
 
-    const mrs = gitlabMRs.map((mr) => ({
+    const mrs = gitlabMRs.map(mr => ({
       iid: mr.iid,
       title: mr.title,
       description: mr.description ?? '',
@@ -206,11 +203,13 @@ export class GitLabProvider implements IGitProvider {
       updatedAt: mr.updated_at,
       webUrl: mr.web_url,
       assignee: (mr as unknown as { assignee?: { username: string } }).assignee?.username,
-      reviewers: (mr as unknown as { reviewers?: Array<{ username: string }> }).reviewers?.map((r) => r.username),
+      reviewers: (mr as unknown as { reviewers?: Array<{ username: string }> }).reviewers?.map(
+        r => r.username
+      ),
       labels: (mr as unknown as { labels?: string[] }).labels,
     }));
 
-    return mrs.filter((mr) => matchesFilter(mr, filters));
+    return mrs.filter(mr => matchesFilter(mr, filters));
   }
 
   /**
@@ -218,7 +217,9 @@ export class GitLabProvider implements IGitProvider {
    */
   async getMRShaInfo(iid: number): Promise<{ baseSha: string; headSha: string; startSha: string }> {
     const mr = await this.client.getMergeRequest(iid);
-    const refs = (mr as unknown as { diff_refs?: { base_sha: string; head_sha: string; start_sha: string } }).diff_refs;
+    const refs = (
+      mr as unknown as { diff_refs?: { base_sha: string; head_sha: string; start_sha: string } }
+    ).diff_refs;
     if (!refs) {
       throw new Error(`[GitLabProvider] MR !${iid} 未返回 diff_refs`);
     }
@@ -235,7 +236,7 @@ export class GitLabProvider implements IGitProvider {
   async getMRDiff(iid: number): Promise<MrDiff[]> {
     const changes = await this.client.getMergeRequestChanges(iid);
 
-    return changes.changes.map((change) => {
+    return changes.changes.map(change => {
       const { additions, deletions } = countDiffLines(change.diff);
 
       return {
@@ -286,15 +287,16 @@ export class GitLabProvider implements IGitProvider {
   async getDiscussionSnapshot(iid: number): Promise<RemoteActivitySnapshot<Discussion>> {
     const discussions = await this.client.getMergeRequestDiscussions(iid);
     const all = discussions
-      .map((discussion) => {
+      .map(discussion => {
         const notes = discussion.notes.filter(note => !note.system);
-        const position = discussion.position ?? discussion.notes.find((note) => note.position)?.position;
+        const position =
+          discussion.position ?? discussion.notes.find(note => note.position)?.position;
         return {
           id: discussion.id,
           // 某些 GitLab 实例/版本对普通 note discussion 不返回 resolvable/resolved，默认视为可处理
           resolvable: discussion.resolvable ?? true,
           resolved: discussion.resolved ?? false,
-          notes: notes.map((note) => ({
+          notes: notes.map(note => ({
             id: note.id,
             author: note.author.username,
             body: note.body,
@@ -353,8 +355,8 @@ export class GitLabProvider implements IGitProvider {
   async getReviewerCommentSnapshot(iid: number): Promise<ReviewerCommentSnapshot> {
     const notes = await this.client.getMergeRequestNotes(iid);
     const all = notes
-      .filter((note) => !note.system)
-      .map((note) => ({
+      .filter(note => !note.system)
+      .map(note => ({
         id: note.id,
         author: note.author.username,
         body: note.body,

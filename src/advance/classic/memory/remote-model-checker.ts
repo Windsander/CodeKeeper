@@ -60,7 +60,10 @@ function normalizeBaseUrl(provider: 'anthropic' | 'openai', apiUrl?: string): st
   }
   try {
     const parsed = new URL(url);
-    if (parsed.hostname === OFFICIAL_HOSTS[provider] && (parsed.pathname === '' || parsed.pathname === '/')) {
+    if (
+      parsed.hostname === OFFICIAL_HOSTS[provider] &&
+      (parsed.pathname === '' || parsed.pathname === '/')
+    ) {
       return `${url}/v1`;
     }
   } catch {
@@ -98,7 +101,7 @@ async function listModels(baseUrl: string, headers: Record<string, string>): Pro
     throw new Error(`HTTP ${res.status}: ${preview || '无响应体'}`);
   }
   const body = (await res.json()) as { data?: Array<{ id?: string }> };
-  return (body.data ?? []).map((m) => m.id ?? '').filter(Boolean);
+  return (body.data ?? []).map(m => m.id ?? '').filter(Boolean);
 }
 
 /**
@@ -160,7 +163,10 @@ export class RemoteModelChecker {
       const ids = await listModels(baseUrl, getHeaders(params));
       const found = ids.includes(fullModel);
       if (!found) {
-        logger.debug({ baseUrl, fullModel, returnedIds: ids.slice(0, 20) }, '远端模型 /v1/models 返回列表未包含配置模型，但服务可达');
+        logger.debug(
+          { baseUrl, fullModel, returnedIds: ids.slice(0, 20) },
+          '远端模型 /v1/models 返回列表未包含配置模型，但服务可达'
+        );
       }
       // 只要 /v1/models 能通即认为服务可用；模型名可能是别名或自定义，不强求在列表中精确匹配
       return {

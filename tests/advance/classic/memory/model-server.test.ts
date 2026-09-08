@@ -27,7 +27,7 @@ async function waitForSpawnCall(): Promise<void> {
     if (Date.now() - start > 1000) {
       throw new Error('等待 spawn 调用超时');
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 10));
   }
 }
 
@@ -77,7 +77,10 @@ describe('ModelServer', () => {
 
     const startPromise = server.start();
     await waitForSpawnCall();
-    fake.stderr.emit('data', Buffer.from('INFO:     Uvicorn running on http://127.0.0.1:59900 (Press CTRL+C to quit)'));
+    fake.stderr.emit(
+      'data',
+      Buffer.from('INFO:     Uvicorn running on http://127.0.0.1:59900 (Press CTRL+C to quit)')
+    );
 
     const url = await startPromise;
     expect(url).toBe('http://127.0.0.1:59900');
@@ -295,7 +298,7 @@ describe('ModelServer', () => {
     fake.stdout.emit('data', Buffer.from('Uvicorn running on http://127.0.0.1:12345'));
     await startPromise;
 
-    const files = readdirSync(TEST_LOG_DIR).filter((f) => f.startsWith('model-embedding-'));
+    const files = readdirSync(TEST_LOG_DIR).filter(f => f.startsWith('model-embedding-'));
     expect(files.length).toBe(1);
     const content = readFileSync(join(TEST_LOG_DIR, files[0]), 'utf-8');
     expect(content).toContain('[stdout] line one');

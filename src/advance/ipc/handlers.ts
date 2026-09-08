@@ -979,9 +979,7 @@ function getArchiverProviderOrchestrator(
   ctx: HandlerContext
 ): Pick<ArchiverProviderOrchestrator, 'listProviders' | 'probeProject' | 'readStatus'> {
   return (
-    ctx.codeGraphService ??
-    ctx.archiverProviderOrchestrator ??
-    new ArchiverProviderOrchestrator()
+    ctx.codeGraphService ?? ctx.archiverProviderOrchestrator ?? new ArchiverProviderOrchestrator()
   );
 }
 

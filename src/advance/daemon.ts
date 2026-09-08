@@ -20,19 +20,18 @@ import { EverOSMcpServer } from './classic/memory/everos-mcp-server.js';
 import { MemoryWriteQueue } from './classic/memory/memory-write-queue.js';
 import { MemoryWriteRetryService } from './classic/memory/memory-write-retry-service.js';
 import { LocalModelServiceManager } from './classic/memory/local-model-service.js';
-import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL, getEmbeddingModelDimension, fetchEmbeddingModelDimension } from './classic/memory/local-model-catalog.js';
+import {
+  DEFAULT_EMBEDDING_MODEL,
+  DEFAULT_RERANK_MODEL,
+  getEmbeddingModelDimension,
+  fetchEmbeddingModelDimension,
+} from './classic/memory/local-model-catalog.js';
 import { RemoteModelChecker, cleanBaseUrl } from './classic/memory/remote-model-checker.js';
-import type {
-  CodeGraphServiceStatus,
-  EverosStatus,
-} from '../electron/shared/service-status.js';
+import type { CodeGraphServiceStatus, EverosStatus } from '../electron/shared/service-status.js';
 import type { RemoteModelStatus } from '../electron/shared/service-status.js';
 import path from 'node:path';
 import { join } from 'node:path';
-import {
-  CodeGraphService,
-  type CodeGraphServiceController,
-} from './archiver/codegraph-service.js';
+import { CodeGraphService, type CodeGraphServiceController } from './archiver/codegraph-service.js';
 
 export interface DaemonOptions {
   registry: ProjectRegistry;
@@ -89,8 +88,22 @@ export class Daemon {
   private embeddingDim: number | null = null;
   private remoteModelChecker = new RemoteModelChecker();
   private remoteModelStatus: RemoteModelStatus = {
-    llm: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
-    multimodal: { state: 'unconfigured', modelLabel: '未配置', fullModel: '', baseUrl: null, error: null, lastCheckedAt: 0 },
+    llm: {
+      state: 'unconfigured',
+      modelLabel: '未配置',
+      fullModel: '',
+      baseUrl: null,
+      error: null,
+      lastCheckedAt: 0,
+    },
+    multimodal: {
+      state: 'unconfigured',
+      modelLabel: '未配置',
+      fullModel: '',
+      baseUrl: null,
+      error: null,
+      lastCheckedAt: 0,
+    },
   };
   private remoteModelCheckTimer: NodeJS.Timeout | null = null;
 
@@ -143,7 +156,7 @@ export class Daemon {
       codeGraphService: this.codeGraphService,
       remoteModelChecker: this.remoteModelChecker,
       getRemoteModelStatus: () => this.remoteModelStatus,
-      getProvider: (project) => {
+      getProvider: project => {
         if (project.gitlab) {
           return new GitLabProvider(project.gitlab);
         }
@@ -160,7 +173,7 @@ export class Daemon {
               minRequestInterval: this.llmRequestInterval(),
             })
           : null,
-      updateDaemonConfig: (config) => this.updateConfig(config),
+      updateDaemonConfig: config => this.updateConfig(config),
       getDaemonConfig: () => ({
         apiKey: this.options.apiKey ?? '',
         apiUrl: this.options.apiUrl ?? '',
@@ -176,8 +189,8 @@ export class Daemon {
       isDaemonRunning: () => this.running,
       getEverosStatus: () => this.getEverosStatus(),
       getCodeGraphStatus: () => this.getCodeGraphStatus(),
-      watchProject: (project) => this.watchProject(project),
-      unwatchProject: (projectId) => this.unwatchProject(projectId),
+      watchProject: project => this.watchProject(project),
+      unwatchProject: projectId => this.unwatchProject(projectId),
     };
 
     // 将完整的 handlerContext 回设到 serviceRegistry
@@ -215,7 +228,10 @@ export class Daemon {
           if (this.embeddingDim) {
             logger.info({ model: embedModel, dim: this.embeddingDim }, '已解析 embedding 模型维度');
           } else {
-            logger.warn({ model: embedModel }, '无法从 HuggingFace 解析 embedding 维度，使用本地默认值');
+            logger.warn(
+              { model: embedModel },
+              '无法从 HuggingFace 解析 embedding 维度，使用本地默认值'
+            );
           }
           logger.info('本地模型服务已就绪，尝试启动/重启 EverOS');
           await this.startEverOS();
@@ -226,14 +242,14 @@ export class Daemon {
           );
         }
       })
-      .catch((err) => {
+      .catch(err => {
         const message = err instanceof Error ? err.message : String(err);
         logger.warn({ err }, `本地模型服务未启动: ${message}`);
         logger.warn('本地模型服务未就绪，EverOS 将不会自动启动，Agent 子进程会等待就绪');
       });
 
     // 初始检测一次远端模型连通性，并启动 30s 轮询
-    this.checkRemoteModels().catch((err) => logger.warn({ err }, '初始远端模型检测失败'));
+    this.checkRemoteModels().catch(err => logger.warn({ err }, '初始远端模型检测失败'));
     this.startRemoteModelChecks();
     this.memoryWriteRetryService.start();
 
@@ -332,7 +348,7 @@ export class Daemon {
     if (this.remoteModelCheckTimer) return;
     this.remoteModelCheckTimer = setInterval(() => {
       if (!this.running) return;
-      this.checkRemoteModels().catch((err) => {
+      this.checkRemoteModels().catch(err => {
         logger.warn({ err }, '远端模型状态检测失败');
       });
     }, 30000);
@@ -350,11 +366,14 @@ export class Daemon {
     this.everosError = null;
 
     // EverOS 必须依赖远端 LLM 配置才能启动，且要求 OpenAI 兼容协议
-    const effectiveLlmUrl = (this.options.apiUrl ? cleanBaseUrl(this.options.apiUrl) : undefined) || this.getDefaultLlmBaseUrl(this.options.provider);
+    const effectiveLlmUrl =
+      (this.options.apiUrl ? cleanBaseUrl(this.options.apiUrl) : undefined) ||
+      this.getDefaultLlmBaseUrl(this.options.provider);
     if (!this.options.apiKey || !effectiveLlmUrl) {
-      const providerHint = this.options.provider === 'anthropic'
-        ? '当前 Provider 为 Anthropic，EverOS LLM 需要 OpenAI 兼容的 Base URL，请在设置页填写代理地址或切换到 OpenAI 兼容 Provider。'
-        : '请先在设置页填写 API Key 和 Base URL。';
+      const providerHint =
+        this.options.provider === 'anthropic'
+          ? '当前 Provider 为 Anthropic，EverOS LLM 需要 OpenAI 兼容的 Base URL，请在设置页填写代理地址或切换到 OpenAI 兼容 Provider。'
+          : '请先在设置页填写 API Key 和 Base URL。';
       const message = `EverOS 需要远端 LLM 配置：${providerHint}`;
       logger.warn(message);
       this.everosState = 'error';
@@ -517,7 +536,7 @@ export class Daemon {
               logger.warn({ status }, '配置更新后本地模型服务未完全就绪，EverOS 保持停止');
             }
           })
-          .catch((err) => {
+          .catch(err => {
             const message = err instanceof Error ? err.message : String(err);
             logger.warn({ err }, `配置更新后本地模型服务/EverOS 启动失败: ${message}`);
           })
@@ -532,9 +551,7 @@ export class Daemon {
       config.model !== undefined ||
       config.everos !== undefined;
     if (this.running && remoteConfigChanged) {
-      this.checkRemoteModels().catch((err) =>
-        logger.warn({ err }, '配置更新后远端模型检测失败')
-      );
+      this.checkRemoteModels().catch(err => logger.warn({ err }, '配置更新后远端模型检测失败'));
     }
   }
 
@@ -589,7 +606,9 @@ export class Daemon {
 
     // LLM：EverOS 的 LLM 客户端使用 OpenAI 兼容协议；优先使用用户填写的 Base URL，
     // OpenAI 官方 provider 留空时补全默认值，Anthropic 原生 API 不兼容，不自动补全
-    const effectiveLlmUrl = (agent.apiUrl ? cleanBaseUrl(agent.apiUrl) : undefined) || this.getDefaultLlmBaseUrl(this.options.provider);
+    const effectiveLlmUrl =
+      (agent.apiUrl ? cleanBaseUrl(agent.apiUrl) : undefined) ||
+      this.getDefaultLlmBaseUrl(this.options.provider);
     if (agent.apiKey) env.EVEROS_LLM__API_KEY = agent.apiKey;
     if (effectiveLlmUrl) env.EVEROS_LLM__BASE_URL = effectiveLlmUrl;
     if (agent.model) env.EVEROS_LLM__MODEL = agent.model;
@@ -599,7 +618,11 @@ export class Daemon {
     env.EVEROS_MEMORIZE__SESSION_LOCK_TIMEOUT_SECONDS = '120';
 
     logger.info(
-      { provider: this.options.provider, baseUrl: effectiveLlmUrl ?? 'unset', model: agent.model || 'default' },
+      {
+        provider: this.options.provider,
+        baseUrl: effectiveLlmUrl ?? 'unset',
+        model: agent.model || 'default',
+      },
       '构建 EverOS LLM 环境变量'
     );
 
@@ -660,13 +683,16 @@ export class Daemon {
       projectRoot: project.rootPath,
       config,
       onEvent: (event: WatchedEvent) => {
-        logger.info({ projectId: project.id, type: event.type, filePath: event.filePath }, '文件事件入库');
+        logger.info(
+          { projectId: project.id, type: event.type, filePath: event.filePath },
+          '文件事件入库'
+        );
         this.options.store.insertEvent({ ...event, projectId: project.id });
       },
       onReady: () => {
         logger.info({ projectId: project.id, projectRoot: project.rootPath }, '项目文件监控已就绪');
       },
-      onError: (err) => {
+      onError: err => {
         logger.warn({ projectId: project.id, err }, '文件监控错误');
       },
     });
@@ -678,7 +704,12 @@ export class Daemon {
       const archiveWatcher = new FileWatcher();
       archiveWatcher.start({
         projectRoot: archiveRoot,
-        config: { include: [], exclude: [], categories: config.categories, docTypes: config.docTypes },
+        config: {
+          include: [],
+          exclude: [],
+          categories: config.categories,
+          docTypes: config.docTypes,
+        },
         onEvent: (event: WatchedEvent) => {
           this.ipcServer?.broadcast('archive-tree-changed', {
             projectId: project.id,
@@ -686,7 +717,7 @@ export class Daemon {
             filePath: event.filePath,
           });
         },
-        onError: (err) => {
+        onError: err => {
           logger.warn({ projectId: project.id, archiveRoot, err }, '归档目录监控错误');
         },
       });

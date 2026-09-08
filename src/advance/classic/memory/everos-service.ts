@@ -88,21 +88,21 @@ export class EverOSService {
       let stdoutCapped = false;
       let stderrCapped = false;
 
-      child.stdout?.on('data', (chunk) => {
+      child.stdout?.on('data', chunk => {
         const text = chunk.toString();
         stdout = appendCapped(stdout, text, maxOutputChars);
         if (!stdoutCapped && stdout.length >= maxOutputChars) {
           stdoutCapped = true;
           logger.warn('[EverOS] stdout 输出超过 100KB，已滚动截断');
         }
-        stdoutLineBuffer = this.flushLogLines(stdoutLineBuffer + text, (line) => {
+        stdoutLineBuffer = this.flushLogLines(stdoutLineBuffer + text, line => {
           if (this.shouldLogStdoutLine(line)) {
             logger.info({ everos: line }, '[EverOS]');
           }
         });
         if (stdoutLineBuffer.length > maxLineBufferChars) {
           logger.warn(`[EverOS] stdout 行缓冲超过 ${maxLineBufferChars} 字符，强制刷新并截断`);
-          this.flushLogLines(stdoutLineBuffer + '\n', (line) => {
+          this.flushLogLines(stdoutLineBuffer + '\n', line => {
             if (this.shouldLogStdoutLine(line)) {
               logger.info({ everos: line }, '[EverOS]');
             }
@@ -113,21 +113,21 @@ export class EverOSService {
         this.tryParseUrl(urlScanBuffer, resolve);
       });
 
-      child.stderr?.on('data', (chunk) => {
+      child.stderr?.on('data', chunk => {
         const text = chunk.toString();
         stderr = appendCapped(stderr, text, maxOutputChars);
         if (!stderrCapped && stderr.length >= maxOutputChars) {
           stderrCapped = true;
           logger.warn('[EverOS] stderr 输出超过 100KB，已滚动截断');
         }
-        stderrLineBuffer = this.flushLogLines(stderrLineBuffer + text, (line) => {
+        stderrLineBuffer = this.flushLogLines(stderrLineBuffer + text, line => {
           if (this.shouldLogStderrLine(line)) {
             logger.warn({ everos: line }, '[EverOS]');
           }
         });
         if (stderrLineBuffer.length > maxLineBufferChars) {
           logger.warn(`[EverOS] stderr 行缓冲超过 ${maxLineBufferChars} 字符，强制刷新并截断`);
-          this.flushLogLines(stderrLineBuffer + '\n', (line) => {
+          this.flushLogLines(stderrLineBuffer + '\n', line => {
             if (this.shouldLogStderrLine(line)) {
               logger.warn({ everos: line }, '[EverOS]');
             }
@@ -137,13 +137,13 @@ export class EverOSService {
       });
 
       const flushRemainingLogs = () => {
-        this.flushLogLines(stdoutLineBuffer + '\n', (line) => {
+        this.flushLogLines(stdoutLineBuffer + '\n', line => {
           if (this.shouldLogStdoutLine(line)) {
             logger.info({ everos: line }, '[EverOS]');
           }
         });
         stdoutLineBuffer = '';
-        this.flushLogLines(stderrLineBuffer + '\n', (line) => {
+        this.flushLogLines(stderrLineBuffer + '\n', line => {
           if (this.shouldLogStderrLine(line)) {
             logger.warn({ everos: line }, '[EverOS]');
           }
@@ -151,13 +151,13 @@ export class EverOSService {
         stderrLineBuffer = '';
       };
 
-      child.on('error', (err) => {
+      child.on('error', err => {
         flushRemainingLogs();
         this.process = null;
         reject(new Error(`启动 EverOS 失败: ${err.message}`));
       });
 
-      child.on('exit', (code) => {
+      child.on('exit', code => {
         flushRemainingLogs();
         this.process = null;
         if (!this.everosUrl) {
@@ -239,7 +239,8 @@ export class EverOSService {
   }
 
   private async findPython(): Promise<string> {
-    const candidates = process.platform === 'win32' ? ['python.exe', 'python3.exe'] : ['python3', 'python'];
+    const candidates =
+      process.platform === 'win32' ? ['python.exe', 'python3.exe'] : ['python3', 'python'];
     for (const cmd of candidates) {
       try {
         await this.runCommand(cmd, ['--version']);
@@ -253,15 +254,21 @@ export class EverOSService {
 
   private async runCommand(command: string, args: string[]): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], env: this.getProcessEnv() });
+      const child = spawn(command, args, {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        env: this.getProcessEnv(),
+      });
       let stderr = '';
-      child.stderr?.on('data', (chunk) => {
+      child.stderr?.on('data', chunk => {
         stderr += chunk.toString();
       });
       child.on('error', reject);
-      child.on('exit', (code) => {
+      child.on('exit', code => {
         if (code === 0) resolve();
-        else reject(new Error(`命令失败: ${command} ${args.join(' ')}，code=${code}，stderr=${stderr}`));
+        else
+          reject(
+            new Error(`命令失败: ${command} ${args.join(' ')}，code=${code}，stderr=${stderr}`)
+          );
       });
     });
   }
@@ -275,7 +282,10 @@ export class EverOSService {
   }
 
   private pythonPath(): string {
-    return join(this.venvPath(), process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python');
+    return join(
+      this.venvPath(),
+      process.platform === 'win32' ? 'Scripts\\python.exe' : 'bin/python'
+    );
   }
 
   private pipPath(): string {
@@ -283,7 +293,10 @@ export class EverOSService {
   }
 
   private everosCliPath(): string {
-    return join(this.venvPath(), process.platform === 'win32' ? 'Scripts\\everos.exe' : 'bin/everos');
+    return join(
+      this.venvPath(),
+      process.platform === 'win32' ? 'Scripts\\everos.exe' : 'bin/everos'
+    );
   }
 
   private shouldLogStdoutLine(line: string): boolean {
@@ -312,7 +325,9 @@ export class EverOSService {
   private isRoutineAccessLog(line: string): boolean {
     // 匹配形如：127.0.0.1:62800 - "POST /api/v1/memory/get HTTP/1.1" 200
     // 实际 stdout 行可能带前置时间戳和 [info ] 前缀，因此不锚定行首
-    return /\d{1,3}(?:\.\d{1,3}){3}:\d+\s+-\s+"[A-Z]+\s+\S+\s+HTTP\/\d(?:\.\d)?"\s+(?:2\d{2}|304)\b/.test(line);
+    return /\d{1,3}(?:\.\d{1,3}){3}:\d+\s+-\s+"[A-Z]+\s+\S+\s+HTTP\/\d(?:\.\d)?"\s+(?:2\d{2}|304)\b/.test(
+      line
+    );
   }
 
   private tryParseUrl(stdout: string, resolve: (url: string) => void): void {
