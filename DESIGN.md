@@ -43,8 +43,11 @@ edges:
 
 ### 钻取层（细粒度，M7）
 
-`NodeDef.subgraph` 字段已在 schema 预留：Role 节点内部可展开为 stage 子图
-（扫描→召回→审查→投递→记录），同样 YAML 化、可在画布中钻取编辑。
+`NodeDef.subgraph` 由执行器解释：带子图且未注册处理器的节点递归执行子图，
+stage 记录以 `parent/child` 命名（运行观测分层可见）；子图入口节点继承父输入，
+终态节点输出汇聚为父产物。画布支持钻取视图（面包屑返回）与"展开为子图"
+（生成含 stage.role-run 复合 stage 的默认子图，reviewer 附带 advisory 的
+stage.ast-grep 预检）。stage.role-run 包装既有 Runner 黑箱，行为与现状一致。
 
 ## 二、运行时架构
 
@@ -127,7 +130,7 @@ Archiver 文件优先管线产出策展产物（context.md 等）。
 | M4     | 可视化画布（节点编辑、检查器吸收 Role 配置、运行状态叠加）                 | ✅     |
 | M5     | 外部 Agent 节点（A2A 词汇任务信封 + A2A/subprocess/MCP 适配器 + MCP 门面） | ✅     |
 | M6     | 双正本智库 + 投影管线 + 蒸馏管线（人审闸门）                               | ✅     |
-| M7     | 钻取层：Role 节点内 stage 子图拆解与编排                                   |        |
+| M7     | 钻取层：Role 节点内 stage 子图拆解与编排                                   | ✅     |
 
 ### 外部 Agent 接入（M5）
 

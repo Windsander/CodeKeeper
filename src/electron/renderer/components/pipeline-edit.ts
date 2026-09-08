@@ -112,3 +112,86 @@ export function moveAllNodesInDefinition(
     ),
   };
 }
+
+// ===== 钻取层（M7）=====
+
+/** 沿钻取路径取当前视图定义（路径为空返回根定义） */
+export function getDrillDefinition(
+  root: PipelineDefinitionDto,
+  drillPath: string[]
+): PipelineDefinitionDto | null {
+  let current: PipelineDefinitionDto = root;
+  for (const nodeId of drillPath) {
+    const node = current.nodes.find(n => n.id === nodeId);
+    if (!node?.subgraph) return null;
+    current = node.subgraph;
+  }
+  return current;
+}
+
+/** 沿钻取路径更新子图定义（返回新的根定义） */
+export function updateDrillDefinition(
+  root: PipelineDefinitionDto,
+  drillPath: string[],
+  updated: PipelineDefinitionDto
+): PipelineDefinitionDto {
+  if (drillPath.length === 0) return updated;
+  const [head, ...rest] = drillPath;
+  return {
+    ...root,
+    nodes: root.nodes.map(node =>
+      node.id === head && node.subgraph
+        ? { ...node, subgraph: updateDrillDefinition(node.subgraph, rest, updated) }
+        : node
+    ),
+  };
+}
+
+/**
+ * 为角色节点生成默认子图（"展开为子图"）：
+ * 单个复合 stage（stage.role-run）包装既有 Runner 黑箱，行为与现状完全一致；
+ * reviewer 额外附带 advisory 的 ast-grep 预检 stage。
+ */
+export function materializeRoleSubgraph(
+  roleNodeId: string,
+  roleType: string
+): PipelineDefinitionDto {
+  const nodes: PipelineDefinitionDto['nodes'] = [];
+  const edges: PipelineDefinitionDto['edges'] = [];
+
+  if (roleType === 'role.reviewer') {
+    nodes.push({
+      id: 'ast-grep-precheck',
+      type: 'stage.ast-grep',
+      label: 'ast-grep 预检',
+      params: { paths: [] },
+    });
+    nodes.push({
+      id: 'review-run',
+      type: 'stage.role-run',
+      label: '评审执行（复合）',
+      params: {},
+    });
+    edges.push({
+      from: { node: 'ast-grep-precheck', port: 'precheck' },
+      to: { node: 'review-run', port: 'in' },
+      channel: 'memory',
+      artifactType: 'PrecheckResult',
+    });
+  } else {
+    nodes.push({
+      id: 'role-run',
+      type: 'stage.role-run',
+      label: '角色执行（复合）',
+      params: {},
+    });
+  }
+
+  return {
+    version: 1,
+    id: `${roleNodeId}-subgraph`,
+    label: `${roleType} 内部 stage 子图`,
+    nodes,
+    edges,
+  };
+}

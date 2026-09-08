@@ -1,7 +1,20 @@
 import { createRoleRunner } from '../runners/role-runner.js';
-import type { Role } from '../../types.js';
+import type { Role, Project } from '../../types.js';
 import { LlmClient } from '../../llm/client.js';
 import { MetadataStore } from '../../store/metadata-store.js';
+import { PipelineExecutor } from '../../pipeline/core/executor.js';
+import { PipelineRunStore } from '../../pipeline/core/run-store.js';
+import type { PipelineDefinitionWithSubgraph } from '../../pipeline/core/types.js';
+import { loadProjectPipeline } from '../../pipeline/default-pipeline.js';
+import { createRoleStageHandlers } from '../stage-handlers.js';
+
+/** 项目管线中正本中本角色节点的子图（无子图返回 null，保持黑箱执行） */
+function loadRoleSubgraph(project: Project, role: Role): PipelineDefinitionWithSubgraph | null {
+  const definition = loadProjectPipeline(project);
+  if (!definition) return null;
+  const roleNode = definition.nodes.find(node => node.type === `role.${role}`);
+  return (roleNode?.subgraph as PipelineDefinitionWithSubgraph | undefined) ?? null;
+}
 
 /**
  * 从环境变量解析 Agent 配置
@@ -105,11 +118,32 @@ async function main() {
     throw new Error(`[Role Node] 项目不存在: ${config.projectId}`);
   }
 
+  // 钻取层：项目的管线正本中，本角色节点若带 subgraph，则执行子图而非整轮黑箱
+  const roleSubgraph = loadRoleSubgraph(project, config.role);
+  const stageHandlers = roleSubgraph ? createRoleStageHandlers({ project, runner }) : null;
+  // 子图执行同样落库（parent/child 分层 stage 记录，画布运行状态可见）
+  const subgraphExecutor = stageHandlers
+    ? new PipelineExecutor(stageHandlers, new PipelineRunStore(store.database))
+    : null;
+
   // 指令循环：等待父进程派发 run
   process.on('message', message => {
     if (!isRunMessage(message)) return;
-    runner
-      .runProjectOnce(project)
+    const work =
+      subgraphExecutor && roleSubgraph
+        ? subgraphExecutor
+            .execute(roleSubgraph, {
+              logger: console,
+              services: { project },
+              vars: { projectId: project.id },
+            })
+            .then(record => {
+              if (record.status !== 'succeeded') {
+                throw new Error(record.error ?? '子图执行失败');
+              }
+            })
+        : runner.runProjectOnce(project);
+    work
       .then(() => {
         process.send?.({ type: 'done' });
       })

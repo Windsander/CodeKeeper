@@ -27,7 +27,7 @@ import {
   getPipelineDefinitionPath,
   loadProjectPipeline,
 } from './default-pipeline.js';
-import { pipelineDefinitionSchema, PipelineDefinitionError } from './core/types.js';
+import { pipelineWithSubgraphSchema, PipelineDefinitionError } from './core/types.js';
 import { topoSort } from './core/topology.js';
 import { RoleNodeRuntime } from '../classic/role-node-runtime.js';
 import { AgentRegistry } from '../agents/registry.js';
@@ -253,8 +253,8 @@ export class PipelineScheduler {
     const project = this.context.store.getProject(projectId);
     if (!project) throw new Error(`项目不存在: ${projectId}`);
 
-    const parsed = pipelineDefinitionSchema.parse(definition);
-    topoSort(parsed); // 结构校验 + 环检测，非法时抛出
+    const parsed = pipelineWithSubgraphSchema.parse(definition);
+    validatePipelineDeep(parsed); // 逐层结构校验 + 环检测
     assertNoSecretParams(parsed);
 
     writeFileSync(getPipelineDefinitionPath(project), stringify(parsed), 'utf-8');
@@ -563,7 +563,7 @@ const SECRET_PARAM_KEYS = new Set([
   'authorization',
 ]);
 
-/** 拒绝把疑似凭据写进管线定义（画布与手编 YAML 同一约束） */
+/** 拒绝把疑似凭据写进管线定义（画布与手编 YAML 同一约束）；递归覆盖子图 */
 function assertNoSecretParams(definition: PipelineDefinition): void {
   for (const node of definition.nodes) {
     for (const key of Object.keys(node.params)) {
@@ -574,5 +574,16 @@ function assertNoSecretParams(definition: PipelineDefinition): void {
         );
       }
     }
+    const subgraph = (node as { subgraph?: PipelineDefinition }).subgraph;
+    if (subgraph) assertNoSecretParams(subgraph);
+  }
+}
+
+/** 深度校验：每层图都做结构校验 + 环检测（写回路径的统一入口） */
+export function validatePipelineDeep(definition: PipelineDefinition): void {
+  topoSort(definition); // 含 validateGraph + 环检测
+  for (const node of definition.nodes) {
+    const subgraph = (node as { subgraph?: PipelineDefinition }).subgraph;
+    if (subgraph) validatePipelineDeep(subgraph);
   }
 }

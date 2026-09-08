@@ -42,15 +42,18 @@ The project is designed for teams that want an observable, recoverable automatio
 
 ## Core Capabilities
 
-| Capability               | Description                                                                                                                                   |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Multi-project management | Register multiple local projects with independent archive locations, GitLab settings, role switches, and runtime state.                       |
-| Reviewer                 | Scan Merge Requests and produce structured review findings from project rules, changes, and historical memory.                                |
-| Maintainer               | Re-check findings, attempt fixes in an isolated Git worktree, validate changes, and deliver recoverable discussion replies.                   |
-| Archiver                 | Organize project documentation through a file-first pipeline with archive, reorganize, ignore, mark, and undo operations.                     |
-| Persistent memory        | Use EverOS for project knowledge, role experience, cases, and skills, with graph and statistics views.                                        |
-| Desktop workbench        | Manage projects, role settings, service health, logs, memory graphs, and archive history from Electron + React.                               |
-| Daemon and CLI           | Run scheduling, IPC, model access, and role lifecycles through the Node.js daemon; use the CLI for registration, scanning, history, and undo. |
+| Capability               | Description                                                                                                                                                                                         |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pipeline orchestration   | Project-level visual pipeline canvas: roles/triggers/knowledge/external agents as nodes; edits write back `.codekeeper/pipeline.yaml` with hot reload; role nodes drill into inner stage subgraphs. |
+| External agents          | A2A-vocabulary task envelopes with subprocess/A2A/MCP transport adapters; MCP facade (127.0.0.1 + token) exposes pipeline triggers and knowledge recall to external agents.                         |
+| Project knowledge base   | Curated knowledge dual canon (in-repo knowledge/ + local private) with EverOS projection for retrieval; experience distillation gated by human review.                                              |
+| Multi-project management | Register multiple local projects with independent archive locations, GitLab settings, role switches, and runtime state.                                                                             |
+| Reviewer                 | Scan Merge Requests and produce structured review findings from project rules, changes, and historical memory.                                                                                      |
+| Maintainer               | Re-check findings, attempt fixes in an isolated Git worktree, validate changes, and deliver recoverable discussion replies.                                                                         |
+| Archiver                 | Organize project documentation through a file-first pipeline with archive, reorganize, ignore, mark, and undo operations.                                                                           |
+| Persistent memory        | Use EverOS for project knowledge, role experience, cases, and skills, with graph and statistics views.                                                                                              |
+| Desktop workbench        | Manage projects, role settings, service health, logs, memory graphs, and archive history from Electron + React.                                                                                     |
+| Daemon and CLI           | Run scheduling, IPC, model access, and role lifecycles through the Node.js daemon; use the CLI for registration, scanning, history, and undo.                                                       |
 
 The sections below describe the memory boundary, local setup, operational safeguards, and release rights.
 

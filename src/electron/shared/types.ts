@@ -312,6 +312,8 @@ export interface PipelineNodeDto {
   label?: string;
   params: Record<string, unknown>;
   position?: { x: number; y: number };
+  /** 钻取层：节点内 stage 子图（M7） */
+  subgraph?: PipelineDefinitionDto;
 }
 
 export interface PipelineDefinitionDto {

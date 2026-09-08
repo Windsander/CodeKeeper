@@ -15,8 +15,11 @@ import {
   addNodeToDefinition,
   deleteEdgesFromDefinition,
   deleteNodesFromDefinition,
+  getDrillDefinition,
+  materializeRoleSubgraph,
   moveAllNodesInDefinition,
   NODE_PALETTE,
+  updateDrillDefinition,
   updateNodeInDefinition,
 } from './pipeline-edit.js';
 
@@ -58,6 +61,15 @@ export function PipelineCanvas({ projectId }: PipelineCanvasProps) {
     });
   };
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // 钻取路径（M7）：非空时画布显示顶层节点的子图
+  const [drillPath, setDrillPathState] = useState<string[]>([]);
+  const drillPathRef = useRef<string[]>([]);
+  drillPathRef.current = drillPath;
+  const setDrillPath = (path: string[]) => {
+    drillPathRef.current = path;
+    setDrillPathState(path);
+    setSelectedNodeId(null);
+  };
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -66,11 +78,19 @@ export function PipelineCanvas({ projectId }: PipelineCanvasProps) {
   pipelineDefRef.current = pipeline?.definition ?? null;
   const definition = draft ?? pipelineDefRef.current;
   const dirty = draft !== null;
+  const viewDefinition = definition
+    ? (getDrillDefinition(definition, drillPath) ?? definition)
+    : null;
 
   const mutate = useCallback((fn: (def: PipelineDefinitionDto) => PipelineDefinitionDto) => {
     setDraft(prev => {
       const base = prev ?? pipelineDefRef.current;
-      return base ? fn(base) : prev;
+      if (!base) return prev;
+      // 钻取态下编辑作用于当前子图，再映射回根定义（drillPath 经 ref 读取，避免闭包过期）
+      const path = drillPathRef.current;
+      return path.length === 0
+        ? fn(base)
+        : updateDrillDefinition(base, path, fn(getDrillDefinition(base, path) ?? base));
     });
   }, []);
 
@@ -130,6 +150,7 @@ export function PipelineCanvas({ projectId }: PipelineCanvasProps) {
   const discard = useCallback(() => {
     setDraft(null);
     setSaveError(null);
+    setDrillPath([]);
   }, []);
 
   if (!pipeline) return <div className="pipeline-loading">加载管线定义…</div>;
@@ -137,7 +158,7 @@ export function PipelineCanvas({ projectId }: PipelineCanvasProps) {
     return <div className="pipeline-empty">项目暂无可调度的角色，请先在角色页启用角色。</div>;
   }
 
-  const selectedNode = definition.nodes.find(node => node.id === selectedNodeId) ?? null;
+  const selectedNode = viewDefinition?.nodes.find(node => node.id === selectedNodeId) ?? null;
 
   return (
     <div className="pipeline-canvas-layout">
@@ -166,8 +187,19 @@ export function PipelineCanvas({ projectId }: PipelineCanvasProps) {
       </div>
       {saveError && <div className="pipeline-error">保存失败：{saveError}</div>}
       <div className="pipeline-main">
+        {drillPath.length > 0 && (
+          <div className="pipeline-breadcrumb">
+            <button
+              className="pipeline-discard-btn"
+              onClick={() => setDrillPath(drillPath.slice(0, -1))}
+            >
+              ← 返回上层
+            </button>
+            <span className="knowledge-meta">钻取：{drillPath.join(' / ')}</span>
+          </div>
+        )}
         <PipelineGraph
-          definition={definition}
+          definition={viewDefinition!}
           runs={runs ?? []}
           onSelectNode={handleSelectNode}
           onMoveAllNodes={handleMoveAllNodes}
@@ -178,13 +210,33 @@ export function PipelineCanvas({ projectId }: PipelineCanvasProps) {
         {selectedNode && (
           <NodeInspector
             node={selectedNode}
-            definition={definition}
+            definition={viewDefinition!}
             project={project}
             generated={pipeline?.generated ?? false}
             onChange={updated => {
               mutate(def => updateNodeInDefinition(def, updated));
             }}
             onConfigSaved={refresh}
+            onDrillIn={nodeId => setDrillPath([...drillPathRef.current, nodeId])}
+            onMaterializeSubgraph={node => {
+              mutate(root => {
+                const path = drillPathRef.current;
+                const apply = (def: PipelineDefinitionDto): PipelineDefinitionDto => ({
+                  ...def,
+                  nodes: def.nodes.map(n =>
+                    n.id === node.id ? { ...n, subgraph: materializeRoleSubgraph(n.id, n.type) } : n
+                  ),
+                });
+                return path.length === 0
+                  ? apply(root)
+                  : updateDrillDefinition(
+                      root,
+                      path,
+                      apply(getDrillDefinition(root, path) ?? root)
+                    );
+              });
+              setDrillPath([...drillPathRef.current, node.id]);
+            }}
           />
         )}
       </div>
@@ -200,6 +252,8 @@ function NodeInspector({
   generated,
   onChange,
   onConfigSaved,
+  onDrillIn,
+  onMaterializeSubgraph,
 }: {
   node: PipelineNodeDto;
   definition: PipelineDefinitionDto;
@@ -209,6 +263,10 @@ function NodeInspector({
   onChange: (node: PipelineNodeDto) => void;
   /** 角色配置保存后刷新管线（生成件可能已被重建） */
   onConfigSaved: () => void;
+  /** 钻取已有子图 */
+  onDrillIn: (nodeId: string) => void;
+  /** 为角色节点生成默认子图并钻取 */
+  onMaterializeSubgraph: (node: PipelineNodeDto) => void;
 }) {
   const roleType = node.type.startsWith('role.') ? node.type.slice(5) : null;
   const upstreamTrigger =
@@ -273,6 +331,19 @@ function NodeInspector({
       ) : null}
       {roleType === 'archiver' && (
         <p className="pipeline-inspector-hint">Archiver 的详细配置请在 Archiver 页维护。</p>
+      )}
+      {roleType && (
+        <div className="pipeline-inspector-field">
+          {node.subgraph ? (
+            <button className="pipeline-palette-btn" onClick={() => onDrillIn(node.id)}>
+              钻取子图（{node.subgraph.nodes.length} 个 stage）
+            </button>
+          ) : (
+            <button className="pipeline-palette-btn" onClick={() => onMaterializeSubgraph(node)}>
+              展开为子图（stage 编排）
+            </button>
+          )}
+        </div>
       )}
     </aside>
   );

@@ -10,7 +10,7 @@
  */
 
 import type { NodeDef, NodeHandler, PipelineDefinition, RunContext } from './types.js';
-import { PipelineDefinitionError } from './types.js';
+import { PipelineDefinitionError, type NodeWithSubgraph } from './types.js';
 import { topoSort, validateGraph } from './topology.js';
 import type { PipelineRunRecord, PipelineRunStore } from './run-store.js';
 
@@ -117,7 +117,10 @@ export class PipelineExecutor {
     for (const node of scoped) {
       const handler = this.handlers.get(node.type);
       if (!handler) {
-        issues.push(`节点 ${node.id} 的类型未注册处理器: ${node.type}`);
+        // 带 subgraph 的节点无处理器也可执行（递归子图），其余必须注册
+        if (!(node as NodeWithSubgraph).subgraph) {
+          issues.push(`节点 ${node.id} 的类型未注册处理器: ${node.type}`);
+        }
         continue;
       }
       if (handler.inputs || handler.outputs) {
@@ -160,7 +163,8 @@ export class PipelineExecutor {
       }
 
       const handler = this.handlers.get(node.type);
-      if (!handler) {
+      const subgraph = (node as NodeWithSubgraph).subgraph;
+      if (!handler && !subgraph) {
         // prepare() 已校验，理论不可达；防御性处理
         return { error: `节点 ${node.id} 的类型未注册处理器: ${node.type}` };
       }
@@ -168,7 +172,16 @@ export class PipelineExecutor {
       const stageId = this.store?.beginStage(runId, node.id, inputs);
 
       try {
-        const outputs = (await handler.run(ctx, inputs, node.params, node)) ?? {};
+        // 带 subgraph 且未注册处理器的节点：递归执行子图（钻取层），
+        // 子图终态节点的输出汇聚为父节点产物；stage 记录以 parent/child 命名
+        let outputs: Record<string, unknown>;
+        if (subgraph && !handler) {
+          outputs = await this.executeSubgraph(node as NodeWithSubgraph, inputs, ctx, runId);
+        } else if (handler) {
+          outputs = (await handler.run(ctx, inputs, node.params, node)) ?? {};
+        } else {
+          outputs = {}; // prepare/上方防御已拦截，理论不可达
+        }
         completedOutputs.set(node.id, outputs);
         if (this.store && stageId) {
           this.store.finishStage(stageId, 'succeeded', outputs);
@@ -183,6 +196,78 @@ export class PipelineExecutor {
       }
     }
     return {};
+  }
+
+  /**
+   * 递归执行节点子图（钻取层）。
+   * 入口节点（无入边）按端口名接收父节点输入；终态节点（无出边）的输出合并为父节点输出。
+   * 子图节点的 stage 记录以 `${parentId}/${childId}` 命名，可在运行观测中区分层级。
+   */
+  private async executeSubgraph(
+    parent: NodeWithSubgraph,
+    parentInputs: Record<string, unknown>,
+    ctx: RunContext,
+    runId: string
+  ): Promise<Record<string, unknown>> {
+    const sub = parent.subgraph;
+    if (!sub) throw new PipelineDefinitionError(`节点 ${parent.id} 缺少子图`);
+    validateGraph(sub);
+    const ordered = topoSort(sub);
+    for (const node of ordered) {
+      // 子图内同样支持"带子图的复合节点"（任意深度嵌套），否则必须注册处理器
+      if (!this.handlers.has(node.type) && !(node as NodeWithSubgraph).subgraph) {
+        throw new PipelineDefinitionError(
+          `子图 ${parent.id} 中节点 ${node.id} 的类型未注册处理器: ${node.type}`
+        );
+      }
+    }
+
+    const subOutputs = new Map<string, Record<string, unknown>>();
+    const incomingTargets = new Set(sub.edges.map(edge => edge.to.node));
+    const outgoingSources = new Set(sub.edges.map(edge => edge.from.node));
+
+    for (const node of ordered) {
+      if (ctx.signal?.aborted) {
+        throw new Error('运行被取消');
+      }
+      const handler = this.handlers.get(node.type);
+      const nestedSubgraph = (node as NodeWithSubgraph).subgraph;
+      if (!handler && !nestedSubgraph) {
+        throw new PipelineDefinitionError(`子图节点 ${node.id} 的类型未注册处理器: ${node.type}`);
+      }
+      // 入口节点（无子图内入边）按端口名继承父节点输入
+      const inputs = {
+        ...(incomingTargets.has(node.id) ? {} : parentInputs),
+        ...this.gatherInputs(sub, node.id, subOutputs),
+      };
+      const stageKey = `${parent.id}/${node.id}`;
+      const stageId = this.store?.beginStage(runId, stageKey, inputs);
+      try {
+        // 任意深度嵌套：带子图且无处理器的节点递归执行
+        const outputs =
+          nestedSubgraph && !handler
+            ? await this.executeSubgraph(node as NodeWithSubgraph, inputs, ctx, runId)
+            : ((await handler?.run(ctx, inputs, node.params, node)) ?? {});
+        subOutputs.set(node.id, outputs);
+        if (this.store && stageId) {
+          this.store.finishStage(stageId, 'succeeded', outputs);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (this.store && stageId) {
+          this.store.finishStage(stageId, 'failed', undefined, message);
+        }
+        throw new Error(`子图 ${parent.id} 节点 ${node.id} 执行失败: ${message}`);
+      }
+    }
+
+    // 终态节点（无子图内出边）的输出合并为父节点输出
+    const merged: Record<string, unknown> = {};
+    for (const node of ordered) {
+      if (outgoingSources.has(node.id)) continue;
+      Object.assign(merged, subOutputs.get(node.id) ?? {});
+    }
+    return merged;
   }
 
   /** 汇聚某节点的全部入边产物：inputs[to.port] = 上游 outputs[from.port] */

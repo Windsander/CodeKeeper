@@ -14,7 +14,7 @@ import { recordProjectError } from '../classic/status/project-status-store.js';
 import type { Project, Role, RoleConfig } from '../types.js';
 import { getRoleConfigSchedule, isRoleConfigEnabled, ROLES } from '../types.js';
 import { PIPELINE_DEFINITION_RELATIVE_PATH, parsePipelineDefinition } from './core/loader.js';
-import type { PipelineDefinition } from './core/types.js';
+import type { PipelineDefinition, PipelineDefinitionWithSubgraph } from './core/types.js';
 
 /** 角色默认调度（与旧版 Runner 内置调度一致） */
 export const DEFAULT_ROLE_SCHEDULES: Record<Role, string> = {
@@ -137,7 +137,7 @@ export function regeneratePipelineDefinitionIfGenerated(project: Project): void 
 }
 
 /** 读取并校验项目的管线定义；文件缺失返回 null，存在但非法时记录项目错误后返回 null。 */
-export function loadProjectPipeline(project: Project): PipelineDefinition | null {
+export function loadProjectPipeline(project: Project): PipelineDefinitionWithSubgraph | null {
   const filePath = getPipelineDefinitionPath(project);
   if (!existsSync(filePath)) return null;
   try {
