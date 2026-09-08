@@ -121,7 +121,7 @@ async function main() {
   // 钻取层：项目的管线正本中，本角色节点若带 subgraph，则执行子图而非整轮黑箱
   const roleSubgraph = loadRoleSubgraph(project, config.role);
   const stageHandlers = roleSubgraph ? createRoleStageHandlers({ project, runner }) : null;
-  // 子图执行同样落库（parent/child 分层 stage 记录，画布运行状态可见）
+  // 子图执行落库（stage 记录按子图节点命名，画布运行状态叠加可查）
   const subgraphExecutor = stageHandlers
     ? new PipelineExecutor(stageHandlers, new PipelineRunStore(store.database))
     : null;
@@ -132,11 +132,15 @@ async function main() {
     const work =
       subgraphExecutor && roleSubgraph
         ? subgraphExecutor
-            .execute(roleSubgraph, {
-              logger: console,
-              services: { project },
-              vars: { projectId: project.id },
-            })
+            .execute(
+              roleSubgraph,
+              {
+                logger: console,
+                services: { project },
+                vars: { projectId: project.id },
+              },
+              { projectId: project.id }
+            )
             .then(record => {
               if (record.status !== 'succeeded') {
                 throw new Error(record.error ?? '子图执行失败');

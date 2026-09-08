@@ -246,6 +246,16 @@ export function ServiceStatusPanel({ daemon, localModel, remoteModel }: ServiceS
                 onToggle={toggle}
               />
             </TreeNode>
+            <TreeNode
+              title="MCP 门面（外部 Agent 接入）"
+              nodeKey="mcpFacade"
+              icon="🔌"
+              status={daemon?.mcpFacade?.url ? 'running' : 'idle'}
+              url={daemon?.mcpFacade?.url ?? null}
+              detail={daemon?.mcpFacade?.url ? '复制此地址接入外部 Agent' : null}
+              expandedKeys={expandedKeys}
+              onToggle={toggle}
+            />
             {remoteModel && (
               <TreeNode
                 title="远端模型服务"

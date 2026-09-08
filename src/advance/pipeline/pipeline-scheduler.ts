@@ -391,12 +391,13 @@ export class PipelineScheduler {
         handlers.set(node.type, {
           type: node.type,
           inputs: ['trigger'],
+          outputs: ['done'],
           run: async (_ctx, _inputs, _params, currentNode) => {
             const currentRole = currentNode.type.slice('role.'.length) as Role;
             // 对拍旧版 startProjectLoop 的 agentStarted 状态记录
             recordAgentStarted(project);
             await this.runtime.runOnce(project, currentRole);
-            return {};
+            return { done: true };
           },
         });
       }

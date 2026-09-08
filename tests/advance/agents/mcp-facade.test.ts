@@ -28,10 +28,8 @@ describe('McpFacadeServer', () => {
       } as never,
       getEverosUrl: () => overrides.everosUrl ?? null,
     });
-    const facadeUrl = await facade.start();
-    // 门面 URL 自带 token：/sse 路径需保留查询串
-    const base = new URL(facadeUrl);
-    const sseUrl = `${base.origin}/sse${base.search}`;
+    const sseUrl = await facade.start();
+    // 门面地址即为完整 SSE 端点（含 token）
     const client = new Client({ name: 'facade-test', version: '0.0.1' });
     await client.connect(new SSEClientTransport(new URL(sseUrl)));
     return client;

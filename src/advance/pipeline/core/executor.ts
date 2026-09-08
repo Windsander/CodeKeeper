@@ -79,6 +79,12 @@ export class PipelineExecutor {
     }
 
     const definition = record.definition;
+    // 子图的 stage 记录键为 parent/child 形式，resume 跳过集暂不支持；
+    // 显式拒绝，待支持后再放开
+    const hasSubgraph = definition.nodes.some(node => (node as { subgraph?: unknown }).subgraph);
+    if (hasSubgraph) {
+      throw new PipelineDefinitionError('暂不支持对含子图的 run 执行 resume');
+    }
     const ordered = this.prepare(definition);
     ctx.vars = { ...ctx.vars, pipelineId: definition.id, runId };
 

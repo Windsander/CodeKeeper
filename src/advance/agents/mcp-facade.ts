@@ -49,7 +49,8 @@ export class McpFacadeServer {
       server.listen(this.options.port ?? 0, '127.0.0.1', () => {
         const addr = server.address();
         const port = typeof addr === 'object' && addr ? addr.port : 0;
-        resolve(`http://127.0.0.1:${port}?token=${this.token}`);
+        // 直接返回可用的 SSE 端点（含 token），复制即可接入
+        resolve(`http://127.0.0.1:${port}/sse?token=${this.token}`);
       });
     });
   }

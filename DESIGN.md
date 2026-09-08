@@ -28,7 +28,7 @@ edges:
 ```
 
 **节点命名空间**：`trigger.*`（cron/文件/事件）、`role.*`（reviewer/maintainer/archiver）、
-`agent.*`（外部 Agent：a2a/subprocess/mcp，M5）、`knowledge.*`（召回/投影，M6）、`sink.*`（投递）。
+`agent.*`（外部 Agent：a2a/subprocess/mcp，M5）、`knowledge.*`（召回/投影，M6）、`sink.*`（投递，预留，处理器后续里程碑实现）。
 
 **边 = 类型化端口引用 + channel 绑定**：
 

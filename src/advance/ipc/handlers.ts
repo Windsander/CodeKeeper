@@ -344,6 +344,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       embeddingModel: persisted.embeddingModel ?? DEFAULT_EMBEDDING_MODEL,
       rerankModel: persisted.rerankModel ?? DEFAULT_RERANK_MODEL,
       everos: persisted.everos ? JSON.stringify(persisted.everos) : '',
+      agents: persisted.agents ?? [],
     };
   },
 
