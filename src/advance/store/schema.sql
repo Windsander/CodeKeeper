@@ -187,3 +187,13 @@ CREATE TABLE IF NOT EXISTS stage_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stage_runs_run ON stage_runs(run_id);
+
+-- 知识正本 → EverOS 投影的去重状态（M6 智库；root 维度区分双正本同 id）
+CREATE TABLE IF NOT EXISTS knowledge_projection (
+  project_id TEXT NOT NULL,
+  root TEXT NOT NULL DEFAULT 'shared',
+  knowledge_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  synced_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, root, knowledge_id)
+);

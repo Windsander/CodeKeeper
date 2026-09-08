@@ -22,7 +22,6 @@ import { PipelineRunStore } from './core/run-store.js';
 import type { NodeHandler, RunContext } from './core/types.js';
 import type { PipelineDefinition } from './core/types.js';
 import {
-  DEFAULT_ROLE_SCHEDULES,
   ensurePipelineDefinition,
   GENERATED_PIPELINE_MARKER,
   getPipelineDefinitionPath,
@@ -33,6 +32,9 @@ import { topoSort } from './core/topology.js';
 import { RoleNodeRuntime } from '../classic/role-node-runtime.js';
 import { AgentRegistry } from '../agents/registry.js';
 import type { TaskEnvelope } from '../agents/task-envelope.js';
+import { projectKnowledgeToEverOS } from '../knowledge/knowledge-projection.js';
+import { distillKnowledgeCandidates } from '../knowledge/knowledge-distill.js';
+import { everosMemorySearchProject } from '../classic/memory/everos-api.js';
 
 export interface PipelineSchedulerOptions {
   /** EverOS MCP Server URL（由 daemon 启动后回设） */
@@ -54,10 +56,10 @@ export class PipelineScheduler {
   private runStore: PipelineRunStore | null = null;
   private readonly activeRoles = new Set<Role>();
   private readonly registeredRoles = new Set<Role>();
-  /** 已注册的触发任务：key = projectId:nodeId（同角色多节点互不覆盖） */
+  /** 已注册的触发任务：key = projectId:triggerNodeId */
   private readonly jobs = new Map<
     string,
-    { projectId: string; role: Role; nodeId: string; task: ScheduledTask }
+    { projectId: string; branchRoles: Set<Role>; nodeId: string; task: ScheduledTask }
   >();
   private options: PipelineSchedulerOptions;
 
@@ -100,7 +102,7 @@ export class PipelineScheduler {
   async stop(role: Role): Promise<void> {
     this.activeRoles.delete(role);
     for (const [key, entry] of [...this.jobs.entries()]) {
-      if (entry.role === role) {
+      if (entry.branchRoles.has(role)) {
         entry.task.stop();
         this.jobs.delete(key);
       }
@@ -299,39 +301,42 @@ export class PipelineScheduler {
   }
 
   private scheduleProject(project: Project): void {
-    if (this.activeRoles.size === 0) return;
-
     ensurePipelineDefinition(project);
     const definition = loadProjectPipeline(project);
     if (!definition) return;
 
-    for (const node of definition.nodes) {
-      if (!node.type.startsWith('role.')) continue;
-      const role = node.type.slice('role.'.length) as Role;
-      if (!ROLES.includes(role) || !this.activeRoles.has(role)) continue;
-      // 与旧模型同一过滤口径：启用且（reviewer/maintainer）配置了 GitLab
-      if (!this.context.store.getRoleEnabledProjects(role).some(p => p.id === project.id)) {
-        continue;
-      }
-
-      const scheduleExpr =
-        this.findTriggerSchedule(definition, node.id) ?? DEFAULT_ROLE_SCHEDULES[role];
-      if (!validateCron(scheduleExpr)) {
-        const message = `项目 ${project.name} 节点 ${node.id} 的 cron 非法: ${scheduleExpr}`;
+    // 按 trigger.cron 节点注册调度：一个触发器拉起其整个下游分支
+    for (const trigger of definition.nodes) {
+      if (trigger.type !== 'trigger.cron') continue;
+      const scheduleExpr = trigger.params.schedule;
+      if (typeof scheduleExpr !== 'string' || !validateCron(scheduleExpr)) {
+        const message = `项目 ${project.name} 节点 ${trigger.id} 的 cron 非法: ${String(scheduleExpr)}`;
         logger.error(`[Pipeline] ${message}`);
         recordProjectError(project, new Error(message), 'unknown');
         continue;
       }
 
-      const key = `${project.id}:${node.id}`;
+      // 分支语义：含 role.* 节点的分支只在该角色激活且项目启用时调度；
+      // 纯 knowledge.*/agent.* 分支（无角色节点）由 daemon 进程内执行，始终可调度
+      const branchRoles = collectBranchRoles(definition, trigger.id);
+      if (branchRoles.size > 0) {
+        const runnable = [...branchRoles].some(
+          role =>
+            this.activeRoles.has(role) &&
+            this.context.store.getRoleEnabledProjects(role).some(p => p.id === project.id)
+        );
+        if (!runnable) continue;
+      }
+
+      const key = `${project.id}:${trigger.id}`;
       const task = schedule(scheduleExpr, () => {
-        void this.executePipelineBranch(project, definition, node.id, role).catch(error => {
+        void this.executePipelineBranch(project, definition, trigger.id).catch(error => {
           const message = error instanceof Error ? error.message : String(error);
-          logger.error(`[Pipeline] 项目 ${project.name} 节点 ${node.id} 执行失败: ${message}`);
+          logger.error(`[Pipeline] 项目 ${project.name} 触发器 ${trigger.id} 执行失败: ${message}`);
         });
       });
-      this.jobs.set(key, { projectId: project.id, role, nodeId: node.id, task });
-      logger.info(`[Pipeline] 项目 ${project.name} 节点 ${node.id} 已调度: ${scheduleExpr}`);
+      this.jobs.set(key, { projectId: project.id, branchRoles, nodeId: trigger.id, task });
+      logger.info(`[Pipeline] 项目 ${project.name} 触发器 ${trigger.id} 已调度: ${scheduleExpr}`);
     }
   }
 
@@ -343,34 +348,31 @@ export class PipelineScheduler {
     await this.runRoleNow(project, role);
   }
 
-  /** 立即执行某项目的角色节点（启动/重启后的对账轮） */
+  /** 立即执行某项目的角色节点（启动/重启后的对账轮）：从上游触发器拉起整个分支 */
   private async runRoleNow(project: Project, role: Role): Promise<void> {
     const definition = loadProjectPipeline(project);
     const roleNode = definition?.nodes.find(node => node.type === `role.${role}`);
     if (!definition || !roleNode) return;
-    await this.executePipelineBranch(project, definition, roleNode.id, role);
+    const trigger = this.findUpstreamTrigger(definition, roleNode.id);
+    await this.executePipelineBranch(project, definition, trigger?.id ?? roleNode.id);
   }
 
-  /** 触发器 → 角色节点的下游子图执行 */
+  /** 从指定节点（通常是 trigger）执行下游子图 */
   private async executePipelineBranch(
     project: Project,
     definition: PipelineDefinition,
-    roleNodeId: string,
-    role: Role
+    startFromNodeId: string
   ): Promise<void> {
-    const handlers = this.buildNodeHandlers(project, role, definition);
+    const handlers = this.buildNodeHandlers(project, definition);
     const executor = new PipelineExecutor(handlers, this.getRunStore());
-    const triggerNode = this.findUpstreamTrigger(definition, roleNodeId);
-    const startFrom = triggerNode ? [triggerNode.id] : [roleNodeId];
     await executor.execute(definition, this.buildRunContext(project), {
       projectId: project.id,
-      startFrom,
+      startFrom: [startFromNodeId],
     });
   }
 
   private buildNodeHandlers(
     project: Project,
-    role: Role,
     definition?: PipelineDefinition
   ): Map<string, NodeHandler> {
     const handlers = new Map<string, NodeHandler>();
@@ -379,16 +381,26 @@ export class PipelineScheduler {
       outputs: ['tick'],
       run: async () => ({ tick: new Date().toISOString() }),
     });
-    handlers.set(`role.${role}`, {
-      type: `role.${role}`,
-      inputs: ['trigger'],
-      run: async () => {
-        // 对拍旧版 startProjectLoop 的 agentStarted 状态记录
-        recordAgentStarted(project);
-        await this.runtime.runOnce(project, role);
-        return {};
-      },
-    });
+
+    // 角色节点：分支内出现的每个角色类型都注册（角色从当前节点类型派生）
+    if (definition) {
+      for (const node of definition.nodes) {
+        if (!node.type.startsWith('role.') || handlers.has(node.type)) continue;
+        const role = node.type.slice('role.'.length) as Role;
+        if (!ROLES.includes(role)) continue;
+        handlers.set(node.type, {
+          type: node.type,
+          inputs: ['trigger'],
+          run: async (_ctx, _inputs, _params, currentNode) => {
+            const currentRole = currentNode.type.slice('role.'.length) as Role;
+            // 对拍旧版 startProjectLoop 的 agentStarted 状态记录
+            recordAgentStarted(project);
+            await this.runtime.runOnce(project, currentRole);
+            return {};
+          },
+        });
+      }
+    }
 
     // 外部 Agent 节点：经注册表解析传输适配器，任务信封交互
     if (definition) {
@@ -417,6 +429,52 @@ export class PipelineScheduler {
               throw new Error(`外部 Agent 执行失败: ${result.error ?? '未知错误'}`);
             }
             return result.output;
+          },
+        });
+      }
+    }
+    // 知识节点：正本投影（→EverOS）与经验蒸馏（→人审草稿箱）
+    if (definition) {
+      if (definition.nodes.some(node => node.type === 'knowledge.project')) {
+        handlers.set('knowledge.project', {
+          type: 'knowledge.project',
+          run: async () => {
+            const everosUrl = this.context.everosUrl;
+            if (!everosUrl) throw new Error('EverOS 未就绪，无法投影知识');
+            const result = await projectKnowledgeToEverOS(
+              this.context.store.database,
+              everosUrl,
+              project
+            );
+            return { ...result };
+          },
+        });
+      }
+      if (definition.nodes.some(node => node.type === 'knowledge.distill')) {
+        handlers.set('knowledge.distill', {
+          type: 'knowledge.distill',
+          run: async (_ctx, _inputs, params) => {
+            const llm = this.context.getClient();
+            if (!llm) throw new Error('LLM 未配置，无法蒸馏知识');
+            const everosUrl = this.context.everosUrl;
+            if (!everosUrl) throw new Error('EverOS 未就绪，无法收集经验');
+            const queries = Array.isArray(params.experienceQueries)
+              ? params.experienceQueries.filter((q): q is string => typeof q === 'string')
+              : ['修复经验', '评审约定', '项目约定', '架构决策'];
+            const experiences: string[] = [];
+            for (const query of queries) {
+              const recalled = await everosMemorySearchProject(everosUrl, {
+                appId: 'codekeeper-advance',
+                projectId: project.id,
+                query,
+                topK: 5,
+              });
+              for (const item of recalled.items) {
+                if (item.content) experiences.push(item.content);
+              }
+            }
+            const distilled = await distillKnowledgeCandidates(project, llm, experiences);
+            return { candidates: distilled.candidates, written: distilled.written.length };
           },
         });
       }
@@ -451,16 +509,6 @@ export class PipelineScheduler {
     return definition.nodes.find(node => node.type === 'trigger.cron' && upstreamIds.has(node.id));
   }
 
-  /** 角色节点的调度表达式：上游 trigger.cron 的 params.schedule */
-  private findTriggerSchedule(
-    definition: PipelineDefinition,
-    roleNodeId: string
-  ): string | undefined {
-    const trigger = this.findUpstreamTrigger(definition, roleNodeId);
-    const schedule = trigger?.params?.schedule;
-    return typeof schedule === 'string' && schedule.trim() !== '' ? schedule : undefined;
-  }
-
   private async waitForMemoryMcpUrl(timeoutMs = 60000): Promise<void> {
     const start = Date.now();
     while (!this.options.mcpUrl) {
@@ -480,6 +528,29 @@ export class PipelineScheduler {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
   }
+}
+
+/** 收集某节点下游分支中出现的角色类型集合 */
+function collectBranchRoles(definition: PipelineDefinition, startNodeId: string): Set<Role> {
+  const downstream = new Map<string, string[]>();
+  for (const edge of definition.edges) {
+    downstream.set(edge.from.node, [...(downstream.get(edge.from.node) ?? []), edge.to.node]);
+  }
+  const roles = new Set<Role>();
+  const queue = [startNodeId];
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const id = queue.shift();
+    if (id === undefined || visited.has(id)) continue;
+    visited.add(id);
+    const node = definition.nodes.find(n => n.id === id);
+    if (node?.type.startsWith('role.')) {
+      const role = node.type.slice('role.'.length) as Role;
+      if (ROLES.includes(role)) roles.add(role);
+    }
+    queue.push(...(downstream.get(id) ?? []));
+  }
+  return roles;
 }
 
 /** 疑似凭据的 params 键名（params 明文落库，凭据只允许经 services 注入） */

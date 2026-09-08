@@ -126,6 +126,8 @@ Archiver 文件优先管线产出策展产物（context.md 等）。
 | M3     | Role 黑箱节点化；daemon 调度改造；配置自动迁移；本文档                     | 进行中 |
 | M4     | 可视化画布（节点编辑、检查器吸收 Role 配置、运行状态叠加）                 | ✅     |
 | M5     | 外部 Agent 节点（A2A 词汇任务信封 + A2A/subprocess/MCP 适配器 + MCP 门面） | ✅     |
+| M6     | 双正本智库 + 投影管线 + 蒸馏管线（人审闸门）                               | ✅     |
+| M7     | 钻取层：Role 节点内 stage 子图拆解与编排                                   |        |
 
 ### 外部 Agent 接入（M5）
 
@@ -140,8 +142,18 @@ Archiver 文件优先管线产出策展产物（context.md 等）。
 - **MCP 门面**（`src/advance/agents/mcp-facade.ts`）：127.0.0.1 + 随机 token，
   工具：`pipeline_list_runs` / `pipeline_submit`（异步派发）/ `knowledge_recall`。
   门面独立于 EverOS 启动，地址经 `daemon.status` 展示。
-  | M6 | 双正本智库 + 投影管线 + 蒸馏管线 | |
-  | M7 | 钻取层：Role 节点内 stage 子图拆解与编排 | |
+
+### 智库双正本（M6）
+
+- **正本**（唯一事实源，Markdown + frontmatter）：共享 `<project>/.codekeeper/knowledge/`
+  （随项目入库）+ 私有 `~/.codekeeper/memory/knowledge/<projectId>/`（本地）。
+  注意：人审草稿箱 `knowledge-inbox/` 也在项目内，未审的蒸馏草稿会随 git 可见——
+  团队不希望草稿入库时，请把 `.codekeeper/knowledge-inbox/` 加入项目 .gitignore。
+- **投影**：正本 → EverOS（内容哈希去重，状态表 knowledge_projection 含 root 维度；
+  flush 失败回滚状态下轮重投）；EverOS/索引层随时可重建。
+- **蒸馏**：EverOS 经验 → LLM 候选 → 一律进 `knowledge-inbox/`（source: distilled），
+  人类在 Knowledge tab 批准后才进入共享正本（承接旧 learn 循环的人审闸门）。
+- **召回口径**：`recall_project_knowledge` 覆盖 archiver 与 knowledge-projection 两个 owner。
 
 ## 五、工程约束（RULES）
 

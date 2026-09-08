@@ -61,6 +61,22 @@ export function buildDefaultPipeline(project: Project): PipelineDefinition {
       channel: 'memory',
       artifactType: 'Tick',
     });
+
+    // archiver 之后链知识投影：归档完成 → 正本 → EverOS 检索层
+    if (role === 'archiver') {
+      nodes.push({
+        id: 'knowledge-project',
+        type: 'knowledge.project',
+        label: '知识投影',
+        params: {},
+      });
+      edges.push({
+        from: { node: roleNodeId, port: 'done' },
+        to: { node: 'knowledge-project', port: 'in' },
+        channel: 'memory',
+        artifactType: 'ArchiveDone',
+      });
+    }
   }
 
   return {

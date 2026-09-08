@@ -6,6 +6,8 @@ export const NODE_PALETTE: Array<{ type: string; label: string }> = [
   { type: 'role.reviewer', label: 'Reviewer 角色' },
   { type: 'role.maintainer', label: 'Maintainer 角色' },
   { type: 'role.archiver', label: 'Archiver 角色' },
+  { type: 'knowledge.project', label: '知识投影' },
+  { type: 'knowledge.distill', label: '知识蒸馏' },
 ];
 
 /** 新增连线的默认端口映射 */

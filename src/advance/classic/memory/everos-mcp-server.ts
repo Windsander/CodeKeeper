@@ -924,14 +924,26 @@ export class EverOSMcpServer {
     query: string;
   }): Promise<EverOSSearchItem[]> {
     const ctx = args.context;
-    const result = await everosMemorySearch(this.everosUrl, {
-      appId: ctx.appId,
-      projectId: ctx.projectId,
-      owner: { kind: 'agent', agentId: 'archiver' },
-      query: args.query,
-      topK: 5,
-    });
-    return result.items;
+    // 项目知识的两个 owner 口径：archiver 蒸馏产物 + 智库正本投影（M6）
+    const owners = ['archiver', 'knowledge-projection'];
+    const merged: EverOSSearchItem[] = [];
+    const seen = new Set<string>();
+    for (const agentId of owners) {
+      const result = await everosMemorySearch(this.everosUrl, {
+        appId: ctx.appId,
+        projectId: ctx.projectId,
+        owner: { kind: 'agent', agentId },
+        query: args.query,
+        topK: 5,
+      });
+      for (const item of result.items) {
+        if (!seen.has(item.id)) {
+          seen.add(item.id);
+          merged.push(item);
+        }
+      }
+    }
+    return merged.slice(0, 5);
   }
 
   private async handleMemoryDelete(

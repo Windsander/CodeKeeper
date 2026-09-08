@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { getLogDir } from '../core/platform';
 import { logger } from '../core/logger';
@@ -25,6 +25,30 @@ import type { ScanService } from '../scan/scan-service.js';
 import type { IGitProvider } from '../classic/provider/types.js';
 import type { PipelineScheduler } from '../pipeline/pipeline-scheduler.js';
 import { regeneratePipelineDefinitionIfGenerated } from '../pipeline/default-pipeline.js';
+import {
+  getKnowledgeInboxDir,
+  listProjectKnowledge,
+  parseKnowledgeItem,
+  readKnowledgeDir,
+  writeSharedKnowledge,
+  type KnowledgeItem,
+} from '../knowledge/knowledge-store.js';
+
+/** 知识条目传输形状（正文截断，避免大文件全量过 IPC） */
+function toKnowledgeDto(item: KnowledgeItem) {
+  return {
+    id: item.frontmatter.id,
+    title: item.frontmatter.title,
+    category: item.frontmatter.category,
+    scope: item.frontmatter.scope,
+    confidence: item.frontmatter.confidence,
+    source: item.frontmatter.source,
+    tags: item.frontmatter.tags,
+    updated: item.frontmatter.updated,
+    root: item.root,
+    bodyPreview: item.body.slice(0, 500),
+  };
+}
 import type { LocalModelServiceManager } from '../classic/memory/local-model-service.js';
 import type { ModelCapability } from '../classic/memory/model-server.js';
 import { ReviewerManager } from '../classic/roles/reviewer-manager.js';
@@ -100,9 +124,8 @@ export interface HandlerContext {
   watchProject?: (project: Project) => void;
   unwatchProject?: (projectId: string) => void;
   /** MCP 门面地址（外部 Agent 接入点） */
-  getMcpFacadeUrl?: () =>
-    | string
-    | null; /** EverOS HTTP URL，用于 memory.search 等 handler 直接访问 */
+  getMcpFacadeUrl?: () => string | null;
+  /** EverOS HTTP URL，用于 memory.search / 知识投影等直接访问 */
   everosUrl?: string;
   /** 本地 Embedding/Rerank 模型服务管理器 */
   localModelManager?: LocalModelServiceManager;
@@ -979,6 +1002,45 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const { projectId, limit } = params as { projectId: string; limit?: number };
     if (!ctx.serviceRegistry) throw new Error('管线调度器未初始化');
     return ctx.serviceRegistry.listPipelineRuns(projectId, limit);
+  },
+
+  'knowledge.list': async (ctx, params) => {
+    const { projectId } = params as { projectId: string };
+    const project = ctx.store.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+    return {
+      items: listProjectKnowledge(project).map(toKnowledgeDto),
+      inbox: readKnowledgeDir(getKnowledgeInboxDir(project), 'shared').map(toKnowledgeDto),
+    };
+  },
+
+  'knowledge.approve': async (ctx, params) => {
+    const { projectId, knowledgeId } = params as { projectId: string; knowledgeId: string };
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(knowledgeId)) {
+      throw new Error(`非法的知识 id: ${knowledgeId}`);
+    }
+    const project = ctx.store.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+    const inboxDir = getKnowledgeInboxDir(project);
+    const source = join(inboxDir, `${knowledgeId}.md`);
+    if (!existsSync(source)) throw new Error(`草稿不存在: ${knowledgeId}`);
+    // 人审通过：移入共享正本（随项目入库）
+    const item = parseKnowledgeItem(readFileSync(source, 'utf-8'), 'shared', source);
+    writeSharedKnowledge(project, { frontmatter: item.frontmatter, body: item.body });
+    unlinkSync(source);
+    return { success: true };
+  },
+
+  'knowledge.dismiss': async (ctx, params) => {
+    const { projectId, knowledgeId } = params as { projectId: string; knowledgeId: string };
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(knowledgeId)) {
+      throw new Error(`非法的知识 id: ${knowledgeId}`);
+    }
+    const project = ctx.store.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+    const target = join(getKnowledgeInboxDir(project), `${knowledgeId}.md`);
+    if (existsSync(target)) unlinkSync(target);
+    return { success: true };
   },
 };
 

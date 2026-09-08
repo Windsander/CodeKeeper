@@ -9,10 +9,11 @@ import { invoke } from '../api/electron-api';
 import type { ProjectStatus } from '../../shared/types';
 
 import { ArchiveTree } from '../components/ArchiveTree';
+import { KnowledgePanel } from '../components/KnowledgePanel';
 import { PipelineCanvas } from '../components/PipelineCanvas';
 import type { FileTreeNode } from '../components/ArchiveTree';
 
-type Tab = 'pipeline' | 'context' | 'activity' | 'archive' | 'status';
+type Tab = 'pipeline' | 'context' | 'knowledge' | 'activity' | 'archive' | 'status';
 
 export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -138,6 +139,12 @@ export function ProjectDetail() {
           Context
         </button>
         <button
+          className={`tab-btn${tab === 'knowledge' ? ' active' : ''}`}
+          onClick={() => setTab('knowledge')}
+        >
+          Knowledge
+        </button>
+        <button
           className={`tab-btn${tab === 'activity' ? ' active' : ''}`}
           onClick={() => setTab('activity')}
         >
@@ -159,6 +166,7 @@ export function ProjectDetail() {
 
       <div className="card">
         {tab === 'pipeline' && id && <PipelineCanvas key={id} projectId={id} />}
+        {tab === 'knowledge' && id && <KnowledgePanel key={id} projectId={id} />}
         {tab === 'context' && context && <ContextView content={context.content} />}
         {tab === 'activity' && suggestions && <SuggestionList content={suggestions.content} />}
         {tab === 'archive' && <ArchiveTree tree={archiveTree?.tree ?? null} />}

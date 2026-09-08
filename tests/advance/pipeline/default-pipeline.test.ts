@@ -71,7 +71,7 @@ describe('buildDefaultPipeline', () => {
     expect(def.edges).toHaveLength(0);
   });
 
-  it('archiver 角色使用 automation.cron 与 automation.enabled', () => {
+  it('archiver 角色使用 automation.cron 与 automation.enabled，并链知识投影节点', () => {
     const project = makeProject({
       roles: {
         archiver: {
@@ -83,6 +83,13 @@ describe('buildDefaultPipeline', () => {
     const def = buildDefaultPipeline(project);
     expect(def.nodes.find(n => n.id === 'role-archiver')).toBeDefined();
     expect(def.nodes.find(n => n.id === 'trigger-archiver')!.params.schedule).toBe('0 3 * * *');
+    // archiver 之后链 knowledge.project（归档完成 → 正本投影 EverOS）
+    const projection = def.nodes.find(n => n.id === 'knowledge-project');
+    expect(projection).toBeDefined();
+    expect(projection!.type).toBe('knowledge.project');
+    expect(
+      def.edges.some(e => e.from.node === 'role-archiver' && e.to.node === 'knowledge-project')
+    ).toBe(true);
   });
 });
 
