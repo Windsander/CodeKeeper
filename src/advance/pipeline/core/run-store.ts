@@ -98,6 +98,14 @@ export class PipelineRunStore {
     return rows.map(toRunRecord);
   }
 
+  /** 按项目过滤（SQL 层），画布运行状态叠加用 */
+  listRunsByProject(projectId: string, limit = 20): PipelineRunRecord[] {
+    const rows = this.db
+      .prepare('SELECT * FROM pipeline_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT ?')
+      .all(projectId, limit) as RunRow[];
+    return rows.map(toRunRecord);
+  }
+
   /**
    * 节点开始执行：新建或重置该节点的 stage 记录（resume 重跑时复用同一行）。
    * 注意：仅 executor 在确认节点未成功时才应调用；重置会抹掉上一次尝试的

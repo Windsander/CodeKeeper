@@ -290,3 +290,58 @@ export interface MemoryGraph {
   edges: MemoryGraphEdge[];
   stats: MemoryGraphStats;
 }
+
+// ===== 管线画布（M4）=====
+
+export interface PipelinePortRefDto {
+  node: string;
+  port: string;
+}
+
+export interface PipelineEdgeDto {
+  id?: string;
+  from: PipelinePortRefDto;
+  to: PipelinePortRefDto;
+  channel: 'memory' | 'queue' | 'gitlab-discussion' | 'everos' | 'fs' | 'a2a-task';
+  artifactType?: string;
+}
+
+export interface PipelineNodeDto {
+  id: string;
+  type: string;
+  label?: string;
+  params: Record<string, unknown>;
+  position?: { x: number; y: number };
+}
+
+export interface PipelineDefinitionDto {
+  version: 1;
+  id: string;
+  label?: string;
+  nodes: PipelineNodeDto[];
+  edges: PipelineEdgeDto[];
+}
+
+export interface PipelineGetResult {
+  exists: boolean;
+  /** true 表示正本仍是自动生成的投影件（画布保存后转人类正本） */
+  generated: boolean;
+  definition: PipelineDefinitionDto | null;
+}
+
+export interface PipelineStageRunDto {
+  nodeId: string;
+  status: 'running' | 'succeeded' | 'failed' | 'skipped';
+  error: string | null;
+  startedAt: number;
+  finishedAt: number | null;
+}
+
+export interface PipelineRunDto {
+  id: string;
+  status: 'running' | 'succeeded' | 'failed' | 'cancelled';
+  error: string | null;
+  createdAt: number;
+  finishedAt: number | null;
+  stages: PipelineStageRunDto[];
+}

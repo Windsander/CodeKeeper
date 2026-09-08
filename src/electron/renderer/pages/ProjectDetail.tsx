@@ -9,13 +9,14 @@ import { invoke } from '../api/electron-api';
 import type { ProjectStatus } from '../../shared/types';
 
 import { ArchiveTree } from '../components/ArchiveTree';
+import { PipelineCanvas } from '../components/PipelineCanvas';
 import type { FileTreeNode } from '../components/ArchiveTree';
 
-type Tab = 'context' | 'activity' | 'archive' | 'status';
+type Tab = 'pipeline' | 'context' | 'activity' | 'archive' | 'status';
 
 export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
-  const [tab, setTab] = useState<Tab>('context');
+  const [tab, setTab] = useState<Tab>('pipeline');
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const { data: project } = useIpc<{ name: string; rootPath: string; archiveRoot?: string }>(
@@ -125,6 +126,12 @@ export function ProjectDetail() {
 
       <div className="tabs">
         <button
+          className={`tab-btn${tab === 'pipeline' ? ' active' : ''}`}
+          onClick={() => setTab('pipeline')}
+        >
+          Pipeline
+        </button>
+        <button
           className={`tab-btn${tab === 'context' ? ' active' : ''}`}
           onClick={() => setTab('context')}
         >
@@ -151,6 +158,7 @@ export function ProjectDetail() {
       </div>
 
       <div className="card">
+        {tab === 'pipeline' && id && <PipelineCanvas key={id} projectId={id} />}
         {tab === 'context' && context && <ContextView content={context.content} />}
         {tab === 'activity' && suggestions && <SuggestionList content={suggestions.content} />}
         {tab === 'archive' && <ArchiveTree tree={archiveTree?.tree ?? null} />}

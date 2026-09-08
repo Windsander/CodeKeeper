@@ -956,6 +956,25 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     if (!ctx.serviceRegistry) throw new Error('角色服务注册表未初始化');
     return ctx.serviceRegistry.getStatus(role);
   },
+
+  'pipeline.get': async (ctx, params) => {
+    const { projectId } = params as { projectId: string };
+    if (!ctx.serviceRegistry) throw new Error('管线调度器未初始化');
+    return ctx.serviceRegistry.getProjectPipeline(projectId);
+  },
+
+  'pipeline.update': async (ctx, params) => {
+    const { projectId, definition } = params as { projectId: string; definition: unknown };
+    if (!ctx.serviceRegistry) throw new Error('管线调度器未初始化');
+    ctx.serviceRegistry.updateProjectPipeline(projectId, definition);
+    return { success: true };
+  },
+
+  'pipeline.runs': async (ctx, params) => {
+    const { projectId, limit } = params as { projectId: string; limit?: number };
+    if (!ctx.serviceRegistry) throw new Error('管线调度器未初始化');
+    return ctx.serviceRegistry.listPipelineRuns(projectId, limit);
+  },
 };
 
 function mapEverOSSearchItemToMemoryEntry(item: EverOSSearchItem): MemoryEntry {

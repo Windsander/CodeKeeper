@@ -10,6 +10,8 @@
  */
 
 import { schedule, validate as validateCron, type ScheduledTask } from 'node-cron';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { stringify } from 'yaml';
 import { logger } from '../core/logger.js';
 import type { HandlerContext } from '../ipc/handlers.js';
 import type { Project, Role } from '../types.js';
@@ -22,8 +24,12 @@ import type { PipelineDefinition } from './core/types.js';
 import {
   DEFAULT_ROLE_SCHEDULES,
   ensurePipelineDefinition,
+  GENERATED_PIPELINE_MARKER,
+  getPipelineDefinitionPath,
   loadProjectPipeline,
 } from './default-pipeline.js';
+import { pipelineDefinitionSchema, PipelineDefinitionError } from './core/types.js';
+import { topoSort } from './core/topology.js';
 import { RoleNodeRuntime } from '../classic/role-node-runtime.js';
 
 export interface PipelineSchedulerOptions {
@@ -209,6 +215,87 @@ export class PipelineScheduler {
     this.runtime.stopAll();
   }
 
+  /**
+   * 读取项目管线（画布用）：不存在时先生成默认管线。
+   * generated=true 表示正本仍是自动投影（画布保存后转人类正本）。
+   */
+  getProjectPipeline(projectId: string): {
+    exists: boolean;
+    generated: boolean;
+    definition: PipelineDefinition | null;
+  } {
+    const project = this.context.store.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+    ensurePipelineDefinition(project);
+
+    const filePath = getPipelineDefinitionPath(project);
+    let exists = false;
+    let generated = false;
+    try {
+      const head = readFileSync(filePath, 'utf-8').slice(0, 200);
+      exists = true;
+      generated = head.startsWith(GENERATED_PIPELINE_MARKER);
+    } catch {
+      // 文件不存在：项目无启用角色
+    }
+    return { exists, generated, definition: loadProjectPipeline(project) };
+  }
+
+  /**
+   * 画布写回：校验通过后覆盖 pipeline.yaml（不带生成标记，转人类正本），
+   * 并立即热加载（重排触发器 + 重启节点实例）。
+   */
+  updateProjectPipeline(projectId: string, definition: unknown): void {
+    const project = this.context.store.getProject(projectId);
+    if (!project) throw new Error(`项目不存在: ${projectId}`);
+
+    const parsed = pipelineDefinitionSchema.parse(definition);
+    topoSort(parsed); // 结构校验 + 环检测，非法时抛出
+    assertNoSecretParams(parsed);
+
+    writeFileSync(getPipelineDefinitionPath(project), stringify(parsed), 'utf-8');
+    this.reloadProject(projectId);
+    logger.info(`[Pipeline] 项目 ${project.name} 管线定义已由画布更新`);
+  }
+
+  /** 项目的最近运行记录（画布运行状态叠加用；收窄为传输形状，剥离定义与产物） */
+  listPipelineRuns(
+    projectId: string,
+    limit = 20
+  ): Array<{
+    id: string;
+    status: string;
+    error: string | null;
+    createdAt: number;
+    finishedAt: number | null;
+    stages: Array<{
+      nodeId: string;
+      status: string;
+      error: string | null;
+      startedAt: number;
+      finishedAt: number | null;
+    }>;
+  }> {
+    return this.getRunStore()
+      .listRunsByProject(projectId, limit)
+      .map(run => ({
+        id: run.id,
+        status: run.status,
+        error: run.error,
+        createdAt: run.createdAt,
+        finishedAt: run.finishedAt,
+        stages: this.getRunStore()
+          .getStageRuns(run.id)
+          .map(stage => ({
+            nodeId: stage.nodeId,
+            status: stage.status,
+            error: stage.error,
+            startedAt: stage.startedAt,
+            finishedAt: stage.finishedAt,
+          })),
+      }));
+  }
+
   private scheduleProject(project: Project): void {
     if (this.activeRoles.size === 0) return;
 
@@ -345,6 +432,30 @@ export class PipelineScheduler {
         throw new Error('等待 CodeGraph Server URL 超时，无法启动角色服务');
       }
       await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+}
+
+/** 疑似凭据的 params 键名（params 明文落库，凭据只允许经 services 注入） */
+const SECRET_PARAM_KEYS = new Set([
+  'token',
+  'apikey',
+  'api_key',
+  'secret',
+  'password',
+  'authorization',
+]);
+
+/** 拒绝把疑似凭据写进管线定义（画布与手编 YAML 同一约束） */
+function assertNoSecretParams(definition: PipelineDefinition): void {
+  for (const node of definition.nodes) {
+    for (const key of Object.keys(node.params)) {
+      const normalized = key.toLowerCase().replace(/[-_]/g, '');
+      if (SECRET_PARAM_KEYS.has(normalized) || normalized.endsWith('token')) {
+        throw new PipelineDefinitionError(
+          `节点 ${node.id} 的 params 含疑似凭据键 "${key}"；凭据只允许经服务注入，不得写入管线定义`
+        );
+      }
     }
   }
 }

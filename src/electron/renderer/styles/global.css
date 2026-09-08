@@ -3602,3 +3602,134 @@ select.input:focus {
     justify-content: flex-end;
   }
 }
+
+/* ===== 管线画布（M4） ===== */
+.pipeline-canvas-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 480px;
+}
+
+.pipeline-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pipeline-palette-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 6px;
+  background: var(--bg-secondary, #f9fafb);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.pipeline-toolbar-hint {
+  color: var(--text-secondary, #6b7280);
+  font-size: 12px;
+}
+
+.pipeline-toolbar-spacer {
+  flex: 1;
+}
+
+.pipeline-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-secondary, #eef2ff);
+  color: var(--text-secondary, #4f46e5);
+}
+
+.pipeline-badge.dirty {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.pipeline-save-btn {
+  padding: 4px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #4f46e5;
+  color: #fff;
+  cursor: pointer;
+}
+
+.pipeline-save-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pipeline-discard-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pipeline-error {
+  color: #b91c1c;
+  font-size: 12px;
+}
+
+.pipeline-main {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.pipeline-graph-canvas {
+  flex: 1;
+  min-height: 420px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+}
+
+.pipeline-inspector {
+  width: 320px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border-color, #e5e7eb);
+  padding: 0 12px 12px;
+}
+
+.pipeline-inspector h3 {
+  margin: 8px 0 12px;
+  font-size: 14px;
+}
+
+.pipeline-inspector-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.pipeline-inspector-field label {
+  color: var(--text-secondary, #6b7280);
+}
+
+.pipeline-inspector-field input {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 4px;
+}
+
+.pipeline-inspector-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #6b7280);
+}
+
+.pipeline-loading,
+.pipeline-empty {
+  padding: 24px;
+  color: var(--text-secondary, #6b7280);
+}

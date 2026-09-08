@@ -227,4 +227,52 @@ describe('PipelineScheduler', () => {
     expect(stopProjectSpy).toHaveBeenCalledWith('proj-1');
     expect(cronJobs.size).toBe(0);
   });
+
+  it('getProjectPipeline 迁移生成默认管线并标记 generated', async () => {
+    const project = makeProject(tmp, {
+      reviewer: enabledRole('reviewer', '*/7 * * * *'),
+    } as Project['roles']);
+    const scheduler = new PipelineScheduler(makeContext(project) as never, 'virtual-runner.js', {
+      mcpUrl: 'http://127.0.0.1:1',
+      codeGraphUrl: 'http://127.0.0.1:2',
+    });
+    const result = scheduler.getProjectPipeline('proj-1');
+    expect(result.exists).toBe(true);
+    expect(result.generated).toBe(true);
+    expect(result.definition?.nodes.map(n => n.id).sort()).toEqual([
+      'role-reviewer',
+      'trigger-reviewer',
+    ]);
+  });
+
+  it('updateProjectPipeline 写回人类正本（去标记）并热加载', async () => {
+    const project = makeProject(tmp, {
+      reviewer: enabledRole('reviewer', '*/7 * * * *'),
+    } as Project['roles']);
+    const scheduler = new PipelineScheduler(makeContext(project) as never, 'virtual-runner.js', {
+      mcpUrl: 'http://127.0.0.1:1',
+      codeGraphUrl: 'http://127.0.0.1:2',
+    });
+    scheduler.register('reviewer');
+
+    const current = scheduler.getProjectPipeline('proj-1').definition!;
+    const updated = {
+      ...current,
+      nodes: current.nodes.map(node =>
+        node.id === 'trigger-reviewer' ? { ...node, params: { schedule: '0 2 * * *' } } : node
+      ),
+    };
+    scheduler.updateProjectPipeline('proj-1', updated);
+
+    const after = scheduler.getProjectPipeline('proj-1');
+    expect(after.generated).toBe(false);
+    expect(after.definition!.nodes.find(n => n.id === 'trigger-reviewer')!.params.schedule).toBe(
+      '0 2 * * *'
+    );
+
+    // 非法定义被拒绝
+    expect(() =>
+      scheduler.updateProjectPipeline('proj-1', { version: 1, id: 'x', nodes: [], edges: [] })
+    ).toThrow();
+  });
 });
