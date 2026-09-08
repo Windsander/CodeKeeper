@@ -9,7 +9,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GitLabProvider } from '../../../../src/advance/classic/provider/gitlab-provider';
-import type { GitLabMR, GitLabMRChanges, GitLabNote } from '../../../../src/gitlab/client';
+import type { GitLabMR, GitLabMRChanges, GitLabNote } from '../../../../src/advance/gitlab/client';
 
 // 模拟 GitLabClient
 const mockListMergeRequests = vi.fn();
@@ -22,7 +22,7 @@ const mockListMembers = vi.fn();
 const mockListLabels = vi.fn();
 const mockListProtectedBranches = vi.fn();
 
-vi.mock('../../../../src/gitlab/client', () => ({
+vi.mock('../../../../src/advance/gitlab/client', () => ({
   GitLabClient: vi.fn().mockImplementation(() => ({
     listMergeRequests: mockListMergeRequests,
     getMergeRequest: mockGetMergeRequest,

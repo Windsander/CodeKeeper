@@ -39,14 +39,10 @@ After=network.target
 Type=simple
 User=$RUN_USER
 WorkingDirectory=$CODEKEEPER_DIR
-ExecStart=$NODE_PATH $CODEKEEPER_DIR/dist/index.js --daemon
+ExecStart=$NODE_PATH $CODEKEEPER_DIR/dist/advance/cli-entry.js start
 Restart=always
 RestartSec=10
-Environment="CODEKEEPER_CONFIG=$CODEKEEPER_DIR/config/projects.yaml"
-Environment="CODEKEEPER_LOG_DIR=$RUN_USER_HOME/Logs/codekeeper"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin"
-Environment="ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}"
-Environment="GITLAB_TOKEN=${GITLAB_TOKEN:-}"
 
 [Install]
 WantedBy=multi-user.target
@@ -69,7 +65,6 @@ if systemctl is-active --quiet "$SERVICE_NAME"; then
     echo "✅ CodeKeeper service installed and running!"
     echo "   Service: $SERVICE_NAME"
     echo "   Logs: journalctl -u $SERVICE_NAME -f"
-    echo "   Config: $CODEKEEPER_DIR/config/projects.yaml"
     echo ""
     echo "Commands:"
     echo "   Status:  sudo systemctl status $SERVICE_NAME"

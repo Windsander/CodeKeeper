@@ -42,7 +42,7 @@ import type {
   ReviewerComment,
 } from '../provider/types.js';
 import { BaseRoleRunner } from './base-role-runner.js';
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 import { getCommentActivityAt } from '../provider/activity-window.js';
 import {
   ArchiverProjectKnowledgeSource,

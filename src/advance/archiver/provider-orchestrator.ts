@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { logger } from '../../core/logger.js';
+import { logger } from '../core/logger.js';
 import type { Project } from '../types.js';
 import { BUILTIN_ARCHIVER_PROVIDER_ID } from './provider-config.js';
 import {

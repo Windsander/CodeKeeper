@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { getLogDir } from '../../core/platform';
-import { logger } from '../../core/logger';
+import { getLogDir } from '../core/platform';
+import { logger } from '../core/logger';
 import type { MetadataStore } from '../store/metadata-store';
 import type { ProjectRegistry } from '../project-registry';
 import type { LlmClient } from '../llm/client';

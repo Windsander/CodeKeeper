@@ -8,7 +8,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import http, { type Server as HttpServer } from 'node:http';
 import { URL } from 'node:url';
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 import { SecretSanitizer } from './secret-sanitizer.js';
 import type {
   MemoryContext,

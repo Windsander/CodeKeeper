@@ -15,7 +15,7 @@ import {
   getSoulFileName,
   getSoulPath,
 } from '../../../../src/advance/classic/soul/soul-loader.js';
-import { getProjectSoulsDir } from '../../../../src/core/platform.js';
+import { getProjectSoulsDir } from '../../../../src/advance/core/platform.js';
 import type { Project } from '../../../../src/advance/types.js';
 
 function makeProject(name: string): Project {

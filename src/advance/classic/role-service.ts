@@ -1,6 +1,6 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
-import { logger } from '../../core/logger.js';
+import { logger } from '../core/logger.js';
 import type { Role } from '../types.js';
 import type { HandlerContext } from '../ipc/handlers.js';
 import { EverOSService } from './memory/everos-service.js';

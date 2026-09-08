@@ -9,7 +9,7 @@ import { saveDaemonConfig } from './config/daemon-config';
 import { IpcServer } from './ipc/server';
 import { getIpcSocketPath } from './ipc/paths';
 import { handlers, type HandlerContext } from './ipc/handlers';
-import { logger } from '../core/logger';
+import { logger } from './core/logger';
 import { LlmClient } from './llm/client';
 import { RoleServiceRegistry } from './classic/role-service-registry.js';
 import { ROLES } from './types.js';

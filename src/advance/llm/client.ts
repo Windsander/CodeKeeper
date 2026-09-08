@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { logger } from '../../core/logger';
+import { logger } from '../core/logger';
 import { logMemorySnapshot } from '../classic/utils/memory-snapshot.js';
 import { extractJsonText } from '../classic/utils/json-extraction.js';
 
@@ -432,9 +432,7 @@ export class LlmClient {
     }
   }
 
-  private toOpenAIMessages(
-    messages: LlmMessage[]
-  ): Array<{
+  private toOpenAIMessages(messages: LlmMessage[]): Array<{
     role: string;
     content: string;
     tool_calls?: unknown[];

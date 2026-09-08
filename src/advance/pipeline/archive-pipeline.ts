@@ -15,7 +15,7 @@ import type { MetadataStore } from '../store/metadata-store';
 import type { Project, ArchiveAction, ClassificationResult } from '../types';
 import { getArchiveRoot } from '../types';
 import { loadProjectConfig, matchesProjectPathPatterns } from '../config/project-config';
-import { logger } from '../../core/logger';
+import { logger } from '../core/logger';
 
 export interface ArchivePipelineOptions {
   store: MetadataStore;

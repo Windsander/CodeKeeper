@@ -16,6 +16,8 @@ describe('formatModelShortName', () => {
   });
 
   it('未知模型截断显示', () => {
-    expect(formatModelShortName('custom-very-long-model-name-2024')).toBe('Custom-very-long-mod...');
+    expect(formatModelShortName('custom-very-long-model-name-2024')).toBe(
+      'Custom-very-long-mod...'
+    );
   });
 });

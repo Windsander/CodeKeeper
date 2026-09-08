@@ -2,7 +2,7 @@
   "name": "codekeeper-advance",
   "version": "0.1.0",
   "description": "通用、去品牌化、Agent 自驱动的知识智库系统",
-  "main": "dist/index.js",
+  "main": "dist/advance/cli-entry.js",
   "bin": {
     "codekeeper": "dist/advance/cli-entry.js"
   },
@@ -25,11 +25,11 @@
     "electron:start": "npm run electron:build && node node_modules/electron/cli.js dist/electron/main/index.js"
   },
   "keywords": [
-    "code-review",
-    "gitlab",
+    "agent",
+    "pipeline",
+    "knowledge-base",
     "automation",
-    "ai",
-    "claude"
+    "ai"
   ],
   "license": "MIT",
   "engines": {
@@ -40,7 +40,6 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^12.0.0",
     "chokidar": "^4.0.0",
-    "dotenv": "^16.4.7",
     "node-cron": "^4.6.0",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",

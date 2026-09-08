@@ -4,7 +4,7 @@ import { LlmStructuredOutputError, type LlmClient } from '../llm/client';
 import type { ToolDefinition } from '../llm/tool-types';
 import { buildSuggestPrompt, parseSuggestResponse } from '../llm/prompts/suggest-prompt';
 import type { ArchiveAction, ClassificationResult } from '../types';
-import { logger } from '../../core/logger';
+import { logger } from '../core/logger';
 import { toFlaggedArchivePath } from './archive-path';
 
 const SUGGEST_RESPONSE_SCHEMA: ToolDefinition['input_schema'] = {

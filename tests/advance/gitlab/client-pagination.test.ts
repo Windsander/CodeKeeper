@@ -1,15 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { GitLabClient } from '../../src/gitlab/client.js';
-import type { ProjectConfig } from '../../src/types.js';
+import { GitLabClient } from '../../../src/advance/gitlab/client.js';
 
 function makeClient(): GitLabClient {
   return new GitLabClient({
-    gitlab: {
-      baseUrl: 'https://git.example.invalid',
-      projectPath: 'group/project',
-      token: 'test-token',
-    },
-  } as ProjectConfig);
+    baseUrl: 'https://git.example.invalid',
+    projectPath: 'group/project',
+    token: 'test-token',
+  });
 }
 
 function okJson(value: unknown): Response {

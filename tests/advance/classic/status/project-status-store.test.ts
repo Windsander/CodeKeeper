@@ -15,7 +15,7 @@ import {
   recordAgentStarted,
   recordAgentStopped,
 } from '../../../../src/advance/classic/status/project-status-store.js';
-import { getProjectAgentStatusDir } from '../../../../src/core/platform.js';
+import { getProjectAgentStatusDir } from '../../../../src/advance/core/platform.js';
 import type { Project } from '../../../../src/advance/types.js';
 
 const TEST_PROJECT_NAME = `ck-status-test-${Date.now()}`;

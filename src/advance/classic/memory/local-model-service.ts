@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync, readFileSync, statSy
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { logger } from '../../../core/logger.js';
-import { getAppStorageDir, getLogDir } from '../../../core/platform.js';
+import { logger } from '../../core/logger.js';
+import { getAppStorageDir, getLogDir } from '../../core/platform.js';
 import { ModelServer, type ModelCapability } from './model-server.js';
 import { DEFAULT_EMBEDDING_MODEL, DEFAULT_RERANK_MODEL } from './local-model-catalog.js';
 import type {

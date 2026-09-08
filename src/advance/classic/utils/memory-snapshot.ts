@@ -1,4 +1,4 @@
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 
 /**
  * 打印当前进程内存快照，使用同步日志确保崩溃前能刷出。

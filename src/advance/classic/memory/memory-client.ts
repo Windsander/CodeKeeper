@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 import type {
   IMemoryClient,
   MemoryContext,

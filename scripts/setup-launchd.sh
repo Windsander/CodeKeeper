@@ -26,8 +26,8 @@ cat > "$PLIST_PATH" <<EOF
     <key>ProgramArguments</key>
     <array>
         <string>/usr/local/bin/node</string>
-        <string>$CODEKEEPER_DIR/dist/index.js</string>
-        <string>--daemon</string>
+        <string>$CODEKEEPER_DIR/dist/advance/cli-entry.js</string>
+        <string>start</string>
     </array>
     <key>WorkingDirectory</key>
     <string>$CODEKEEPER_DIR</string>
@@ -35,10 +35,6 @@ cat > "$PLIST_PATH" <<EOF
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-        <key>CODEKEEPER_CONFIG</key>
-        <string>$CODEKEEPER_DIR/config/projects.yaml</string>
-        <key>CODEKEEPER_LOG_DIR</key>
-        <string>$HOME/Logs/codekeeper</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>

@@ -7,6 +7,9 @@ const projects: Project[] = [{ id: 'proj-a', name: 'Project A', rootPath: '/a' }
 
 describe('Maintainer memory graph visibility', () => {
   it('episode 的 Maintainer sender 会生成 Maintainer 节点并计入统计', () => {
+    // 时间戳取当前 UTC 时间，保证落在 dailyGrowth 的 14 天窗口内（窗口同样按 UTC 日切片）
+    const timestamp = new Date().toISOString();
+    const dateKey = timestamp.slice(0, 10);
     const result: EverOSMemoryGetResult = {
       episodes: [
         {
@@ -15,7 +18,7 @@ describe('Maintainer memory graph visibility', () => {
           sender_ids: ['maintainer'],
           session_id: 'maintainer-proj-a-mr-1558',
           summary: '维护记忆',
-          timestamp: '2026-07-22T03:22:08Z',
+          timestamp,
         },
       ],
       profiles: [],
@@ -29,8 +32,8 @@ describe('Maintainer memory graph visibility', () => {
     expect(graph.nodes.some(node => node.id === 'agent:maintainer')).toBe(true);
     expect(graph.stats.totalMemories).toBe(1);
     expect(graph.stats.dailyGrowth).toHaveLength(14);
-    expect(graph.stats.dailyGrowth.find(entry => entry.date === '2026-07-22')).toEqual({
-      date: '2026-07-22',
+    expect(graph.stats.dailyGrowth.find(entry => entry.date === dateKey)).toEqual({
+      date: dateKey,
       count: 1,
     });
   });

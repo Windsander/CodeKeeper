@@ -13,7 +13,7 @@ vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
 
-vi.mock('../../../../src/core/platform.js', () => ({
+vi.mock('../../../../src/advance/core/platform.js', () => ({
   getLogDir: () => join(tmpdir(), 'ck-model-server-test-logs'),
 }));
 

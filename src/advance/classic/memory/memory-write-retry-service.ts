@@ -1,4 +1,4 @@
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 import { everosMemoryAddMessages, everosMemoryFlush } from './everos-api.js';
 import type { MemoryContext } from './types.js';
 import type { IMemoryWriteQueue, PendingMemoryWrite } from './memory-write-queue.js';

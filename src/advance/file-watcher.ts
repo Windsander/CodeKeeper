@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { matchesProjectPathPatterns, type ProjectConfig } from './config/project-config';
 import type { WatchedEvent, WatchEventType } from './types';
-import { logger } from '../core/logger';
+import { logger } from './core/logger';
 import { logMemorySnapshot } from './classic/utils/memory-snapshot.js';
 
 export interface FileWatcherOptions {

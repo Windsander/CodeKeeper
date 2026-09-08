@@ -1,7 +1,7 @@
 import type { EverOSConfig } from '../../config/daemon-config.js';
 import type { RemoteModelItemStatus } from '../../../electron/shared/service-status.js';
 import { formatModelShortName } from '../../../electron/shared/model-label.js';
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 
 interface LlmConfig {
   apiKey?: string;

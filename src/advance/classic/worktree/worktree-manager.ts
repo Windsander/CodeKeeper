@@ -13,7 +13,7 @@ import { dirname, join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createInterface } from 'node:readline';
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 import { readRange } from './streaming-file-reader.js';
 import { buildFileOverview, type FileOverview } from './file-overview-builder.js';
 import { buildFocusedContextStreamed } from '../fix/focused-context-streamer.js';

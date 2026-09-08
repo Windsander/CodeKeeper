@@ -1,5 +1,10 @@
 # CodeKeeper — 自动化 MR Reviewer & 学习体系实现计划
 
+> [!WARNING]
+> **本文档已废弃**：它描述的旧版 cron 审查器代码线（src/review、src/learn、src/scheduler 等）
+> 已在 M1 里程碑中删除，其中引用的文件路径与命令均已失效，仅保留作历史参考。
+> 现行架构（管线编排 + 智库）见后续里程碑重写的设计文档。
+
 > **C**ode **O**rchestrator & **R**eview **N**ode
 
 ## Context

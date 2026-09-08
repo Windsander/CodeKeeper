@@ -12,7 +12,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { getProjectAgentStatusDir } from '../../../core/platform.js';
+import { getProjectAgentStatusDir } from '../../core/platform.js';
 import type { Project } from '../../types.js';
 
 export type MrAgentProjectErrorType = 'missing-token' | 'invalid-token' | 'gitlab-api' | 'unknown';

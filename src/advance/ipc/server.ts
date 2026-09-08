@@ -1,6 +1,6 @@
 import { createServer, Server, Socket } from 'node:net';
 import { unlinkSync, existsSync, chmodSync } from 'node:fs';
-import { logger } from '../../core/logger';
+import { logger } from '../core/logger';
 import type { IpcRequest, IpcResponse, IpcPushEvent } from './types';
 
 export interface IpcServerOptions {

@@ -7,7 +7,7 @@ import {
   formatThreadContext,
   type ThreadContext,
 } from '../utils/context-window.js';
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 import { extractJsonText } from '../utils/json-extraction.js';
 import { defaultPromptLoader, type PromptLoader } from '../../llm/prompts/loader.js';
 

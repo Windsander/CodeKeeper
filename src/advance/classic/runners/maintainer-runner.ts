@@ -8,10 +8,7 @@
 
 import { LlmClient } from '../../llm/client.js';
 import { LlmMaintainerLocalJudge } from '../fix/maintainer-llm-judge.js';
-import {
-  ConservativeLocalJudgeStub,
-  type MaintainerLocalJudge,
-} from '../fix/maintainer-local-judge.js';
+import type { MaintainerLocalJudge } from '../fix/maintainer-local-judge.js';
 import { GitLabProvider } from '../provider/gitlab-provider.js';
 import { WorktreeManager } from '../worktree/worktree-manager.js';
 import { MaintainerBrain } from '../fix/maintainer-brain.js';
@@ -33,7 +30,7 @@ import type {
 } from '../provider/types.js';
 import type { MrContext } from '../fix/cognitive-types.js';
 import { buildAuthenticatedRemoteUrl } from './shared/config-utils.js';
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 import {
   loadState,
   saveState,
@@ -2867,14 +2864,17 @@ export class MaintainerRunner extends BaseRoleRunner {
       const baseResult = await brain.recheckAlreadyFixed(finding);
 
       const assist = await this.localJudge.assistAlreadyFixedCheck(
-        finding.description,
-        focusedContent
+        finding.message,
+        focusedContextToString(focusedContent)
       );
-      if (assist.kind === 'reliable' && assist.likelyAlreadyFixed) {
+      const assistConfirmedFixed =
+        ('kind' in assist && assist.kind === 'reliable' && assist.value) ||
+        (!('kind' in assist) && assist.likelyAlreadyFixed);
+      if (assistConfirmedFixed) {
         return {
           alreadyFixed: true,
           reason: assist.reason,
-          evidence: assist.evidence,
+          evidence: 'evidence' in assist ? assist.evidence : undefined,
         };
       }
 

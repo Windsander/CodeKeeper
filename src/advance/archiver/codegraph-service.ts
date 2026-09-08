@@ -4,7 +4,7 @@ import http, {
   type ServerResponse,
 } from 'node:http';
 import { URL } from 'node:url';
-import { logger } from '../../core/logger.js';
+import { logger } from '../core/logger.js';
 import type {
   CodeGraphProviderStatus,
   CodeGraphServiceStatus,

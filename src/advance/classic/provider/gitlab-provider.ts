@@ -1,7 +1,7 @@
 /**
  * GitLab 平台 IGitProvider 实现
  *
- * 内部复用 src/gitlab/client.ts 的 GitLabClient，
+ * 内部复用 advance/gitlab/client.ts 的 GitLabClient，
  * 将 GitLab API 响应字段映射为 IGitProvider 统一格式。
  */
 
@@ -21,8 +21,7 @@ import {
 } from './types.js';
 import { selectRecentActiveComments, selectRecentActiveDiscussions } from './activity-window.js';
 import { matchesFilter } from './mr-filter.js';
-import { GitLabClient } from '../../../gitlab/client.js';
-import type { ProjectConfig } from '../../../types.js';
+import { GitLabClient } from '../../gitlab/client.js';
 import type { GitlabConfig, MrReviewFilter } from '../../types.js';
 
 /**
@@ -92,49 +91,11 @@ export class GitLabProvider implements IGitProvider {
   }
 
   constructor(config: GitlabConfig) {
-    // 构造最小化的 ProjectConfig 对象，满足 GitLabClient 构造要求
-    // id / name / localPath 为占位值，gitlab 配置使用真实值
-    const projectConfig: ProjectConfig = {
-      id: 'placeholder',
-      name: 'placeholder',
-      localPath: '/tmp/placeholder',
-      git: {
-        remote: '',
-        defaultBranch: 'main',
-      },
-      gitlab: {
-        baseUrl: config.baseUrl,
-        projectPath: config.projectPath,
-        token: config.token,
-      },
-      review: {
-        enabled: false,
-        schedule: '',
-        timezone: '',
-        tokenBudget: 0,
-        autoFix: false,
-        autoFixBranchPrefix: '',
-        rulesFile: '',
-        astGrepConfig: '',
-        filter: {
-          excludeAuthors: [],
-          excludeDrafts: false,
-          minChanges: 0,
-          maxChanges: 0,
-          excludePaths: [],
-        },
-      },
-      learning: {
-        enabled: false,
-        schedule: '',
-        patternThreshold: 3,
-        updateClaudeMd: false,
-        createAstGrepRules: false,
-        lookbackDays: 30,
-      },
-    };
-
-    this.client = new GitLabClient(projectConfig);
+    this.client = new GitLabClient({
+      baseUrl: config.baseUrl,
+      token: config.token,
+      projectPath: config.projectPath,
+    });
   }
 
   /**

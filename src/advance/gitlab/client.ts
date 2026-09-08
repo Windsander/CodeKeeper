@@ -1,9 +1,9 @@
 import { logger } from '../core/logger.js';
-import type { ProjectConfig } from '../types.js';
 
-interface GitLabApiOptions {
+export interface GitLabClientOptions {
   baseUrl: string;
   token: string;
+  projectPath: string;
 }
 
 export class GitLabClient {
@@ -11,21 +11,14 @@ export class GitLabClient {
   private token: string;
   private projectId: string;
 
-  constructor(
-    project: ProjectConfig,
-    options?: GitLabApiOptions
-  ) {
-    this.baseUrl = options?.baseUrl || project.gitlab.baseUrl;
-    this.token = options?.token || project.gitlab.token;
+  constructor(options: GitLabClientOptions) {
+    this.baseUrl = options.baseUrl;
+    this.token = options.token;
     // URL-encode project path for GitLab API
-    this.projectId = encodeURIComponent(project.gitlab.projectPath);
+    this.projectId = encodeURIComponent(options.projectPath);
   }
 
-  private async request<T>(
-    method: string,
-    endpoint: string,
-    body?: unknown
-  ): Promise<T> {
+  private async request<T>(method: string, endpoint: string, body?: unknown): Promise<T> {
     const url = `${this.baseUrl}/api/v4${endpoint}`;
 
     const headers: Record<string, string> = {
@@ -55,7 +48,10 @@ export class GitLabClient {
 
     if (!response.ok) {
       const errorText = await response.text();
-      logger.error({ status: response.status, body: errorText }, `GitLab API error: ${method} ${endpoint}`);
+      logger.error(
+        { status: response.status, body: errorText },
+        `GitLab API error: ${method} ${endpoint}`
+      );
       throw new Error(`GitLab API ${response.status}: ${errorText}`);
     }
 
@@ -82,7 +78,10 @@ export class GitLabClient {
 
     if (!response.ok) {
       const errorText = await response.text();
-      logger.error({ status: response.status, body: errorText }, `GitLab API error: GET(text) ${endpoint}`);
+      logger.error(
+        { status: response.status, body: errorText },
+        `GitLab API error: GET(text) ${endpoint}`
+      );
       throw new Error(`GitLab API ${response.status}: ${errorText}`);
     }
 
@@ -117,10 +116,7 @@ export class GitLabClient {
    * Verify that the project is reachable with current credentials
    */
   async verifyProject(): Promise<void> {
-    await this.request<GitLabMR>(
-      'GET',
-      `/projects/${this.projectId}`
-    );
+    await this.request<GitLabMR>('GET', `/projects/${this.projectId}`);
   }
 
   /**
@@ -172,10 +168,7 @@ export class GitLabClient {
    * List project labels
    */
   async listLabels(): Promise<GitLabLabel[]> {
-    return this.request<GitLabLabel[]>(
-      'GET',
-      `/projects/${this.projectId}/labels?per_page=100`
-    );
+    return this.request<GitLabLabel[]>('GET', `/projects/${this.projectId}/labels?per_page=100`);
   }
 
   /**
@@ -208,10 +201,7 @@ export class GitLabClient {
    * Get single merge request
    */
   async getMergeRequest(iid: number): Promise<GitLabMR> {
-    return this.request<GitLabMR>(
-      'GET',
-      `/projects/${this.projectId}/merge_requests/${iid}`
-    );
+    return this.request<GitLabMR>('GET', `/projects/${this.projectId}/merge_requests/${iid}`);
   }
 
   /**
@@ -271,11 +261,7 @@ export class GitLabClient {
   /**
    * Add a note to an existing discussion on MR
    */
-  async addDiscussionNote(
-    iid: number,
-    discussionId: string,
-    body: string
-  ): Promise<GitLabNote> {
+  async addDiscussionNote(iid: number, discussionId: string, body: string): Promise<GitLabNote> {
     return this.request<GitLabNote>(
       'POST',
       `/projects/${this.projectId}/merge_requests/${iid}/discussions/${encodeURIComponent(discussionId)}/notes`,
@@ -311,16 +297,12 @@ export class GitLabClient {
     title: string;
     description?: string;
   }): Promise<GitLabMR> {
-    return this.request<GitLabMR>(
-      'POST',
-      `/projects/${this.projectId}/merge_requests`,
-      {
-        source_branch: params.sourceBranch,
-        target_branch: params.targetBranch,
-        title: params.title,
-        description: params.description || '',
-      }
-    );
+    return this.request<GitLabMR>('POST', `/projects/${this.projectId}/merge_requests`, {
+      source_branch: params.sourceBranch,
+      target_branch: params.targetBranch,
+      title: params.title,
+      description: params.description || '',
+    });
   }
 
   /**

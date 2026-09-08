@@ -147,7 +147,7 @@ npm run electron:dev:all
 - 本地 Embedding / Rerank 模型
 - EverOS 多模态模型覆盖配置
 
-Advance 桌面主流程以桌面设置和 `daemon-config.json` 为准。根目录的 `.env.example` 用于兼容入口，不应作为桌面主流程的唯一配置来源。
+Advance 桌面主流程以桌面设置和 `daemon-config.json` 为准。
 
 ### 项目级配置
 

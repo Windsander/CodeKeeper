@@ -7,7 +7,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { getProjectSoulsDir } from '../../../core/platform.js';
+import { getProjectSoulsDir } from '../../core/platform.js';
 import type { Project, Role } from '../../types.js';
 
 export interface SoulContent {

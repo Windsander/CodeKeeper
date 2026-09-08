@@ -1,4 +1,4 @@
-import { logger } from '../../../core/logger.js';
+import { logger } from '../../core/logger.js';
 import type { LlmClient } from '../../llm/client.js';
 import type { ToolDefinition } from '../../llm/tool-types.js';
 import type { IMemoryClient } from './types.js';

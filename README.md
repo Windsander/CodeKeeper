@@ -147,7 +147,7 @@ The main settings include:
 - Local embedding and reranking models
 - EverOS multimodal model overrides
 
-The Advance desktop flow uses the desktop settings and `daemon-config.json` as its source of truth. The root `.env.example` exists for compatibility entry points and should not be treated as the only desktop configuration source.
+The Advance desktop flow uses the desktop settings and `daemon-config.json` as its source of truth.
 
 ### Project-level configuration
 

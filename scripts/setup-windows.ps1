@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 
 $CornDir = Resolve-Path "$PSScriptRoot\.."
-$TaskName = "CornReview"
+$TaskName = "CodeKeeper"
 $LogDir = "$env:USERPROFILE\Logs\codekeeper"
 
 Write-Host "=== CodeKeeper Windows Service Setup ===" -ForegroundColor Cyan
@@ -29,21 +29,21 @@ if ($existing) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
+# 清理旧版遗留任务名（CornReview 时代），避免其继续调用已下线的旧入口
+$legacy = Get-ScheduledTask -TaskName "CornReview" -ErrorAction SilentlyContinue
+if ($legacy) {
+    Write-Host "Removing legacy task 'CornReview'..."
+    Unregister-ScheduledTask -TaskName "CornReview" -Confirm:$false
+}
+
 # Create scheduled task (runs every 30 minutes)
-$Action = New-ScheduledTaskAction -Execute $NodePath -Argument "dist/index.js --daemon" -WorkingDirectory $CornDir
+$Action = New-ScheduledTaskAction -Execute $NodePath -Argument "dist\advance\cli-entry.js start" -WorkingDirectory $CornDir
 
 $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 3650)
 
 $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType ServiceAccount -RunLevel Highest
 
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
-
-# Environment variables
-$EnvVars = @{
-    CODEKEEPER_CONFIG = "$CornDir\config\projects.yaml"
-    CODEKEEPER_LOG_DIR = $LogDir
-    PATH = $env:PATH
-}
 
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
 

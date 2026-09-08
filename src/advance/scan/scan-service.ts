@@ -6,7 +6,7 @@
 
 import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
-import { logger } from '../../core/logger.js';
+import { logger } from '../core/logger.js';
 import type { MetadataStore } from '../store/metadata-store.js';
 import type { ProjectRegistry } from '../project-registry.js';
 import type { Project } from '../types.js';

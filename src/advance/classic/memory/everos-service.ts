@@ -2,8 +2,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { logger } from '../../../core/logger.js';
-import { getAppStorageDir } from '../../../core/platform.js';
+import { logger } from '../../core/logger.js';
+import { getAppStorageDir } from '../../core/platform.js';
 import { ensureFcntlShim, buildEverOSProcessEnv } from './everos-windows-shim.js';
 
 export interface EverOSServiceOptions {

@@ -4,8 +4,8 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { existsSync, readdirSync, statSync, appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { logger } from '../../../core/logger.js';
-import { getLogDir } from '../../../core/platform.js';
+import { logger } from '../../core/logger.js';
+import { getLogDir } from '../../core/platform.js';
 import type { ModelServiceStatus } from '../../../electron/shared/service-status.js';
 
 export type ModelCapability = 'embedding' | 'rerank';

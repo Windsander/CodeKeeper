@@ -9,7 +9,7 @@ import {
 } from '../llm/prompts/classify-prompt';
 import { extractMetadata, type FileMetadata } from './metadata-extractor';
 import type { ClassificationResult } from '../types';
-import { logger } from '../../core/logger';
+import { logger } from '../core/logger';
 
 export interface ClassifierOptions {
   /** 自定义分类列表 */

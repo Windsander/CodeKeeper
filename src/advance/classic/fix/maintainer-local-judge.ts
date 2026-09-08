@@ -12,7 +12,11 @@ export type LocalJudgeVerdict =
   | { kind: 'unreliable'; reason: string };
 
 export type PreFilterScopeVerdict =
-  | { kind: 'reliable'; scope: 'trivial' | 'local' | 'cross-file' | 'needs-clarification'; reason: string }
+  | {
+      kind: 'reliable';
+      scope: 'trivial' | 'local' | 'cross-file' | 'needs-clarification';
+      reason: string;
+    }
   | { kind: 'unreliable'; reason: string };
 
 export type PreFilterNonFindingVerdict =
@@ -76,7 +80,7 @@ export interface MaintainerLocalJudge {
   reassessSemanticIdentity(
     currentFindingDescription: string,
     previousDecisionSummary: string,
-    fileContextHint?: string,
+    fileContextHint?: string
   ): Promise<LocalJudgeVerdict | SemanticReidentificationResult>;
 
   /**
@@ -88,7 +92,7 @@ export interface MaintainerLocalJudge {
   adviseOnStuckProgress(
     findingDescription: string,
     recentProgressSummary: string,
-    attemptedDirectionsSummary?: string,
+    attemptedDirectionsSummary?: string
   ): Promise<LocalJudgeVerdict | StuckCorrectionResult>;
 
   /**
@@ -99,7 +103,7 @@ export interface MaintainerLocalJudge {
    */
   assistAlreadyFixedCheck(
     findingDescription: string,
-    currentCodeContextHint?: string,
+    currentCodeContextHint?: string
   ): Promise<LocalJudgeVerdict | AlreadyFixedAssistanceResult>;
 
   /**
@@ -112,7 +116,7 @@ export interface MaintainerLocalJudge {
   preFilterScope(
     findingDescription: string,
     findingFile?: string,
-    findingLine?: number,
+    findingLine?: number
   ): Promise<PreFilterScopeVerdict>;
 
   /**
@@ -124,6 +128,6 @@ export interface MaintainerLocalJudge {
    */
   preFilterNonFindingDiscussion(
     discussionBody: string,
-    discussionNoteCount?: number,
+    discussionNoteCount?: number
   ): Promise<PreFilterNonFindingVerdict>;
 }
