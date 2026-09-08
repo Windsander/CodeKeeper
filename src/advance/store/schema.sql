@@ -155,3 +155,35 @@ CREATE TABLE IF NOT EXISTS pending_memory_writes (
 
 CREATE INDEX IF NOT EXISTS idx_pending_memory_project ON pending_memory_writes(project_id);
 CREATE INDEX IF NOT EXISTS idx_pending_memory_next_retry ON pending_memory_writes(next_retry_at);
+
+-- 管线运行记录（M2 管线核心）
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+  id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  project_id TEXT,
+  status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed', 'cancelled')),
+  definition_json TEXT NOT NULL,
+  error TEXT,
+  created_at INTEGER NOT NULL,
+  finished_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline ON pipeline_runs(pipeline_id);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status);
+
+-- 节点级运行记录：每个节点边界落库，支持断点恢复与观测
+CREATE TABLE IF NOT EXISTS stage_runs (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  node_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed', 'skipped')),
+  inputs_json TEXT,
+  outputs_json TEXT,
+  error TEXT,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  UNIQUE(run_id, node_id),
+  FOREIGN KEY (run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_stage_runs_run ON stage_runs(run_id);
