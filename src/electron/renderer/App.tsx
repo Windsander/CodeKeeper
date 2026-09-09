@@ -10,25 +10,13 @@ import {
   DashboardIcon,
   MemoryGraphIcon,
   MemoryStatsIcon,
-  HistoryIcon,
-  LogsIcon,
   SettingsIcon,
 } from './components/icons.js';
 import { Dashboard } from './pages/Dashboard.js';
 import { ProjectDetail } from './pages/ProjectDetail.js';
-import { ActionHistory } from './pages/ActionHistory.js';
-import { Logs } from './pages/Logs.js';
 import { Settings } from './pages/Settings.js';
-import { MrReview } from './pages/MrReview.js';
-import { Maintainer } from './pages/Maintainer.js';
-import { Archiver } from './pages/Archiver.js';
-import { MemoryStatsPage } from './pages/MemoryStatsPage.js';
-import { MemoryGraphPage } from './pages/MemoryGraphPage.js';
-import { getAllRoleUIs } from './roles/role-registry.js';
-// 触发角色 UI 注册（side-effect）
-import './roles/reviewer-role.js';
-import './roles/maintainer-role.js';
-import './roles/archiver-role.js';
+import { KnowledgeHubPage } from './pages/KnowledgeHubPage.js';
+import { SystemStatusPage } from './pages/SystemStatusPage.js';
 
 interface NavItem {
   to: string;
@@ -36,19 +24,15 @@ interface NavItem {
   icon: React.ComponentType;
 }
 
-/** 位于角色导航之前的顶部功能入口 */
+/** 全局一级导航：项目、智库与运行基础设施 */
 const TOP_NAV_ITEMS: NavItem[] = [
   { to: '/', label: '仪表盘', icon: DashboardIcon },
-  { to: '/memory', label: '记忆图谱', icon: MemoryGraphIcon },
-  { to: '/memory-stats', label: '记忆统计', icon: MemoryStatsIcon },
+  { to: '/knowledge', label: '智库', icon: MemoryGraphIcon },
+  { to: '/system', label: '系统状态', icon: MemoryStatsIcon },
 ];
 
-/** 位于角色导航之后的底部功能入口 */
-const BOTTOM_NAV_ITEMS: NavItem[] = [
-  { to: '/history', label: '动作历史', icon: HistoryIcon },
-  { to: '/logs', label: '日志', icon: LogsIcon },
-  { to: '/settings', label: '设置', icon: SettingsIcon },
-];
+/** 底部配置入口 */
+const BOTTOM_NAV_ITEMS: NavItem[] = [{ to: '/settings', label: '设置', icon: SettingsIcon }];
 
 /** 简单 Toast 组件 */
 function Toast({ message, onClose }: { message: string; onClose: () => void }) {
@@ -114,7 +98,7 @@ function ReadyGuard({ isReady, children }: { isReady: boolean; children: React.R
 function AppContent() {
   const location = useLocation();
   const { sidebarCollapsed } = useLayout();
-  const isMemoryRoute = location.pathname === '/memory';
+  const isMemoryRoute = location.pathname === '/knowledge';
 
   const { daemon, localModel, loading } = useServiceStatus();
   const isReady =
@@ -150,17 +134,6 @@ function AppContent() {
             <NavItemWithReady key={item.to} item={item} isReady={isReady} />
           ))}
 
-          {getAllRoleUIs().map(ui => {
-            const Icon = ui.icon;
-            return (
-              <NavItemWithReady
-                key={ui.role}
-                item={{ to: ui.routePath, label: ui.navLabel, icon: Icon }}
-                isReady={isReady}
-              />
-            );
-          })}
-
           {BOTTOM_NAV_ITEMS.map(item => (
             <NavItemWithReady key={item.to} item={item} isReady={isReady} />
           ))}
@@ -179,63 +152,30 @@ function AppContent() {
                 </ReadyGuard>
               }
             />
-            <Route
-              path="/history"
-              element={
-                <ReadyGuard isReady={isReady}>
-                  <ActionHistory />
-                </ReadyGuard>
-              }
-            />
-            <Route
-              path="/logs"
-              element={
-                <ReadyGuard isReady={isReady}>
-                  <Logs />
-                </ReadyGuard>
-              }
-            />
             <Route path="/settings" element={<Settings />} />
             <Route
-              path="/reviewer"
+              path="/knowledge"
               element={
                 <ReadyGuard isReady={isReady}>
-                  <MrReview />
+                  <KnowledgeHubPage />
                 </ReadyGuard>
               }
             />
             <Route
-              path="/maintainer"
+              path="/system"
               element={
                 <ReadyGuard isReady={isReady}>
-                  <Maintainer />
+                  <SystemStatusPage />
                 </ReadyGuard>
               }
             />
-            <Route
-              path="/archiver"
-              element={
-                <ReadyGuard isReady={isReady}>
-                  <Archiver />
-                </ReadyGuard>
-              }
-            />
-            <Route
-              path="/memory"
-              element={
-                <ReadyGuard isReady={isReady}>
-                  <MemoryGraphPage />
-                </ReadyGuard>
-              }
-            />
-            <Route
-              path="/memory-stats"
-              element={
-                <ReadyGuard isReady={isReady}>
-                  <MemoryStatsPage />
-                </ReadyGuard>
-              }
-            />
+            <Route path="/memory" element={<Navigate to="/knowledge" replace />} />
+            <Route path="/memory-stats" element={<Navigate to="/knowledge" replace />} />
+            <Route path="/reviewer" element={<Navigate to="/" replace />} />
+            <Route path="/maintainer" element={<Navigate to="/" replace />} />
+            <Route path="/archiver" element={<Navigate to="/" replace />} />
+            <Route path="/history" element={<Navigate to="/" replace />} />
+            <Route path="/logs" element={<Navigate to="/settings" replace />} />
           </Routes>
         </main>
       </div>

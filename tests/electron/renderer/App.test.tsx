@@ -6,9 +6,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { App } from '../../../src/electron/renderer/App';
 import { useServiceStatus } from '../../../src/electron/renderer/hooks/useServiceStatus';
-import '../../../src/electron/renderer/roles/reviewer-role.js';
-import '../../../src/electron/renderer/roles/maintainer-role.js';
-import '../../../src/electron/renderer/roles/archiver-role.js';
 
 vi.mock('../../../src/electron/renderer/hooks/useServiceStatus');
 
@@ -47,14 +44,16 @@ beforeEach(() => {
 });
 
 describe('App 导航', () => {
-  it('渲染三个角色导航链接', async () => {
+  it('渲染收敛后的全局导航', async () => {
     vi.mocked(useServiceStatus).mockReturnValue(makeServiceStatus({ loading: true }));
     render(<App />);
-    expect(screen.getByText('记忆图谱')).toBeTruthy();
-    expect(screen.getByText('记忆统计')).toBeTruthy();
-    expect(screen.getByText('自动评审')).toBeTruthy();
-    expect(screen.getByText('自动维护')).toBeTruthy();
-    expect(screen.getByText('项目知识')).toBeTruthy();
+    expect(screen.getByText('仪表盘')).toBeTruthy();
+    expect(screen.getByText('智库')).toBeTruthy();
+    expect(screen.getByText('系统状态')).toBeTruthy();
+    expect(screen.getByText('设置')).toBeTruthy();
+    expect(screen.queryByText('自动评审')).toBeNull();
+    expect(screen.queryByText('自动维护')).toBeNull();
+    expect(screen.queryByText('项目知识')).toBeNull();
     expect(await screen.findByTitle('切换到亮色主题')).toBeTruthy();
   });
 });
@@ -69,12 +68,27 @@ describe('App 启动就绪控制', () => {
   it('服务未就绪时非设置导航项被禁用', async () => {
     vi.mocked(useServiceStatus).mockReturnValue(makeServiceStatus({ loading: true }));
     render(<App />);
-    const nav = screen.getByText('记忆图谱').closest('.sidebar-link');
+    const nav = screen.getByText('智库').closest('.sidebar-link');
     expect(nav?.getAttribute('aria-disabled')).toBe('true');
   });
 
   it('服务未就绪时直接访问非设置路由会重定向到设置页', async () => {
     window.history.pushState({}, '', '/memory');
+    vi.mocked(useServiceStatus).mockReturnValue(makeServiceStatus({ loading: true }));
+    render(<App />);
+    expect(await screen.findByText('大语言模型')).toBeTruthy();
+  });
+
+  it.each([
+    '/reviewer',
+    '/maintainer',
+    '/archiver',
+    '/history',
+    '/logs',
+    '/memory',
+    '/memory-stats',
+  ])('服务未就绪时旧路由 %s 不绕过设置门禁', async path => {
+    window.history.pushState({}, '', path);
     vi.mocked(useServiceStatus).mockReturnValue(makeServiceStatus({ loading: true }));
     render(<App />);
     expect(await screen.findByText('大语言模型')).toBeTruthy();
