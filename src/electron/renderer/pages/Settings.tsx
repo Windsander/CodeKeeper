@@ -3,7 +3,6 @@ import { useIpc } from '../hooks/useIpc';
 import { useServiceStatus } from '../hooks/useServiceStatus';
 import { PageLayout } from '../components/PageLayout';
 import { SettingsIcon } from '../components/icons';
-import { ServiceStatusPanel } from '../components/ServiceStatusPanel';
 import { Dropdown } from '../components/Dropdown';
 import {
   DEFAULT_EMBEDDING_MODEL,
@@ -913,11 +912,17 @@ export function Settings() {
         </div>
 
         <div className="settings-status-column">
-          <ServiceStatusPanel
-            daemon={serviceStatus.daemon}
-            localModel={serviceStatus.localModel}
-            remoteModel={serviceStatus.remoteModel}
-          />
+          <section className="settings-logs-entry">
+            <h3>运行日志</h3>
+            <p>日志在独立窗口中查看，不占用设置页面空间。</p>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => window.electronAPI.openLogsWindow()}
+            >
+              打开日志窗口
+            </button>
+          </section>
         </div>
       </div>
     </PageLayout>

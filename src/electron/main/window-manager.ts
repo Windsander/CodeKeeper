@@ -41,3 +41,30 @@ export function createMainWindow(): BrowserWindow {
 
   return win;
 }
+
+/** 独立日志窗口：复用渲染 bundle，但不显示主应用侧边栏。 */
+export function createLogsWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 1100,
+    height: 760,
+    title: 'CodeKeeper 日志',
+    icon: getIconPath(),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  win.setMenu(null);
+
+  const loadTarget =
+    process.env.VITE_DEV_SERVER_URL || (!app.isPackaged && 'http://localhost:5173');
+  if (loadTarget) {
+    const url = new URL(loadTarget);
+    url.searchParams.set('window', 'logs');
+    void win.loadURL(url.toString());
+  } else {
+    void win.loadFile(join(__dirname, '../renderer/index.html'), { search: 'window=logs' });
+  }
+  return win;
+}

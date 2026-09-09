@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowMinimize: () => ipcRenderer.invoke('window-minimize'),
   windowMaximize: () => ipcRenderer.invoke('window-maximize'),
   windowClose: () => ipcRenderer.invoke('window-close'),
+  openLogsWindow: () => ipcRenderer.invoke('open-logs-window'),
   onWindowStateChange: (callback: (state: { isMaximized: boolean }) => void) => {
     const handler = (_event: unknown, data: { isMaximized: boolean }) => callback(data);
     ipcRenderer.on('window-state-change', handler);

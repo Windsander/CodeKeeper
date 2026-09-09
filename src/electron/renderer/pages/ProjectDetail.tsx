@@ -150,8 +150,22 @@ export function ProjectDetail() {
         {tab === 'knowledge' && id && <KnowledgePanel key={id} projectId={id} />}
         {tab === 'archive' && (
           <div className="archive-tab-content">
+            <div className="project-section-heading">
+              <h2>归档内容</h2>
+              <span>文件优先的项目知识副本</span>
+            </div>
             <ArchiveTree tree={archiveTree?.tree ?? null} />
-            {context?.content && <ContextView content={context.content} />}
+            {context?.content ? (
+              <section className="archive-context-section">
+                <div className="project-section-heading">
+                  <h2>项目上下文</h2>
+                  <span>供角色召回的归档摘要</span>
+                </div>
+                <ContextView content={context.content} />
+              </section>
+            ) : (
+              <div className="run-empty">尚未生成项目上下文。</div>
+            )}
           </div>
         )}
         {tab === 'settings' && id && <ProjectSettingsPanel projectId={id} />}

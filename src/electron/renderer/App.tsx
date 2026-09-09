@@ -17,6 +17,7 @@ import { ProjectDetail } from './pages/ProjectDetail.js';
 import { Settings } from './pages/Settings.js';
 import { KnowledgeHubPage } from './pages/KnowledgeHubPage.js';
 import { SystemStatusPage } from './pages/SystemStatusPage.js';
+import { Logs } from './pages/Logs.js';
 
 interface NavItem {
   to: string;
@@ -47,6 +48,16 @@ function Toast({ message, onClose }: { message: string; onClose: () => void }) {
 }
 
 export function App() {
+  const isLogsWindow = new URLSearchParams(window.location.search).get('window') === 'logs';
+  if (isLogsWindow) {
+    return (
+      <ThemeProvider>
+        <LayoutProvider>
+          <Logs />
+        </LayoutProvider>
+      </ThemeProvider>
+    );
+  }
   return (
     <BrowserRouter>
       <ThemeProvider>

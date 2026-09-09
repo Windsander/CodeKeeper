@@ -14,6 +14,7 @@ export interface ElectronAPI {
   windowMinimize(): Promise<void>;
   windowMaximize(): Promise<void>;
   windowClose(): Promise<void>;
+  openLogsWindow(): Promise<void>;
   onWindowStateChange(callback: (state: { isMaximized: boolean }) => void): () => void;
 }
 

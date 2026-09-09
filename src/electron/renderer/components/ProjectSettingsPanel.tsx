@@ -102,6 +102,9 @@ export function ProjectSettingsPanel({ projectId }: { projectId: string }) {
             value={gitlab.token}
             onChange={e => setGitlab({ ...gitlab, token: e.target.value })}
           />
+          <span className="input-hint">
+            留空表示保留当前 token{project.hasGitlabToken ? '（当前已配置）' : ''}。
+          </span>
         </label>
         <label>
           默认分支

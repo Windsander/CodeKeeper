@@ -55,6 +55,8 @@ The project is designed for teams that want an observable, recoverable automatio
 | Desktop workbench        | Manage projects, role settings, service health, logs, memory graphs, and archive history from Electron + React.                                                                                     |
 | Daemon and CLI           | Run scheduling, IPC, model access, and role lifecycles through the Node.js daemon; use the CLI for registration, scanning, history, and undo.                                                       |
 
+The desktop workbench is project-centered: global navigation is consolidated into Dashboard, Knowledge, System Status, and Settings. Role configuration lives in the project pipeline canvas inspector. Project details provide Pipeline, Run, Knowledge, Archive, and Settings views; logs open in a separate window from Settings.
+
 The sections below describe the memory boundary, local setup, operational safeguards, and release rights.
 
 ## EverOS Memory System

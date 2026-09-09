@@ -1,5 +1,5 @@
 import { app, ipcMain, shell, BrowserWindow, dialog } from 'electron';
-import { createMainWindow } from './window-manager';
+import { createMainWindow, createLogsWindow } from './window-manager';
 import { ElectronIpcClient } from './ipc-client';
 import { loadTheme, saveTheme } from './theme-persistence.js';
 import type { IpcPushEvent } from '../shared/types';
@@ -7,6 +7,7 @@ import type { IpcPushEvent } from '../shared/types';
 const client = new ElectronIpcClient();
 let mainWindow: BrowserWindow | null = null;
 let connected = false;
+let logsWindow: BrowserWindow | null = null;
 
 async function connectWithRetry(maxAttempts = 30, intervalMs = 1000): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -123,6 +124,17 @@ app.whenReady().then(async () => {
   ipcMain.handle('window-close', () => {
     const win = BrowserWindow.getFocusedWindow();
     win?.close();
+  });
+
+  ipcMain.handle('open-logs-window', () => {
+    if (logsWindow && !logsWindow.isDestroyed()) {
+      logsWindow.focus();
+      return;
+    }
+    logsWindow = createLogsWindow();
+    logsWindow.on('closed', () => {
+      logsWindow = null;
+    });
   });
 
   function sendWindowState(win: BrowserWindow, isMaximized: boolean): void {

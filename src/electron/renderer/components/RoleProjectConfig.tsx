@@ -4,6 +4,9 @@ import { Dropdown } from '../components/Dropdown';
 import { CollapsibleSection } from '../components/CollapsibleSection';
 import { AutocompleteInput } from '../components/AutocompleteInput';
 import { getRoleUI, type RoleFieldConfig } from '../roles/role-registry.js';
+// 配置组件自身声明角色插件依赖，避免依赖已下线的一级角色页 side-effect。
+import '../roles/reviewer-role.js';
+import '../roles/maintainer-role.js';
 import type {
   ReviewerConfig,
   Project,

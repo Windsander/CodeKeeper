@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { KnowledgeHubPage } from '../../../../src/electron/renderer/pages/KnowledgeHubPage.js';
 import { LayoutProvider } from '../../../../src/electron/renderer/contexts/LayoutContext.js';
 
@@ -24,7 +24,10 @@ vi.mock('../../../../src/electron/renderer/hooks/useMemoryGraph.js', () => ({
 }));
 
 describe('KnowledgeHubPage', () => {
-  it('渲染单层页面 chrome 与三个智库 tab', () => {
+  it('渲染单层页面 chrome 与三个智库 tab', async () => {
+    window.electronAPI = {
+      invoke: vi.fn().mockResolvedValue([]),
+    } as unknown as Window['electronAPI'];
     render(
       <LayoutProvider>
         <KnowledgeHubPage />
@@ -34,6 +37,6 @@ describe('KnowledgeHubPage', () => {
     expect(screen.getByRole('button', { name: '策展知识' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /记忆图谱/ })).toBeTruthy();
     expect(screen.getByRole('button', { name: /记忆统计/ })).toBeTruthy();
-    expect(screen.getByText('从项目进入知识库')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('暂无项目，请先从仪表盘注册项目。')).toBeTruthy());
   });
 });
