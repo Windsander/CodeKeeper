@@ -129,17 +129,19 @@ function configsEqualIgnoringFilter(a: GitlabRoleConfig, b: GitlabRoleConfig): b
 export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigProps) {
   const ui = getRoleUI(role);
   const gitlab = project.gitlab ?? DEFAULT_GITLAB;
+  const [loadedGitlab, setLoadedGitlab] = useState<GitlabConfig | null>(project.gitlab ?? null);
 
   const [gitlabUrl, setGitlabUrl] = useState(buildGitlabUrl(gitlab));
-  const [token, setToken] = useState(gitlab.token);
+  const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
 
   // 当 project.gitlab 从外部更新时（如首次打开 App 后项目数据才加载完成），同步输入框状态
   useEffect(() => {
     const updatedGitlab = project.gitlab ?? DEFAULT_GITLAB;
+    setLoadedGitlab(project.gitlab ?? null);
     setGitlabUrl(buildGitlabUrl(updatedGitlab));
-    setToken(updatedGitlab.token);
-  }, [project.gitlab?.baseUrl, project.gitlab?.projectPath, project.gitlab?.token]);
+    if (!project.gitlab?.token) setToken('');
+  }, [project.id, project.gitlab?.baseUrl, project.gitlab?.projectPath]);
 
   const [config, setConfig] = useState<GitlabRoleConfig>(() => ui.defaultConfig);
   const [filterConditions, setFilterConditions] = useState<FilterCondition[]>([]);
@@ -169,18 +171,18 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
   const isGitlabValid = Boolean(parsedGitlab);
   // 基于已保存的配置判断 Git 仓库是否已配置（URL 和 token 都非空）
   const isGitlabConfigured = Boolean(
-    project.gitlab?.baseUrl && project.gitlab?.projectPath && project.gitlab?.token
+    loadedGitlab?.baseUrl && loadedGitlab?.projectPath && loadedGitlab?.token
   );
   const isFilterConfigured = filterConditions.length > 0;
   // 当前输入框中的 GitLab 配置是否与已保存的一致
   const currentGitlabConfig = parsedGitlab
     ? { baseUrl: parsedGitlab.baseUrl, projectPath: parsedGitlab.projectPath, token: token.trim() }
     : null;
-  const savedGitlabConfig = project.gitlab
+  const savedGitlabConfig = loadedGitlab
     ? {
-        baseUrl: project.gitlab.baseUrl.replace(/\/$/, ''),
-        projectPath: project.gitlab.projectPath.replace(/^\//, '').replace(/\.git$/, ''),
-        token: project.gitlab.token,
+        baseUrl: loadedGitlab.baseUrl.replace(/\/$/, ''),
+        projectPath: loadedGitlab.projectPath.replace(/^\//, '').replace(/\.git$/, ''),
+        token: loadedGitlab.token,
       }
     : null;
   const isGitlabDirty = JSON.stringify(currentGitlabConfig) !== JSON.stringify(savedGitlabConfig);
@@ -222,6 +224,26 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
     };
   }, [project.id, role, ui.defaultConfig]);
 
+  // 凭据只在明确打开角色配置面板时按需读取；普通项目/仪表盘 DTO 永不携带 token。
+  useEffect(() => {
+    if (!project.gitlab) return;
+    let cancelled = false;
+    invoke<{ gitlab: GitlabConfig | null }>('project.gitlab.config.get', {
+      projectId: project.id,
+      includeSecret: true,
+    })
+      .then(response => {
+        if (cancelled || !response.gitlab) return;
+        setLoadedGitlab(response.gitlab);
+        setGitlabUrl(buildGitlabUrl(response.gitlab));
+        setToken(response.gitlab.token);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+
   // 加载 Soul 内容
   useEffect(() => {
     let cancelled = false;
@@ -247,11 +269,11 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
 
   // 打开配置面板时校验 GitLab Token：若过期/无效则展开 Git 仓库组并红色闪烁提示
   useEffect(() => {
-    if (!isGitlabConfigured || !project.gitlab) return;
+    if (!isGitlabConfigured || !currentGitlabConfig) return;
     let cancelled = false;
     invoke('project.gitlab.verify', {
       projectId: project.id,
-      gitlab: project.gitlab,
+      gitlab: currentGitlabConfig,
     }).catch(err => {
       if (cancelled) return;
       const message = err instanceof Error ? err.message : String(err);
@@ -264,7 +286,7 @@ export function RoleProjectConfig({ role, project, onSaved }: RoleProjectConfigP
     return () => {
       cancelled = true;
     };
-  }, [project.id]);
+  }, [project.id, loadedGitlab?.token]);
 
   // 当已保存的 Git 配置被修改（isGitlabReady 从 true 变 false）时，自动展开 Git 仓库组
   const prevGitlabReadyRef = useRef(isGitlabReady);

@@ -241,6 +241,8 @@ export interface Project {
   rootPath: string;
   archiveRoot?: string;
   gitlab?: GitlabConfig | null;
+  /** 普通项目 DTO 的脱敏凭据状态；token 本身不会通过 IPC 返回 */
+  hasGitlabToken?: boolean;
   roles?: RoleConfigMap;
 }
 

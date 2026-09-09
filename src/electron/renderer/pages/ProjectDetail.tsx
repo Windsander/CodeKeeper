@@ -4,16 +4,16 @@ import { useIpc } from '../hooks/useIpc';
 import { PageLayout } from '../components/PageLayout';
 import { ProjectIcon } from '../components/icons';
 import { ContextView } from '../components/ContextView';
-import { SuggestionList } from '../components/SuggestionList';
 import { invoke } from '../api/electron-api';
-import type { ProjectStatus } from '../../shared/types';
 
 import { ArchiveTree } from '../components/ArchiveTree';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { PipelineCanvas } from '../components/PipelineCanvas';
+import { RunCenter } from '../components/RunCenter.js';
+import { ProjectSettingsPanel } from '../components/ProjectSettingsPanel.js';
 import type { FileTreeNode } from '../components/ArchiveTree';
 
-type Tab = 'pipeline' | 'context' | 'knowledge' | 'activity' | 'archive' | 'status';
+type Tab = 'pipeline' | 'run' | 'knowledge' | 'archive' | 'settings';
 
 export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
@@ -28,17 +28,10 @@ export function ProjectDetail() {
     'project.context',
     { projectId: id }
   );
-  const { data: suggestions, refresh: refreshSuggestions } = useIpc<{ content: string }>(
-    'project.suggestions',
-    { projectId: id }
-  );
   const { data: archiveTree, refresh: refreshArchiveTree } = useIpc<{ tree: FileTreeNode | null }>(
     'project.archive.tree',
     { projectId: id }
   );
-  const { data: status, refresh: refreshStatus } = useIpc<ProjectStatus>('project.status', {
-    projectId: id,
-  });
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.onPush(event => {
@@ -57,12 +50,7 @@ export function ProjectDetail() {
     setScanError(null);
     try {
       await invoke('project.scan', { projectId: id });
-      await Promise.all([
-        refreshContext(),
-        refreshSuggestions(),
-        refreshArchiveTree(),
-        refreshStatus(),
-      ]);
+      await Promise.all([refreshContext(), refreshArchiveTree()]);
     } catch (err) {
       setScanError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -72,9 +60,7 @@ export function ProjectDetail() {
 
   const refreshAll = () => {
     refreshContext();
-    refreshSuggestions();
     refreshArchiveTree();
-    refreshStatus();
   };
 
   return (
@@ -130,49 +116,45 @@ export function ProjectDetail() {
           className={`tab-btn${tab === 'pipeline' ? ' active' : ''}`}
           onClick={() => setTab('pipeline')}
         >
-          Pipeline
+          管线
         </button>
         <button
-          className={`tab-btn${tab === 'context' ? ' active' : ''}`}
-          onClick={() => setTab('context')}
+          className={`tab-btn${tab === 'run' ? ' active' : ''}`}
+          onClick={() => setTab('run')}
         >
-          Context
+          运行
         </button>
         <button
           className={`tab-btn${tab === 'knowledge' ? ' active' : ''}`}
           onClick={() => setTab('knowledge')}
         >
-          Knowledge
-        </button>
-        <button
-          className={`tab-btn${tab === 'activity' ? ' active' : ''}`}
-          onClick={() => setTab('activity')}
-        >
-          Activity Log
+          知识
         </button>
         <button
           className={`tab-btn${tab === 'archive' ? ' active' : ''}`}
           onClick={() => setTab('archive')}
         >
-          Archive
+          归档
         </button>
         <button
-          className={`tab-btn${tab === 'status' ? ' active' : ''}`}
-          onClick={() => setTab('status')}
+          className={`tab-btn${tab === 'settings' ? ' active' : ''}`}
+          onClick={() => setTab('settings')}
         >
-          Status
+          设置
         </button>
       </div>
 
       <div className="card">
         {tab === 'pipeline' && id && <PipelineCanvas key={id} projectId={id} />}
+        {tab === 'run' && id && <RunCenter projectId={id} />}
         {tab === 'knowledge' && id && <KnowledgePanel key={id} projectId={id} />}
-        {tab === 'context' && context && <ContextView content={context.content} />}
-        {tab === 'activity' && suggestions && <SuggestionList content={suggestions.content} />}
-        {tab === 'archive' && <ArchiveTree tree={archiveTree?.tree ?? null} />}
-        {tab === 'status' && status && (
-          <pre className="log-viewer">{JSON.stringify(status, null, 2)}</pre>
+        {tab === 'archive' && (
+          <div className="archive-tab-content">
+            <ArchiveTree tree={archiveTree?.tree ?? null} />
+            {context?.content && <ContextView content={context.content} />}
+          </div>
         )}
+        {tab === 'settings' && id && <ProjectSettingsPanel projectId={id} />}
       </div>
     </PageLayout>
   );

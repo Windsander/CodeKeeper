@@ -12,13 +12,16 @@ export interface UndoResult {
 export class UndoExecutor {
   constructor(private options: { store: MetadataStore }) {}
 
-  async undo(actionId: string): Promise<UndoResult> {
+  async undo(actionId: string, projectId?: string): Promise<UndoResult> {
     const history = this.options.store.getActionHistory(actionId);
     if (!history) {
       return { success: false, message: '未找到动作历史记录' };
     }
     if (history.status === 'undone') {
       return { success: false, message: '该动作已被撤销' };
+    }
+    if (projectId && history.projectId !== projectId) {
+      return { success: false, message: '动作不属于当前项目' };
     }
 
     switch (history.type) {

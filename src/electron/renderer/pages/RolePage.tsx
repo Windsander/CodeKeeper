@@ -57,7 +57,7 @@ function getStatusBadges(
 
   if (requiresGitlab && !hasGitlab) {
     badges.push({ label: 'GitLab 未配置', className: 'badge badge-warning' });
-  } else if (requiresGitlab && !project.gitlab?.token) {
+  } else if (requiresGitlab && !(project.hasGitlabToken ?? Boolean(project.gitlab?.token))) {
     badges.push({ label: 'Token 缺失', className: 'badge badge-danger' });
   }
 

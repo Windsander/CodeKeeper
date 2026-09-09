@@ -3913,3 +3913,136 @@ select.input:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* ===== Project run center / settings (M8) ===== */
+.run-center,
+.project-settings-panel,
+.archive-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.run-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.run-summary-item {
+  padding: 12px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 6px;
+}
+
+.run-summary-item span {
+  display: block;
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+}
+
+.run-summary-item strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+}
+
+.run-section,
+.project-settings-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color, #e5e7eb);
+}
+
+.run-section-heading,
+.project-settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.run-section-heading h2,
+.project-settings-heading h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.run-section-heading span,
+.project-settings-heading span,
+.run-empty {
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+}
+
+.run-row {
+  display: grid;
+  grid-template-columns: 90px minmax(90px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--border-color, #f3f4f6);
+  font-size: 12px;
+}
+
+.run-path,
+.run-error {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-status,
+.run-action-type {
+  font-weight: 600;
+}
+
+.run-status-succeeded {
+  color: #15803d;
+}
+
+.run-status-failed,
+.run-error {
+  color: #b91c1c;
+}
+
+.run-status-running {
+  color: #b45309;
+}
+
+.project-settings-section label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  color: var(--text-secondary, #6b7280);
+  font-size: 12px;
+}
+
+.project-settings-section input,
+.project-config-editor {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color, #d1d5db);
+  border-radius: 6px;
+  background: var(--bg-primary, #fff);
+  color: inherit;
+}
+
+.project-config-editor {
+  min-height: 220px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (max-width: 800px) {
+  .run-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .run-row {
+    grid-template-columns: 1fr;
+    padding: 8px 0;
+  }
+}

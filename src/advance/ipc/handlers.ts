@@ -1,5 +1,15 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import {
+  accessSync,
+  constants,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  unlinkSync,
+  renameSync,
+} from 'node:fs';
+import { join, normalize, relative, resolve } from 'node:path';
 import { getLogDir } from '../core/platform';
 import { logger } from '../core/logger';
 import type { MetadataStore } from '../store/metadata-store';
@@ -7,7 +17,8 @@ import type { ProjectRegistry } from '../project-registry';
 import type { LlmClient } from '../llm/client';
 import type { Project } from '../types';
 import { getArchiveRoot, isRoleConfigEnabled } from '../types';
-import { loadProjectConfig } from '../config/project-config';
+import { loadProjectConfig, projectConfigSchema } from '../config/project-config.js';
+import YAML from 'yaml';
 import { loadDaemonConfig, saveDaemonConfig } from '../config/daemon-config.js';
 import {
   DEFAULT_EMBEDDING_MODEL,
@@ -48,6 +59,12 @@ function toKnowledgeDto(item: KnowledgeItem) {
     root: item.root,
     bodyPreview: item.body.slice(0, 500),
   };
+}
+
+function normalizeHistoryLimit(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 100;
+  return Math.min(100, Math.max(1, Math.floor(parsed)));
 }
 import type { LocalModelServiceManager } from '../classic/memory/local-model-service.js';
 import type { ModelCapability } from '../classic/memory/model-server.js';
@@ -234,6 +251,8 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
       }
       return {
         ...p,
+        gitlab: p.gitlab ? { ...p.gitlab, token: '' } : undefined,
+        hasGitlabToken: Boolean(p.gitlab?.token),
         ...counts,
         healthScore,
         lastScannedAt: p.lastScannedAt,
@@ -250,7 +269,12 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
     const counts = ctx.store.getProjectCounts(project.id);
-    return { ...project, ...counts };
+    return {
+      ...project,
+      gitlab: project.gitlab ? { ...project.gitlab, token: '' } : undefined,
+      hasGitlabToken: Boolean(project.gitlab?.token),
+      ...counts,
+    };
   },
 
   'project.scan': async (ctx, params) => {
@@ -311,23 +335,77 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const dir = getArchiveRoot(project);
     mkdirSync(dir, { recursive: true });
     const path = join(dir, 'config.yaml');
-    writeFileSync(path, params.content, 'utf-8');
+    const content = typeof params.content === 'string' ? params.content : '';
+    const parsed = YAML.parse(content);
+    projectConfigSchema.parse(parsed);
+    const temporaryPath = `${path}.tmp-${randomUUID()}`;
+    try {
+      writeFileSync(temporaryPath, content, 'utf-8');
+      renameSync(temporaryPath, path);
+    } finally {
+      if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+    }
+    ctx.unwatchProject?.(params.projectId);
+    const updatedProject = ctx.registry.get(params.projectId);
+    if (updatedProject) ctx.watchProject?.(updatedProject);
+    return { success: true };
+  },
+
+  'project.archive-root.update': async (ctx, params) => {
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    const archiveRootInput =
+      typeof params.archiveRoot === 'string' ? params.archiveRoot.trim() : '';
+    const archiveRoot = archiveRootInput ? normalize(resolve(archiveRootInput)) : null;
+    if (archiveRoot) {
+      try {
+        mkdirSync(archiveRoot, { recursive: true });
+        accessSync(archiveRoot, constants.R_OK | constants.W_OK);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`归档位置不可读写: ${archiveRoot}: ${message}`);
+      }
+    }
+    ctx.store.updateProjectArchiveRoot(params.projectId, archiveRoot);
+    ctx.unwatchProject?.(params.projectId);
+    const updatedProject = ctx.registry.get(params.projectId);
+    if (updatedProject) ctx.watchProject?.(updatedProject);
+    ctx.serviceRegistry.reloadProject(params.projectId);
     return { success: true };
   },
 
   'action.history': async (ctx, params) => {
     if (params.projectId === 'all') {
       const projects = ctx.registry.list();
-      return projects.flatMap(p => ctx.store.listActionHistory(p.id));
+      const limit = normalizeHistoryLimit(params.limit);
+      const items = ctx.store.listActionHistoryAll(limit);
+      const roots = new Map(projects.map(project => [project.id, project.rootPath]));
+      return items.map(item => ({
+        ...item,
+        sourcePath: relative(roots.get(item.projectId) ?? '', item.sourcePath) || '.',
+        targetPath: item.targetPath
+          ? relative(roots.get(item.projectId) ?? '', item.targetPath) || '.'
+          : undefined,
+      }));
     }
-    return ctx.store.listActionHistory(params.projectId);
+    const project = ctx.registry.get(params.projectId);
+    if (!project) throw new Error('项目未注册');
+    const history = ctx.store.listActionHistory(
+      params.projectId,
+      normalizeHistoryLimit(params.limit)
+    );
+    return history.map(item => ({
+      ...item,
+      sourcePath: relative(project.rootPath, item.sourcePath) || '.',
+      targetPath: item.targetPath ? relative(project.rootPath, item.targetPath) || '.' : undefined,
+    }));
   },
 
   'action.undo': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
     const executor = new UndoExecutor({ store: ctx.store });
-    return executor.undo(params.actionId);
+    return executor.undo(params.actionId, params.projectId);
   },
 
   'daemon.config': async ctx => {
@@ -462,7 +540,13 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
   'project.gitlab.config.get': async (ctx, params) => {
     const project = ctx.registry.get(params.projectId);
     if (!project) throw new Error('项目未注册');
-    return { gitlab: project.gitlab ?? null };
+    const includeSecret = params.includeSecret === true;
+    return {
+      gitlab: project.gitlab
+        ? { ...project.gitlab, token: includeSecret ? project.gitlab.token : '' }
+        : null,
+      hasToken: Boolean(project.gitlab?.token),
+    };
   },
 
   'project.gitlab.config.update': async (ctx, params) => {
@@ -476,7 +560,7 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
     const updated: NonNullable<typeof project.gitlab> = {
       baseUrl: gitlab.baseUrl,
       projectPath: gitlab.projectPath,
-      token: gitlab.token ?? project.gitlab?.token ?? '',
+      token: gitlab.token?.trim() ? gitlab.token.trim() : (project.gitlab?.token ?? ''),
       defaultBranch: gitlab.defaultBranch ?? project.gitlab?.defaultBranch ?? 'main',
     };
     ctx.store.updateProjectGitlabConfig(params.projectId, updated);

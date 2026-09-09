@@ -10,6 +10,7 @@ import { useIpc } from '../hooks/useIpc.js';
 import { invoke } from '../api/electron-api.js';
 import { PipelineGraph } from './PipelineGraph.js';
 import { RoleProjectConfig } from './RoleProjectConfig.js';
+import { ArchiverProviderConfig } from './ArchiverProviderConfig.js';
 import {
   addEdgeToDefinition,
   addNodeToDefinition,
@@ -330,7 +331,9 @@ function NodeInspector({
         </div>
       ) : null}
       {roleType === 'archiver' && (
-        <p className="pipeline-inspector-hint">Archiver 的详细配置请在 Archiver 页维护。</p>
+        <div className="pipeline-inspector-role">
+          {project && <ArchiverProviderConfig project={project} onSaved={onConfigSaved} />}
+        </div>
       )}
       {roleType && (
         <div className="pipeline-inspector-field">

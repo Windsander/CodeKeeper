@@ -67,6 +67,15 @@ function setupMocks(options?: {
             learningEnabled: true,
           },
         };
+      case 'project.gitlab.config.get':
+        return {
+          gitlab: {
+            baseUrl: 'https://gitlab.com',
+            projectPath: 'group/project',
+            token: 'tok',
+            defaultBranch: 'main',
+          },
+        };
       case 'project.soul.get':
         return { soul: { content: '', sourcePath: 'virtual-project/soul.md' } };
       case 'project.members':

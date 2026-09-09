@@ -644,11 +644,43 @@ export class MetadataStore {
   }
 
   listActionHistory(
-    projectId: string
+    projectId: string,
+    limit = 100
   ): Array<ArchiveAction & { projectId: string; historyId: number; status: 'applied' | 'undone' }> {
     const rows = this.db
-      .prepare('SELECT * FROM action_history WHERE project_id = ? ORDER BY applied_at DESC')
-      .all(projectId) as Array<{
+      .prepare('SELECT * FROM action_history WHERE project_id = ? ORDER BY applied_at DESC LIMIT ?')
+      .all(projectId, limit) as Array<{
+      id: number;
+      action_id: string;
+      project_id: string;
+      type: string;
+      source_path: string;
+      archive_path: string | null;
+      target_path: string | null;
+      status: string;
+      applied_at: number;
+    }>;
+    return rows.map(r => ({
+      historyId: r.id,
+      id: r.action_id,
+      projectId: r.project_id,
+      sourcePath: r.source_path,
+      type: r.type as ArchiveAction['type'],
+      targetPath: r.archive_path ?? r.target_path ?? undefined,
+      risk: 'low',
+      reason: '',
+      confidence: 0,
+      createdAt: r.applied_at,
+      status: r.status as 'applied' | 'undone',
+    }));
+  }
+
+  listActionHistoryAll(
+    limit = 100
+  ): Array<ArchiveAction & { projectId: string; historyId: number; status: 'applied' | 'undone' }> {
+    const rows = this.db
+      .prepare('SELECT * FROM action_history ORDER BY applied_at DESC LIMIT ?')
+      .all(limit) as Array<{
       id: number;
       action_id: string;
       project_id: string;
@@ -890,6 +922,12 @@ export class MetadataStore {
     this.db
       .prepare('UPDATE projects SET gitlab_config = ? WHERE id = ?')
       .run(JSON.stringify(config), projectId);
+  }
+
+  updateProjectArchiveRoot(projectId: string, archiveRoot: string | null): void {
+    this.db
+      .prepare('UPDATE projects SET archive_root = ? WHERE id = ?')
+      .run(archiveRoot, projectId);
   }
 
   updateProjectRoleConfig(projectId: string, role: Role, config: RoleConfig): void {
