@@ -12,6 +12,7 @@ export interface ProjectSummary {
   organized: number;
   flagged: number;
   lastScannedAt: number | null;
+  roleStates?: Partial<Record<'reviewer' | 'maintainer' | 'archiver', boolean>>;
 }
 
 export function ProjectCard({ project }: { project: ProjectSummary }) {
@@ -25,6 +26,22 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
       <h3>{project.name}</h3>
       <div className="project-path">{project.rootPath}</div>
       {project.archiveRoot && <div className="project-meta">归档位置: {project.archiveRoot}</div>}
+      <div className="project-role-statuses">
+        {(
+          [
+            ['reviewer', 'Reviewer'],
+            ['maintainer', 'Maintainer'],
+            ['archiver', 'Archiver'],
+          ] as const
+        ).map(([role, label]) => (
+          <span
+            key={role}
+            className={`project-role-status${project.roleStates?.[role] ? ' enabled' : ''}`}
+          >
+            {label}: {project.roleStates?.[role] ? '配置启用' : '未启用'}
+          </span>
+        ))}
+      </div>
       <div className="project-stats">
         <div className="project-stat">
           <div className="project-stat-label">健康度</div>

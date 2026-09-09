@@ -6,7 +6,7 @@ import type { MetadataStore } from '../store/metadata-store';
 import type { ProjectRegistry } from '../project-registry';
 import type { LlmClient } from '../llm/client';
 import type { Project } from '../types';
-import { getArchiveRoot } from '../types';
+import { getArchiveRoot, isRoleConfigEnabled } from '../types';
 import { loadProjectConfig } from '../config/project-config';
 import { loadDaemonConfig, saveDaemonConfig } from '../config/daemon-config.js';
 import {
@@ -237,6 +237,11 @@ export const handlers: Record<string, (ctx: HandlerContext, params: any) => Prom
         ...counts,
         healthScore,
         lastScannedAt: p.lastScannedAt,
+        roleStates: {
+          reviewer: isRoleConfigEnabled(p.roles?.reviewer),
+          maintainer: isRoleConfigEnabled(p.roles?.maintainer),
+          archiver: isRoleConfigEnabled(p.roles?.archiver),
+        },
       };
     });
   },

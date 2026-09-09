@@ -5,6 +5,7 @@ import { useIpc } from '../hooks/useIpc';
 import { PageLayout } from '../components/PageLayout';
 import { DashboardIcon } from '../components/icons';
 import { ProjectCard, type ProjectSummary } from '../components/ProjectCard';
+import { GlobalRoleServices } from '../components/GlobalRoleServices.js';
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -105,6 +106,7 @@ export function Dashboard() {
 
   return (
     <PageLayout icon={<DashboardIcon />} title="仪表盘" onRefresh={() => refresh()}>
+      <GlobalRoleServices />
       <div className="card">
         <h3 className="card-title">注册新项目</h3>
 
@@ -176,6 +178,7 @@ export function Dashboard() {
                     e.stopPropagation();
                     unregister(p.id);
                   }}
+                  onKeyDown={e => e.stopPropagation()}
                 >
                   注销
                 </button>

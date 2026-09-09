@@ -3810,3 +3810,106 @@ select.input:focus {
   border: 1px solid var(--border-color, #d1d5db);
   color: inherit;
 }
+
+/* ===== Dashboard role services (M8) ===== */
+.dashboard-services {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 8px;
+  background: var(--bg-primary, #fff);
+}
+
+.dashboard-services-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.dashboard-services-heading h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.dashboard-services-heading p {
+  margin: 0;
+  color: var(--text-secondary, #6b7280);
+  font-size: 12px;
+}
+
+.dashboard-service-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.dashboard-service-item {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 6px;
+}
+
+.dashboard-service-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.dashboard-service-title span:last-child {
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+}
+
+.service-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #9ca3af;
+}
+
+.service-dot.running {
+  background: #22c55e;
+}
+
+.dashboard-service-meta {
+  margin: 8px 0;
+  color: var(--text-secondary, #6b7280);
+  font-size: 11px;
+}
+
+.dashboard-service-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.project-role-statuses {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+
+.project-role-status {
+  padding: 2px 7px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 10px;
+  color: var(--text-secondary, #9ca3af);
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.project-role-status.enabled {
+  border-color: #86efac;
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+@media (max-width: 800px) {
+  .dashboard-service-grid {
+    grid-template-columns: 1fr;
+  }
+}

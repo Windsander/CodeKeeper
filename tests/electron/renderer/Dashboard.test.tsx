@@ -13,6 +13,7 @@ describe('Dashboard', () => {
           id: 'p1',
           name: 'proj',
           rootPath: '/tmp',
+          roleStates: { reviewer: true, maintainer: false, archiver: true },
           healthScore: 0.8,
           pending: 1,
           archived: 2,
@@ -37,6 +38,7 @@ describe('Dashboard', () => {
     await waitFor(() => {
       expect(screen.getByText('proj')).toBeTruthy();
       expect(screen.getByText('80%')).toBeTruthy();
+      expect(screen.getByText(/Reviewer.*配置启用/)).toBeTruthy();
     });
   });
 });
