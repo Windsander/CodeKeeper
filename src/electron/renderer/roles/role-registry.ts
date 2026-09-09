@@ -41,10 +41,6 @@ export interface RoleUIConfig<R extends Role> {
   role: R;
   /** 展示名称 */
   displayName: string;
-  /** 导航栏标签 */
-  navLabel: string;
-  /** 路由路径 */
-  routePath: string;
   /** 图标组件 */
   icon: ComponentType;
   /** 默认 Soul 模板内容 */

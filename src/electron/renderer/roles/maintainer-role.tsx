@@ -9,8 +9,6 @@ const DEFAULT_MAINTAINER_SOUL = `## Maintainer Soul
 registerRoleUI<'maintainer'>({
   role: 'maintainer',
   displayName: '自动维护',
-  navLabel: '自动维护',
-  routePath: '/maintainer',
   icon: MaintainerIcon,
   soulFileName: 'MAINTAINER-SOUL.md',
   defaultSoulTemplate: DEFAULT_MAINTAINER_SOUL,

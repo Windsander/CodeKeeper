@@ -11,8 +11,6 @@ const DEFAULT_ARCHIVER_SOUL = `## Archiver Soul
 registerRoleUI<'archiver'>({
   role: 'archiver',
   displayName: '项目知识',
-  navLabel: '项目知识',
-  routePath: '/archiver',
   icon: ArchiverIcon,
   soulFileName: 'ARCHIVER-SOUL.md',
   defaultSoulTemplate: DEFAULT_ARCHIVER_SOUL,

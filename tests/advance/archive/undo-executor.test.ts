@@ -128,6 +128,47 @@ describe('UndoExecutor', () => {
     expect(second.success).toBe(false);
   });
 
+  it('应将 organize 动作恢复到原位置', async () => {
+    const source = join(archiveRoot, 'incoming.md');
+    const target = join(archiveRoot, 'organized', 'incoming.md');
+    mkdirSync(join(archiveRoot, 'organized'), { recursive: true });
+    writeFileSync(source, 'organize me', 'utf-8');
+    const { renameSync } = await import('node:fs');
+    renameSync(source, target);
+    store.insertActionHistory({
+      id: 'o1',
+      sourcePath: source,
+      projectId: projectRoot,
+      type: 'organize',
+      reason: '整理',
+      targetPath: target,
+      risk: 'low',
+      confidence: 0.9,
+      createdAt: 1,
+    });
+
+    const result = await new UndoExecutor({ store }).undo('o1', projectRoot);
+    expect(result.success).toBe(true);
+    expect(existsSync(source)).toBe(true);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it('拒绝跨项目撤销动作', async () => {
+    store.insertActionHistory({
+      id: 'other-project-action',
+      sourcePath: join(projectRoot, 'x.md'),
+      projectId: 'other-project',
+      type: 'ignore',
+      reason: '其他项目',
+      risk: 'low',
+      confidence: 0.9,
+      createdAt: 1,
+    });
+    const result = await new UndoExecutor({ store }).undo('other-project-action', projectRoot);
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('不属于当前项目');
+  });
+
   it('不存在的 action 应失败', async () => {
     const executor = new UndoExecutor({ store });
     const result = await executor.undo('not-exist');

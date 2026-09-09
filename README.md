@@ -132,7 +132,7 @@ This builds the backend and starts the daemon, Vite, the Electron TypeScript wat
 1. Configure the Agent LLM in **Settings**.
 2. Select local embedding and reranking models; configure an EverOS multimodal model only when needed.
 3. Register a local project from the **Dashboard** and choose an independent archive location when appropriate.
-4. Enter the GitLab project URL, token, filters, and role settings on the role page.
+4. Open the project, then configure the GitLab URL, token, filters, and role settings in the role node inspector on the Pipeline canvas.
 5. Enable roles in a test project first, inspect the logs, and expand the scope only after the behavior is understood.
 
 ## Configuration

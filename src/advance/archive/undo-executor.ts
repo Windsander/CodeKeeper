@@ -36,10 +36,12 @@ export class UndoExecutor {
         if (!history.targetPath) {
           return { success: false, message: 'organize 动作缺少目标路径' };
         }
-        const previous = this.options.store.getArchiveMetadata(history.id)?.archivePath;
-        if (previous && existsSync(history.targetPath)) {
-          renameSync(history.targetPath, previous);
+        // action_history.source_path 是 organize 前的原位置，target_path 是新位置。
+        // 不能用 action id 查询 archive_metadata：metadata.entry_id 使用的是源文件路径。
+        if (!existsSync(history.targetPath)) {
+          return { success: false, message: 'organize 目标文件不存在，无法恢复原位置' };
         }
+        renameSync(history.targetPath, history.sourcePath);
         break;
       }
       case 'ignore': {

@@ -205,7 +205,7 @@ export async function main(): Promise<void> {
         process.exit(1);
       }
       const executor = new UndoExecutor({ store });
-      const result = await executor.undo(actionId);
+      const result = await executor.undo(actionId, projectId);
       console.log(result.message);
       if (!result.success) process.exit(1);
     } finally {
